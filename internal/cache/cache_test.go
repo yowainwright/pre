@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -151,6 +152,49 @@ func TestSaveBadDir(t *testing.T) {
 	defer withCacheDir(filepath.Join(t.TempDir(), "nonexistent-parent"))()
 	c := make(Cache)
 	Set(c, "npm/react", "18.0.0")
+	Save(c)
+}
+
+func TestParseKey(t *testing.T) {
+	eco, name := ParseKey("npm/react")
+	if eco != "npm" || name != "react" {
+		t.Errorf("unexpected: eco=%q name=%q", eco, name)
+	}
+}
+
+func TestParseKeyNoSlash(t *testing.T) {
+	eco, name := ParseKey("noslash")
+	if eco != "noslash" || name != "" {
+		t.Errorf("expected key as eco and empty name, got eco=%q name=%q", eco, name)
+	}
+}
+
+func TestLoadCacheDirError(t *testing.T) {
+	orig := cacheDirFn
+	cacheDirFn = func() (string, error) { return "", errors.New("no dir") }
+	defer func() { cacheDirFn = orig }()
+
+	c := Load()
+	if len(c) != 0 {
+		t.Error("expected empty cache when dir fn errors")
+	}
+}
+
+func TestSaveCacheDirError(t *testing.T) {
+	orig := cacheDirFn
+	cacheDirFn = func() (string, error) { return "", errors.New("no dir") }
+	defer func() { cacheDirFn = orig }()
+
+	c := make(Cache)
+	Save(c)
+}
+
+func TestSaveMkdirAllError(t *testing.T) {
+	orig := cacheDirFn
+	cacheDirFn = func() (string, error) { return "/dev/null", nil }
+	defer func() { cacheDirFn = orig }()
+
+	c := make(Cache)
 	Save(c)
 }
 

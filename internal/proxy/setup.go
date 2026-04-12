@@ -61,6 +61,28 @@ func buildShellHook() string {
 	return sb.String()
 }
 
+func Teardown() {
+	rcFile := detectRCFile()
+	content, err := os.ReadFile(rcFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pre teardown: %v\n", err)
+		return
+	}
+	marker := "# pre security proxy"
+	idx := strings.Index(string(content), marker)
+	if idx < 0 {
+		fmt.Println("pre: no hooks found in", rcFile)
+		return
+	}
+	cleaned := strings.TrimRight(string(content[:idx]), "\n") + "\n"
+	if err := os.WriteFile(rcFile, []byte(cleaned), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "pre teardown: %v\n", err)
+		return
+	}
+	fmt.Println("pre: removed hooks from", rcFile)
+	fmt.Println("pre: restart your shell or run: source", rcFile)
+}
+
 func detectRCFile() string {
 	home, _ := os.UserHomeDir()
 	isZsh := strings.Contains(os.Getenv("SHELL"), "zsh")

@@ -1,5 +1,11 @@
 package manager
 
+type Manager struct {
+	Name        string   `json:"name"`
+	Ecosystem   string   `json:"ecosystem"`
+	InstallCmds []string `json:"installCmds"`
+}
+
 var builtins = []Manager{
 	{Name: "brew", Ecosystem: "Homebrew", InstallCmds: []string{"install", "reinstall"}},
 	{Name: "npm", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i"}},

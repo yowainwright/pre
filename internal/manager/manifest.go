@@ -8,6 +8,9 @@ import (
 )
 
 func ReadManifest(mgr *Manager) []string {
+	if pkgs := ReadLockfile(mgr, "."); len(pkgs) > 0 {
+		return pkgs
+	}
 	return readManifestDir(mgr, ".")
 }
 
@@ -103,9 +106,8 @@ func readRequirementsTxt(dir string) []string {
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "-") {
 			continue
 		}
-		name, _ := parsePySpec(line)
-		if name != "" {
-			names = append(names, name)
+		if name, _ := parsePySpec(line); name != "" {
+			names = append(names, line)
 		}
 	}
 	return names

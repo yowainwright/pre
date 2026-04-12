@@ -26,8 +26,28 @@ func renderTree(ecosystem string, results []scanResult) string {
 	logo := display.Logo()
 	header := display.Cyan(display.IconInfo) + " " + display.Cyan(fmt.Sprintf("checking %d package(s) (%s)", len(results), ecosystem))
 	sys := loadSystemStatsFn()
-	out := logo + "\n" + header + "\n" + display.Tree(nodes) + display.HRule(20) + "\n" + renderSummary(results) + "\n" + renderSystemLine(sys) + "\n"
-	return out
+	return logo + "\n" + header + "\n" + display.Tree(nodes) + display.HRule(20) + "\n" + renderSummary(results) + "\n" + renderSystemLine(sys) + "\n"
+}
+
+func renderQuiet(count int) string {
+	return display.Dim(fmt.Sprintf("%s %d packages clean", display.IconSuccess, count)) + "\n"
+}
+
+func renderCriticalDetail(results []scanResult) string {
+	var lines []string
+	for _, r := range results {
+		for _, v := range r.vulns {
+			if v.Severity != "CRITICAL" && v.Severity != "HIGH" {
+				continue
+			}
+			score := ""
+			if v.Score > 0 {
+				score = fmt.Sprintf(" %.1f", v.Score)
+			}
+			lines = append(lines, fmt.Sprintf("%-30s %s%s  %s", r.label, v.ID, score, v.Severity))
+		}
+	}
+	return display.Box(display.Red("Critical"), lines) + "\n"
 }
 
 func nodeLabel(r scanResult, maxLen int) string {
@@ -88,7 +108,11 @@ func renderSystemLine(s SystemStats) string {
 func nodeChildren(r scanResult) []string {
 	children := make([]string, len(r.vulns))
 	for i, v := range r.vulns {
-		children[i] = fmt.Sprintf("%-20s %s", v.ID, v.Summary)
+		score := ""
+		if v.Score > 0 {
+			score = fmt.Sprintf(" %.1f", v.Score)
+		}
+		children[i] = fmt.Sprintf("%-20s%s  %s", v.ID, score, v.Summary)
 	}
 	return children
 }

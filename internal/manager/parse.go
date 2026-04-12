@@ -4,7 +4,7 @@ import "strings"
 
 func ParseSpec(ecosystem, spec string) (name, version string) {
 	switch ecosystem {
-	case "npm", "Go":
+	case "npm", "Go", "Homebrew":
 		return parseAtSeparator(spec)
 	case "PyPI":
 		return parsePySpec(spec)

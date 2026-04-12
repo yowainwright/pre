@@ -250,6 +250,86 @@ func TestInterceptInstallCacheHit(t *testing.T) {
 	}
 }
 
+func TestInterceptSilentWhenAllCached(t *testing.T) {
+	execCalled := false
+	defer withExecFn(func(name string, args []string) { execCalled = true })()
+	defer withSaveCache(noopSave)()
+
+	c := make(cache.Cache)
+	cache.Set(c, cache.Key("npm", "react"), "18.0.0")
+	defer withLoadCache(func() cache.Cache { return c })()
+
+	Intercept(npmMgr(), []string{"install", "react@18.0.0"})
+	if !execCalled {
+		t.Error("expected ExecFn to be called on all-cached install")
+	}
+}
+
+func TestOutputLevelSilent(t *testing.T) {
+	results := []scanResult{
+		{cached: true},
+		{cached: true},
+	}
+	if outputLevel(results) != outputSilent {
+		t.Error("expected outputSilent when all cached")
+	}
+}
+
+func TestOutputLevelQuiet(t *testing.T) {
+	results := []scanResult{
+		{cached: true},
+		{updated: true},
+	}
+	if outputLevel(results) != outputQuiet {
+		t.Error("expected outputQuiet when clean but not all cached")
+	}
+}
+
+func TestOutputLevelFull(t *testing.T) {
+	results := []scanResult{
+		{vulns: []security.Vulnerability{{ID: "CVE-1234"}}},
+	}
+	if outputLevel(results) != outputFull {
+		t.Error("expected outputFull when vulns present")
+	}
+}
+
+func TestOutputLevelFullOnError(t *testing.T) {
+	results := []scanResult{{err: errors.New("timeout")}}
+	if outputLevel(results) != outputFull {
+		t.Error("expected outputFull when error present")
+	}
+}
+
+func TestCountUncached(t *testing.T) {
+	mgr := npmMgr()
+	c := make(cache.Cache)
+	cache.Set(c, cache.Key("npm", "react"), "18.0.0")
+
+	n := countUncached(mgr, []string{"react@18.0.0", "lodash@4.17.21"}, c)
+	if n != 1 {
+		t.Errorf("expected 1 uncached, got %d", n)
+	}
+}
+
+func TestInterceptQuietWhenClean(t *testing.T) {
+	execCalled := false
+	defer withExecFn(func(name string, args []string) { execCalled = true })()
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		return "18.0.0", nil
+	})()
+	defer withLoadCache(emptyCache)()
+	defer withSaveCache(noopSave)()
+
+	Intercept(npmMgr(), []string{"install", "react"})
+	if !execCalled {
+		t.Error("expected ExecFn called after quiet clean scan")
+	}
+}
+
 // scanPackage tests
 
 func TestScanPackageVersionInSpec(t *testing.T) {
@@ -326,6 +406,24 @@ func TestScanPackageSetsCache(t *testing.T) {
 	}
 }
 
+func TestScanPackageEmptyResolvedVersion(t *testing.T) {
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		return "", nil
+	})()
+
+	c := make(cache.Cache)
+	r := scanPackage(npmMgr(), "react", c)
+	if r.err != nil {
+		t.Errorf("expected no error, got %v", r.err)
+	}
+	if cache.Hit(c, cache.Key("npm", "react"), "") {
+		t.Error("empty version should not be cached")
+	}
+}
+
 func TestScanPackageVulnsNotCached(t *testing.T) {
 	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
 		return []security.Vulnerability{{ID: "CVE-2021-1234", Summary: "vuln"}}, nil
@@ -340,6 +438,34 @@ func TestScanPackageVulnsNotCached(t *testing.T) {
 	if cache.Hit(c, cache.Key("npm", "lodash"), "4.17.4") {
 		t.Error("expected vulnerable package NOT cached")
 	}
+}
+
+func TestInterceptSpawnsSystemScan(t *testing.T) {
+	dir := t.TempDir()
+	orig := statsCacheDirFn
+	statsCacheDirFn = func() (string, error) { return dir, nil }
+	defer func() { statsCacheDirFn = orig }()
+
+	origLFn := loadSystemStatsFn
+	loadSystemStatsFn = loadSystemStats
+	defer func() { loadSystemStatsFn = origLFn }()
+
+	origEnabled := systemScanEnabled
+	systemScanEnabled = true
+	defer func() { systemScanEnabled = origEnabled }()
+
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withSaveCache(noopSave)()
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		return "18.0.0", nil
+	})()
+	defer withReadManifest(func(*manager.Manager) []string { return []string{"react"} })()
+
+	Intercept(npmMgr(), []string{"install"})
 }
 
 // confirm / extractPackages / execReal tests

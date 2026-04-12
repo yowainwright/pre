@@ -72,6 +72,86 @@ func TestSetupAlreadySetUp(t *testing.T) {
 	}
 }
 
+func TestTeardownRemovesHooks(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+
+	rcPath := filepath.Join(dir, ".zshrc")
+	os.WriteFile(rcPath, []byte("export FOO=bar\n# pre security proxy\nfunction bun() {}\n"), 0644)
+
+	Teardown()
+
+	content, _ := os.ReadFile(rcPath)
+	if strings.Contains(string(content), "# pre security proxy") {
+		t.Error("expected hook marker to be removed")
+	}
+	if !strings.Contains(string(content), "export FOO=bar") {
+		t.Error("expected content before marker to be preserved")
+	}
+}
+
+func TestTeardownNoHooks(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+
+	rcPath := filepath.Join(dir, ".zshrc")
+	os.WriteFile(rcPath, []byte("export FOO=bar\n"), 0644)
+
+	Teardown()
+
+	content, _ := os.ReadFile(rcPath)
+	if string(content) != "export FOO=bar\n" {
+		t.Error("expected file to be unchanged when no hooks present")
+	}
+}
+
+func TestTeardownReadError(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+
+	Teardown()
+}
+
+func TestTeardownWriteError(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+
+	rcPath := filepath.Join(dir, ".zshrc")
+	os.WriteFile(rcPath, []byte("# pre security proxy\nstuff\n"), 0444)
+	defer os.Chmod(rcPath, 0644)
+
+	Teardown()
+}
+
+func TestSetupEnablesSystemScan(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+	defer withStdinInput("y\n")()
+
+	Setup()
+}
+
+func TestSetupEnablesSystemScanConfigError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can write to read-only dirs")
+	}
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+	defer withStdinInput("y\n")()
+
+	libDir := filepath.Join(dir, "Library")
+	os.MkdirAll(libDir, 0555)
+	defer os.Chmod(libDir, 0755)
+
+	Setup()
+}
+
 func TestSetupWriteError(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)

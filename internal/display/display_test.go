@@ -40,7 +40,7 @@ func TestAllColorFunctions(t *testing.T) {
 	ColorEnabled = true
 	defer func() { ColorEnabled = orig }()
 
-	for _, fn := range []func(string) string{Bold, Dim, Red, Green, Yellow, Cyan} {
+	for _, fn := range []func(string) string{Bold, Dim, Red, Green, Yellow, Cyan, SkyBlue, FluoYellow, BrightRed, Orange, LightGray, BrightWhite} {
 		result := fn("test")
 		if !strings.Contains(result, "test") {
 			t.Errorf("color function dropped content")
@@ -208,6 +208,20 @@ func TestTreeEmpty(t *testing.T) {
 	result := Tree([]TreeNode{})
 	if result != "" {
 		t.Errorf("expected empty output for empty nodes, got %q", result)
+	}
+}
+
+func TestLogo(t *testing.T) {
+	result := Logo()
+	if result == "" {
+		t.Error("expected non-empty logo")
+	}
+}
+
+func TestHRule(t *testing.T) {
+	result := HRule(10)
+	if !strings.Contains(result, "─") {
+		t.Error("expected rule characters in output")
 	}
 }
 

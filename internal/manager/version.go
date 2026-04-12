@@ -1,18 +1,23 @@
 package manager
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 var (
-	goProxyBase = "https://proxy.golang.org"
-	pypiBase    = "https://pypi.org"
-	runCmd      = func(name string, args ...string) ([]byte, error) {
-		return exec.Command(name, args...).Output()
+	goProxyBase  = "https://proxy.golang.org"
+	pypiBase     = "https://pypi.org"
+	versionHTTP  = &http.Client{Timeout: 10 * time.Second}
+	runCmd       = func(name string, args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return exec.CommandContext(ctx, name, args...).Output()
 	}
 )
 
@@ -63,7 +68,7 @@ func npmVersion(pkg string) (string, error) {
 
 func goVersion(module string) (string, error) {
 	url := fmt.Sprintf("%s/%s/@latest", goProxyBase, module)
-	resp, err := http.Get(url)
+	resp, err := versionHTTP.Get(url)
 	if err != nil {
 		return "", fmt.Errorf("go proxy: %w", err)
 	}
@@ -78,7 +83,7 @@ func goVersion(module string) (string, error) {
 }
 
 func pypiVersion(pkg string) (string, error) {
-	resp, err := http.Get(fmt.Sprintf("%s/pypi/%s/json", pypiBase, pkg))
+	resp, err := versionHTTP.Get(fmt.Sprintf("%s/pypi/%s/json", pypiBase, pkg))
 	if err != nil {
 		return "", fmt.Errorf("pypi: %w", err)
 	}

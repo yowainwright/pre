@@ -37,17 +37,20 @@ func shouldRunSystemScan() bool {
 }
 
 var (
-	loadSystemStatsFn = loadSystemStats
-	saveSystemStatsFn = saveSystemStats
+	loadSystemStatsFn  = loadSystemStats
+	saveSystemStatsFn  = saveSystemStats
+	statsCacheDirFn    = os.UserCacheDir
 )
 
 func systemStatsPath() (string, error) {
-	dir, err := os.UserCacheDir()
+	dir, err := statsCacheDirFn()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "pre", "system.json"), nil
 }
+
+func LoadSystemStats() SystemStats { return loadSystemStats() }
 
 func loadSystemStats() SystemStats {
 	path, err := systemStatsPath()

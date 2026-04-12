@@ -43,28 +43,79 @@ func Intercept(mgr *manager.Manager, args []string) {
 
 	c := loadCacheFn()
 
-	results := make([]scanResult, len(packages))
-	for i, pkg := range packages {
-		results[i] = scanPackage(mgr, pkg, c)
+	uncachedCount := countUncached(mgr, packages, c)
+	if uncachedCount > 0 {
+		fmt.Print(display.Dim(fmt.Sprintf("scanning %d package(s)...\n", uncachedCount)))
 	}
 
-	fmt.Print(renderTree(mgr.Ecosystem, results))
+	results := scanAll(mgr, packages, c)
 
 	for _, r := range results {
+		if len(r.vulns) == 0 && r.version != "" && r.err == nil && !r.cached {
+			cache.Set(c, cache.Key(mgr.Ecosystem, r.name), r.version)
+		}
+	}
+	saveCacheFn(c)
+
+	switch outputLevel(results) {
+	case outputSilent:
+	case outputQuiet:
+		fmt.Print(renderQuiet(len(results)))
+	default:
+		fmt.Print(renderTree(mgr.Ecosystem, results))
+	}
+
+	var criticals []scanResult
+	for _, r := range results {
 		if hasCriticalVulns(r) {
-			if !confirm("Critical vulnerabilities found. Proceed with install?") {
-				processExit(1)
-				return
-			}
-			break
+			criticals = append(criticals, r)
+		}
+	}
+	if len(criticals) > 0 {
+		fmt.Print(renderCriticalDetail(criticals))
+		if !confirm("Proceed with install?") {
+			processExit(1)
+			return
 		}
 	}
 
-	saveCacheFn(c)
 	ExecFn(mgr.Name, args)
 	if systemScanEnabled && shouldRunSystemScan() {
 		spawnSystemScan()
 	}
+}
+
+type outputMode int
+
+const (
+	outputSilent outputMode = iota
+	outputQuiet
+	outputFull
+)
+
+func outputLevel(results []scanResult) outputMode {
+	for _, r := range results {
+		if len(r.vulns) > 0 || r.err != nil {
+			return outputFull
+		}
+	}
+	for _, r := range results {
+		if !r.cached {
+			return outputQuiet
+		}
+	}
+	return outputSilent
+}
+
+func countUncached(mgr *manager.Manager, packages []string, c cache.Cache) int {
+	n := 0
+	for _, pkg := range packages {
+		name, version := manager.ParseSpec(mgr.Ecosystem, pkg)
+		if version == "" || !cache.Hit(c, cache.Key(mgr.Ecosystem, name), version) {
+			n++
+		}
+	}
+	return n
 }
 
 func hasCriticalVulns(r scanResult) bool {
@@ -94,8 +145,7 @@ func confirm(prompt string) bool {
 		}
 	}
 	answer := strings.ToLower(strings.TrimSpace(string(line)))
-	isYes := answer == "y" || answer == "yes"
-	return isYes
+	return answer == "y" || answer == "yes"
 }
 
 func extractPackages(args []string) []string {

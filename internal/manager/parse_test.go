@@ -9,6 +9,7 @@ func TestParseSpec(t *testing.T) {
 		wantName  string
 		wantVer   string
 	}{
+		{"unknown", "somepkg", "somepkg", ""},
 		{"npm", "react", "react", ""},
 		{"npm", "react@18.0.0", "react", "18.0.0"},
 		{"npm", "@scope/pkg", "@scope/pkg", ""},
