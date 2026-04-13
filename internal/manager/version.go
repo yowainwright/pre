@@ -11,10 +11,10 @@ import (
 )
 
 var (
-	goProxyBase  = "https://proxy.golang.org"
-	pypiBase     = "https://pypi.org"
-	versionHTTP  = &http.Client{Timeout: 10 * time.Second}
-	runCmd       = func(name string, args ...string) ([]byte, error) {
+	goProxyBase = "https://proxy.golang.org"
+	pypiBase    = "https://pypi.org"
+	versionHTTP = &http.Client{Timeout: 10 * time.Second}
+	runCmd      = func(name string, args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return exec.CommandContext(ctx, name, args...).Output()

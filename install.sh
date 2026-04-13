@@ -9,6 +9,7 @@ validate_os() {
   os="${1:-$(uname -s)}"
   case "$os" in
     Darwin) return 0 ;;
+    Linux)  return 0 ;;
     *)
       echo "pre: unsupported OS: $os" >&2
       return 1
@@ -18,9 +19,10 @@ validate_os() {
 
 detect_arch() {
   machine="${1:-$(uname -m)}"
+  os="${2:-$(uname -s | tr '[:upper:]' '[:lower:]')}"
   case "$machine" in
-    arm64|aarch64) echo "darwin-arm64" ;;
-    x86_64)        echo "darwin-amd64" ;;
+    arm64|aarch64) echo "${os}-arm64" ;;
+    x86_64)        echo "${os}-amd64" ;;
     *)
       echo "pre: unsupported architecture: $machine" >&2
       return 1
@@ -59,8 +61,11 @@ download_file() {
 }
 
 compute_checksum() {
-  binary="$1"
-  shasum -a 256 "$binary" | awk '{print $1}'
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
 }
 
 verify_checksum() {
@@ -72,6 +77,22 @@ verify_checksum() {
     echo "pre:   expected: ${expected}" >&2
     echo "pre:   actual:   ${actual}" >&2
     return 1
+  fi
+}
+
+verify_cosign() {
+  bundle="$1"
+  file="$2"
+  if command -v cosign >/dev/null 2>&1; then
+    cosign verify-blob \
+      --bundle "$bundle" \
+      --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+      --certificate-identity-regexp "https://github.com/yowainwright/pre/" \
+      "$file" 2>/dev/null && \
+      echo "pre: cosign signature verified" || \
+      echo "pre: cosign verification failed (continuing)" >&2
+  else
+    echo "pre: cosign not found, skipping signature verification"
   fi
 }
 
@@ -105,17 +126,29 @@ main() {
   version="$(resolve_version)"
   bin_url="$(build_url "$REPO" "$version" "$target")"
   sum_url="${bin_url}.sha256"
+  bundle_url="https://github.com/${REPO}/releases/download/v${version}/checksums.txt.bundle"
+  checksums_url="https://github.com/${REPO}/releases/download/v${version}/checksums.txt"
 
   echo "pre: installing v${version} (${target}) to ${BIN_DIR}/pre"
 
   tmp_bin="$(mktemp)"
   tmp_sum="$(mktemp)"
-  trap 'rm -f "$tmp_bin" "$tmp_sum"' EXIT
+  tmp_bundle="$(mktemp)"
+  tmp_checksums="$(mktemp)"
+  trap 'rm -f "$tmp_bin" "$tmp_sum" "$tmp_bundle" "$tmp_checksums"' EXIT
 
   download_file "$bin_url" "$tmp_bin"
   download_file "$sum_url" "$tmp_sum"
 
   verify_checksum "$tmp_bin" "$(cat "$tmp_sum")"
+
+  download_file "$bundle_url" "$tmp_bundle" 2>/dev/null || true
+  download_file "$checksums_url" "$tmp_checksums" 2>/dev/null || true
+
+  if [ -s "$tmp_bundle" ] && [ -s "$tmp_checksums" ]; then
+    verify_cosign "$tmp_bundle" "$tmp_checksums"
+  fi
+
   install_binary "$tmp_bin"
 
   echo "pre: installed (checksum verified)"

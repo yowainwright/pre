@@ -26,14 +26,16 @@ exit_code() {
 
 # validate_os
 check "validate_os accepts Darwin"  "0" "$(exit_code validate_os "Darwin")"
-check "validate_os rejects Linux"   "1" "$(exit_code validate_os "Linux")"
+check "validate_os accepts Linux"   "0" "$(exit_code validate_os "Linux")"
 check "validate_os rejects unknown" "1" "$(exit_code validate_os "Windows_NT")"
 
 # detect_arch
-check "detect_arch arm64"            "darwin-arm64" "$(detect_arch "arm64")"
-check "detect_arch aarch64"          "darwin-arm64" "$(detect_arch "aarch64")"
-check "detect_arch x86_64"           "darwin-amd64" "$(detect_arch "x86_64")"
-check "detect_arch rejects unknown"  "1"            "$(exit_code detect_arch "riscv64")"
+check "detect_arch darwin arm64"    "darwin-arm64" "$(detect_arch "arm64" "darwin")"
+check "detect_arch darwin aarch64"  "darwin-arm64" "$(detect_arch "aarch64" "darwin")"
+check "detect_arch darwin x86_64"   "darwin-amd64" "$(detect_arch "x86_64" "darwin")"
+check "detect_arch linux arm64"     "linux-arm64"  "$(detect_arch "arm64" "linux")"
+check "detect_arch linux x86_64"    "linux-amd64"  "$(detect_arch "x86_64" "linux")"
+check "detect_arch rejects unknown" "1"            "$(exit_code detect_arch "riscv64")"
 
 # resolve_version
 check "resolve_version pinned"       "1.2.3" "$(resolve_version "1.2.3" "any/repo")"

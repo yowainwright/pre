@@ -1,16 +1,18 @@
 VERSION ?= dev
 LDFLAGS = -ldflags="-s -w -X main.version=$(VERSION)"
+BUILD = CGO_ENABLED=0 go build -trimpath $(LDFLAGS)
 DIST = dist
 
 build:
-	go build $(LDFLAGS) -o $(DIST)/pre ./cmd/pre
+	$(BUILD) -o $(DIST)/pre ./cmd/pre
 
 release: clean
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(DIST)/pre-darwin-arm64 ./cmd/pre
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(DIST)/pre-darwin-amd64 ./cmd/pre
-	GOOS=linux  GOARCH=amd64 go build $(LDFLAGS) -o $(DIST)/pre-linux-amd64  ./cmd/pre
+	GOOS=darwin GOARCH=arm64 $(BUILD) -o $(DIST)/pre-darwin-arm64 ./cmd/pre
+	GOOS=darwin GOARCH=amd64 $(BUILD) -o $(DIST)/pre-darwin-amd64 ./cmd/pre
+	GOOS=linux  GOARCH=amd64 $(BUILD) -o $(DIST)/pre-linux-amd64  ./cmd/pre
+	GOOS=linux  GOARCH=arm64 $(BUILD) -o $(DIST)/pre-linux-arm64  ./cmd/pre
 	@echo "SHA256 checksums:"
-	@shasum -a 256 $(DIST)/pre-darwin-arm64 $(DIST)/pre-darwin-amd64
+	@shasum -a 256 $(DIST)/pre-darwin-arm64 $(DIST)/pre-darwin-amd64 $(DIST)/pre-linux-amd64 $(DIST)/pre-linux-arm64
 
 clean:
 	rm -rf $(DIST)
@@ -41,3 +43,7 @@ docker-build:
 
 demo: docker-build
 	docker run -it pre-demo
+
+secrets:
+	gh secret set HOMEBREW_TAP_TOKEN --body "$$HOMEBREW_TAP_TOKEN"
+	gh secret set CODECOV_TOKEN      --body "$$CODECOV_TOKEN"

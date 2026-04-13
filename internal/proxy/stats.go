@@ -37,9 +37,9 @@ func shouldRunSystemScan() bool {
 }
 
 var (
-	loadSystemStatsFn  = loadSystemStats
-	saveSystemStatsFn  = saveSystemStats
-	statsCacheDirFn    = os.UserCacheDir
+	loadSystemStatsFn = loadSystemStats
+	saveSystemStatsFn = saveSystemStats
+	statsCacheDirFn   = os.UserCacheDir
 )
 
 func systemStatsPath() (string, error) {

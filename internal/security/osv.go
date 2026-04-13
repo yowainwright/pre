@@ -15,8 +15,8 @@ var (
 )
 
 type Vulnerability struct {
-	ID       string  `json:"id"`
-	Summary  string  `json:"summary"`
+	ID       string `json:"id"`
+	Summary  string `json:"summary"`
 	Severity string
 	Score    float64
 }
