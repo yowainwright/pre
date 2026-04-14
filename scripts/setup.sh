@@ -10,7 +10,7 @@ fail() { printf "FAIL %s\n  %s\n" "$1" "$2"; failed=$((failed + 1)); }
 warn() { printf "warn %s\n  %s\n" "$1" "$2"; warned=$((warned + 1)); }
 
 cmd_exists() {
-  command -v "$1" >/dev/null 2>&1
+  command -v "$1" >/dev/null 2>&1 || return 1
 }
 
 gh_authed() {
