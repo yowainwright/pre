@@ -1,4 +1,4 @@
-# pre
+# pre≋≈~∿
 
 Security proxy for package managers. Sits between your shell and `npm`, `pip`, `brew`, and friends — checks packages against the [OSV vulnerability database](https://osv.dev) before anything installs.
 
