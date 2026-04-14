@@ -6,13 +6,15 @@ DIST = dist
 build:
 	$(BUILD) -o $(DIST)/pre ./cmd/pre
 
-release: clean
-	GOOS=darwin GOARCH=arm64 $(BUILD) -o $(DIST)/pre-darwin-arm64 ./cmd/pre
-	GOOS=darwin GOARCH=amd64 $(BUILD) -o $(DIST)/pre-darwin-amd64 ./cmd/pre
-	GOOS=linux  GOARCH=amd64 $(BUILD) -o $(DIST)/pre-linux-amd64  ./cmd/pre
-	GOOS=linux  GOARCH=arm64 $(BUILD) -o $(DIST)/pre-linux-arm64  ./cmd/pre
-	@echo "SHA256 checksums:"
-	@shasum -a 256 $(DIST)/pre-darwin-arm64 $(DIST)/pre-darwin-amd64 $(DIST)/pre-linux-amd64 $(DIST)/pre-linux-arm64
+tag:
+	git tag $(shell svu next)
+	git push origin $(shell svu next)
+
+release:
+	goreleaser release --clean
+
+snapshot:
+	goreleaser release --snapshot --clean --skip=sign
 
 clean:
 	rm -rf $(DIST)

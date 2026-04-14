@@ -66,7 +66,9 @@ check_deps() {
   cmd_exists make && ok "make" || fail "make" "not found — brew install make"
   cmd_exists gh   && ok "gh"   || fail "gh"   "not found — brew install gh"
   cmd_exists op   && ok "op"   || fail "op"   "not found — brew install 1password-cli"
-  cmd_exists cosign && ok "cosign (optional)" || warn "cosign (optional)" "brew install cosign"
+  cmd_exists goreleaser && ok "goreleaser" || fail "goreleaser" "not found — brew install goreleaser"
+  cmd_exists svu       && ok "svu"        || fail "svu"        "not found — brew install caarlos0/tap/svu"
+  cmd_exists cosign    && ok "cosign (optional)" || warn "cosign (optional)" "brew install cosign"
 }
 
 check_auth() {
