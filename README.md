@@ -170,9 +170,11 @@ graph TD
 ## Development
 
 ```sh
+make setup       # install deps, verify secrets, install git hooks
 make test        # unit tests
 make e2e         # end-to-end (requires npm)
 make integration # live API calls (requires network)
 make lint        # format check + vet
+make snapshot    # local release dry-run (all 4 binaries, no publish)
 make demo        # run in Docker
 ```
