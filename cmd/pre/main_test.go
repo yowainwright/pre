@@ -222,8 +222,13 @@ func TestRunConfigSetSystemTTL(t *testing.T) {
 func TestRunStatusWithSystemStats(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CACHE_HOME", "")
 
-	statsDir := filepath.Join(dir, "Library", "Caches", "pre")
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	statsDir := filepath.Join(cacheDir, "pre")
 	os.MkdirAll(statsDir, 0755)
 	statsData := `{"crit":2,"warn":3,"total":10,"lastUpdated":"2024-01-01T12:00:00Z"}`
 	os.WriteFile(filepath.Join(statsDir, "system.json"), []byte(statsData), 0644)
@@ -260,6 +265,7 @@ func TestRunWithCustomManagers(t *testing.T) {
 
 func TestRunConfigSetSaveError(t *testing.T) {
 	t.Setenv("HOME", "/dev/null")
+	t.Setenv("XDG_CONFIG_HOME", "/dev/null")
 
 	var out, errOut bytes.Buffer
 	run([]string{"config", "set", "endpoint", "https://example.com"}, &out, &errOut)
