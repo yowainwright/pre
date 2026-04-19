@@ -562,11 +562,11 @@ func TestReadPackageLockJSONNested(t *testing.T) {
 	}`), 0644)
 	pkgs := readPackageLockJSON(dir)
 	m := toSet(pkgs)
-	if !m["bar@1.0.0"] && !m["bar@2.0.0"] {
-		t.Errorf("expected bar in result, got %v", pkgs)
+	if !m["bar@1.0.0"] || !m["bar@2.0.0"] {
+		t.Errorf("expected both bar versions in result, got %v", pkgs)
 	}
-	if len(pkgs) != 1 {
-		t.Errorf("expected 1 (deduped), got %d: %v", len(pkgs), pkgs)
+	if len(pkgs) != 2 {
+		t.Errorf("expected 2 (both versions preserved), got %d: %v", len(pkgs), pkgs)
 	}
 }
 
