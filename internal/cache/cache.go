@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/yowainwright/pre/internal/fileutil"
 )
 
 const defaultTTL = 24 * time.Hour
@@ -51,7 +53,7 @@ func Load() Cache {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return make(Cache)
 	}
-	return c
+	return migrate(c)
 }
 
 func Save(c Cache) {
@@ -63,7 +65,7 @@ func Save(c Cache) {
 		return
 	}
 	data, _ := json.Marshal(c)
-	os.WriteFile(p, data, 0644)
+	_ = fileutil.AtomicWriteFile(p, data, 0644)
 }
 
 func TTL() time.Duration {
@@ -75,26 +77,58 @@ func TTL() time.Duration {
 	return configuredTTL
 }
 
-func Hit(c Cache, key, version string) bool {
+func Hit(c Cache, key string) bool {
 	e, ok := c[key]
 	if !ok {
 		return false
 	}
-	return e.Version == version && time.Since(e.CheckedAt) < TTL()
+	return time.Since(e.CheckedAt) < TTL()
 }
 
-func Set(c Cache, key, version string) {
+func Set(c Cache, key string) {
+	_, _, version := ParseKey(key)
 	c[key] = Entry{Version: version, CheckedAt: time.Now()}
 }
 
-func Key(ecosystem, name string) string {
-	return ecosystem + "/" + name
+func Key(ecosystem, name, version string) string {
+	key := ecosystem + "/" + name
+	if version == "" {
+		return key
+	}
+	return key + "@" + version
 }
 
-func ParseKey(key string) (ecosystem, name string) {
+func ParseKey(key string) (ecosystem, name, version string) {
 	parts := strings.SplitN(key, "/", 2)
 	if len(parts) != 2 {
-		return key, ""
+		return key, "", ""
 	}
-	return parts[0], parts[1]
+	ecosystem, rest := parts[0], parts[1]
+	if idx := strings.LastIndex(rest, "@"); idx > 0 {
+		return ecosystem, rest[:idx], rest[idx+1:]
+	}
+	return ecosystem, rest, ""
+}
+
+func migrate(c Cache) Cache {
+	if len(c) == 0 {
+		return c
+	}
+
+	migrated := make(Cache, len(c))
+	for key, entry := range c {
+		ecosystem, name, version := ParseKey(key)
+		if version == "" && ecosystem != "" && name != "" && entry.Version != "" {
+			key = Key(ecosystem, name, entry.Version)
+			version = entry.Version
+		}
+		if version != "" && entry.Version == "" {
+			entry.Version = version
+		}
+		current, exists := migrated[key]
+		if !exists || entry.CheckedAt.After(current.CheckedAt) {
+			migrated[key] = entry
+		}
+	}
+	return migrated
 }

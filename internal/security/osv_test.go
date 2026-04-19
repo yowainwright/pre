@@ -127,3 +127,19 @@ func TestCheckInvalidJSON(t *testing.T) {
 		t.Error("expected error for invalid JSON response")
 	}
 }
+
+func TestCheckStatusError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	origEndpoint := Endpoint
+	Endpoint = srv.URL
+	defer func() { Endpoint = origEndpoint }()
+
+	_, err := Check("npm", "react", "18.0.0")
+	if err == nil {
+		t.Error("expected error for non-2xx response")
+	}
+}

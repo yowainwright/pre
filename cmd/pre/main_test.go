@@ -103,6 +103,21 @@ func TestRunConfigSet(t *testing.T) {
 	}
 }
 
+func TestRunConfigSetDottedTTL(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("HOME", dir)
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"config", "set", "cache.ttl", "12h"}, &out, &errOut)
+	if code != 0 {
+		t.Errorf("expected exit 0, got %d — err: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "cache.ttl") {
+		t.Errorf("expected confirmation output, got: %s", out.String())
+	}
+}
+
 func TestRunConfigSetUnknownKey(t *testing.T) {
 	var out, errOut bytes.Buffer
 	run([]string{"config", "set", "boguskey", "val"}, &out, &errOut)
@@ -194,6 +209,20 @@ func TestRunConfigSetEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "endpoint") {
 		t.Errorf("expected endpoint in output, got: %s", out.String())
+	}
+}
+
+func TestRunConfigSetDottedEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"config", "set", "api.endpoint", "https://custom.example.com"}, &out, &errOut)
+	if code != 0 {
+		t.Errorf("expected exit 0, got %d — err: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "api.endpoint") {
+		t.Errorf("expected api.endpoint in output, got: %s", out.String())
 	}
 }
 

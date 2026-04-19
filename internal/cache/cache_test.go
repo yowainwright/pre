@@ -82,38 +82,38 @@ func TestTTLZero(t *testing.T) {
 }
 
 func TestKey(t *testing.T) {
-	if Key("npm", "react") != "npm/react" {
-		t.Errorf("unexpected key: %s", Key("npm", "react"))
+	if Key("npm", "react", "18.0.0") != "npm/react@18.0.0" {
+		t.Errorf("unexpected key: %s", Key("npm", "react", "18.0.0"))
 	}
 }
 
 func TestHitMiss(t *testing.T) {
 	c := make(Cache)
-	if Hit(c, "npm/react", "18.0.0") {
+	if Hit(c, "npm/react@18.0.0") {
 		t.Error("expected miss on empty cache")
 	}
 }
 
 func TestHitVersionMismatch(t *testing.T) {
 	c := make(Cache)
-	Set(c, "npm/react", "17.0.0")
-	if Hit(c, "npm/react", "18.0.0") {
+	Set(c, Key("npm", "react", "17.0.0"))
+	if Hit(c, Key("npm", "react", "18.0.0")) {
 		t.Error("expected miss on version mismatch")
 	}
 }
 
 func TestHitMatch(t *testing.T) {
 	c := make(Cache)
-	Set(c, "npm/react", "18.0.0")
-	if !Hit(c, "npm/react", "18.0.0") {
+	Set(c, Key("npm", "react", "18.0.0"))
+	if !Hit(c, Key("npm", "react", "18.0.0")) {
 		t.Error("expected hit on matching version within TTL")
 	}
 }
 
 func TestHitExpired(t *testing.T) {
 	c := make(Cache)
-	c["npm/react"] = Entry{Version: "18.0.0", CheckedAt: time.Now().Add(-25 * time.Hour)}
-	if Hit(c, "npm/react", "18.0.0") {
+	c[Key("npm", "react", "18.0.0")] = Entry{Version: "18.0.0", CheckedAt: time.Now().Add(-25 * time.Hour)}
+	if Hit(c, Key("npm", "react", "18.0.0")) {
 		t.Error("expected miss on expired entry")
 	}
 }
@@ -121,8 +121,8 @@ func TestHitExpired(t *testing.T) {
 func TestHitZeroTTL(t *testing.T) {
 	t.Setenv("PRE_CACHE_TTL", "0s")
 	c := make(Cache)
-	Set(c, "npm/react", "18.0.0")
-	if Hit(c, "npm/react", "18.0.0") {
+	Set(c, Key("npm", "react", "18.0.0"))
+	if Hit(c, Key("npm", "react", "18.0.0")) {
 		t.Error("expected miss when TTL is zero")
 	}
 }
@@ -139,11 +139,11 @@ func TestSaveAndLoad(t *testing.T) {
 	defer withCacheDir(t.TempDir())()
 
 	c := make(Cache)
-	Set(c, "npm/react", "18.0.0")
+	Set(c, Key("npm", "react", "18.0.0"))
 	Save(c)
 
 	loaded := Load()
-	if !Hit(loaded, "npm/react", "18.0.0") {
+	if !Hit(loaded, Key("npm", "react", "18.0.0")) {
 		t.Error("expected cache hit after save and load")
 	}
 }
@@ -151,21 +151,21 @@ func TestSaveAndLoad(t *testing.T) {
 func TestSaveBadDir(t *testing.T) {
 	defer withCacheDir(filepath.Join(t.TempDir(), "nonexistent-parent"))()
 	c := make(Cache)
-	Set(c, "npm/react", "18.0.0")
+	Set(c, Key("npm", "react", "18.0.0"))
 	Save(c)
 }
 
 func TestParseKey(t *testing.T) {
-	eco, name := ParseKey("npm/react")
-	if eco != "npm" || name != "react" {
-		t.Errorf("unexpected: eco=%q name=%q", eco, name)
+	eco, name, version := ParseKey("npm/react@18.0.0")
+	if eco != "npm" || name != "react" || version != "18.0.0" {
+		t.Errorf("unexpected: eco=%q name=%q version=%q", eco, name, version)
 	}
 }
 
 func TestParseKeyNoSlash(t *testing.T) {
-	eco, name := ParseKey("noslash")
-	if eco != "noslash" || name != "" {
-		t.Errorf("expected key as eco and empty name, got eco=%q name=%q", eco, name)
+	eco, name, version := ParseKey("noslash")
+	if eco != "noslash" || name != "" || version != "" {
+		t.Errorf("expected key as eco and empty name/version, got eco=%q name=%q version=%q", eco, name, version)
 	}
 }
 
@@ -206,5 +206,22 @@ func TestLoadBadJSON(t *testing.T) {
 	c := Load()
 	if len(c) != 0 {
 		t.Error("expected empty cache on bad JSON")
+	}
+}
+
+func TestLoadMigratesLegacyKeys(t *testing.T) {
+	dir := t.TempDir()
+	defer withCacheDir(dir)()
+	if err := os.MkdirAll(filepath.Join(dir, "pre"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte(`{"npm/react":{"version":"18.0.0","checkedAt":"` + time.Now().UTC().Format(time.RFC3339) + `"}}`)
+	if err := os.WriteFile(filepath.Join(dir, "pre", "versions.json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := Load()
+	if !Hit(c, Key("npm", "react", "18.0.0")) {
+		t.Error("expected migrated cache hit")
 	}
 }

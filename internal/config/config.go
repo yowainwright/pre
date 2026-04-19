@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/yowainwright/pre/internal/fileutil"
 )
 
 const (
@@ -72,7 +74,7 @@ func Save(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0644)
+	return fileutil.AtomicWriteFile(p, data, 0644)
 }
 
 func configPath() (string, error) {

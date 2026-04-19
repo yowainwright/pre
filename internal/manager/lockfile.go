@@ -57,11 +57,12 @@ func readPackageLockJSON(dir string) []string {
 		if idx := strings.LastIndex(name, "node_modules/"); idx != -1 {
 			name = name[idx+len("node_modules/"):]
 		}
-		if seen[name] {
+		spec := name + "@" + pkg.Version
+		if seen[spec] {
 			continue
 		}
-		seen[name] = true
-		result = append(result, name+"@"+pkg.Version)
+		seen[spec] = true
+		result = append(result, spec)
 	}
 	return result
 }
@@ -90,9 +91,10 @@ func readBunLock(dir string) []string {
 		}
 		name := key[:atIdx]
 		version := key[atIdx+1:]
-		if !seen[name] {
-			seen[name] = true
-			result = append(result, name+"@"+version)
+		spec := name + "@" + version
+		if !seen[spec] {
+			seen[spec] = true
+			result = append(result, spec)
 		}
 	}
 	return result
@@ -127,9 +129,11 @@ func readPNPMLock(dir string) []string {
 			continue
 		}
 		name, version := trimmed[:atIdx], trimmed[atIdx+1:]
-		if !seen[name] {
-			seen[name] = true
-			result = append(result, name+"@"+version)
+		version = strings.SplitN(version, "(", 2)[0]
+		spec := name + "@" + version
+		if !seen[spec] {
+			seen[spec] = true
+			result = append(result, spec)
 		}
 	}
 	return result
@@ -235,16 +239,16 @@ func readPipfileLock(dir string) []string {
 			continue
 		}
 		for name, pkg := range pkgs {
-			if seen[name] {
+			ver := strings.TrimPrefix(pkg.Version, "==")
+			spec := name
+			if ver != "" {
+				spec = name + "==" + ver
+			}
+			if seen[spec] {
 				continue
 			}
-			seen[name] = true
-			ver := strings.TrimPrefix(pkg.Version, "==")
-			if ver != "" {
-				result = append(result, name+"=="+ver)
-			} else {
-				result = append(result, name)
-			}
+			seen[spec] = true
+			result = append(result, spec)
 		}
 	}
 	return result

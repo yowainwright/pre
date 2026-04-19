@@ -21,6 +21,12 @@ func withSaveSystemStats(fn func(SystemStats)) func() {
 	return func() { saveSystemStatsFn = orig }
 }
 
+func withSystemScanLock(fn func() (func(), bool)) func() {
+	orig := acquireSystemScanLock
+	acquireSystemScanLock = fn
+	return func() { acquireSystemScanLock = orig }
+}
+
 func TestSetSystemScanEnabled(t *testing.T) {
 	orig := systemScanEnabled
 	defer func() { systemScanEnabled = orig }()
@@ -62,7 +68,9 @@ func TestRunBackgroundScanEmpty(t *testing.T) {
 
 func TestRunBackgroundScan(t *testing.T) {
 	var savedStats SystemStats
+	savedCache := make(cache.Cache)
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
+	defer withSaveCache(func(c cache.Cache) { savedCache = c })()
 	defer withLoadCache(emptyCache)()
 	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
 		return "4.17.21", nil
@@ -79,6 +87,9 @@ func TestRunBackgroundScan(t *testing.T) {
 
 	if savedStats.Total != 1 {
 		t.Errorf("expected Total=1, got %d", savedStats.Total)
+	}
+	if !cache.Hit(savedCache, cache.Key("npm", "lodash", "4.17.21")) {
+		t.Error("expected background scan to persist cache")
 	}
 }
 
@@ -124,12 +135,13 @@ func TestRunSystemScan(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
 	defer withSaveCache(noopSave)()
+	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
 		return nil, nil
 	})()
 
 	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "lodash"), "4.17.21")
+	cache.Set(c, cache.Key("npm", "lodash", "4.17.21"))
 	defer withLoadCache(func() cache.Cache { return c })()
 
 	RunSystemScan()
@@ -143,12 +155,13 @@ func TestRunSystemScanWithVulns(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
 	defer withSaveCache(noopSave)()
+	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
 		return []security.Vulnerability{{ID: "CVE-1234", Severity: "CRITICAL"}}, nil
 	})()
 
 	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "lodash"), "4.17.21")
+	cache.Set(c, cache.Key("npm", "lodash", "4.17.21"))
 	defer withLoadCache(func() cache.Cache { return c })()
 
 	RunSystemScan()
@@ -162,12 +175,13 @@ func TestRunSystemScanSecurityError(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
 	defer withSaveCache(noopSave)()
+	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
 		return nil, errors.New("check failed")
 	})()
 
 	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "lodash"), "4.17.21")
+	cache.Set(c, cache.Key("npm", "lodash", "4.17.21"))
 	defer withLoadCache(func() cache.Cache { return c })()
 
 	RunSystemScan()
@@ -181,12 +195,13 @@ func TestRunSystemScanWarn(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
 	defer withSaveCache(noopSave)()
+	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
 		return []security.Vulnerability{{ID: "CVE-1234", Severity: "MEDIUM"}}, nil
 	})()
 
 	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "lodash"), "4.17.21")
+	cache.Set(c, cache.Key("npm", "lodash", "4.17.21"))
 	defer withLoadCache(func() cache.Cache { return c })()
 
 	RunSystemScan()
@@ -200,6 +215,7 @@ func TestRunSystemScanSkipsBadKey(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
 	defer withSaveCache(noopSave)()
+	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 
 	c := make(cache.Cache)
 	c["noslash"] = cache.Entry{Version: "1.0.0"}
@@ -216,12 +232,13 @@ func TestRunSystemScanNilManager(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
 	defer withSaveCache(noopSave)()
+	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
 		return nil, nil
 	})()
 
 	c := make(cache.Cache)
-	cache.Set(c, cache.Key("PyPI", "requests"), "2.31.0")
+	cache.Set(c, cache.Key("PyPI", "requests", "2.31.0"))
 	defer withLoadCache(func() cache.Cache { return c })()
 
 	RunSystemScan()
@@ -251,7 +268,7 @@ func TestScanAllPostResolveCacheHit(t *testing.T) {
 	})()
 
 	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "react"), "18.0.0")
+	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
 
 	results := scanAll(npmMgr(), []string{"react"}, c)
 
@@ -260,5 +277,17 @@ func TestScanAllPostResolveCacheHit(t *testing.T) {
 	}
 	if !results[0].cached {
 		t.Error("expected cached=true for post-resolve cache hit")
+	}
+}
+
+func TestRunSystemScanSkipsWhenLocked(t *testing.T) {
+	called := false
+	defer withSystemScanLock(func() (func(), bool) { return nil, false })()
+	defer withSaveSystemStats(func(SystemStats) { called = true })()
+
+	RunSystemScan()
+
+	if called {
+		t.Error("expected locked system scan to skip work")
 	}
 }

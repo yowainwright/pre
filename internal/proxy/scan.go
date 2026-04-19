@@ -1,10 +1,13 @@
 package proxy
 
 import (
+	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/yowainwright/pre/internal/cache"
 	"github.com/yowainwright/pre/internal/manager"
@@ -25,7 +28,10 @@ var (
 	systemScanEnabled     bool
 	spawnBackgroundScanFn = spawnBackgroundScan
 	executableFn          = os.Executable
+	acquireSystemScanLock = tryAcquireSystemScanLock
 )
+
+const systemScanLockStaleAfter = 30 * time.Minute
 
 func SetSystemScanEnabled(v bool) {
 	systemScanEnabled = v
@@ -65,26 +71,43 @@ func RunBackgroundScan(mgr *manager.Manager) {
 			warn++
 		}
 	}
+	saveCacheFn(c)
 	saveSystemStatsFn(SystemStats{Crit: crit, Warn: warn, Total: len(packages)})
 }
 
 func RunSystemScan() {
+	release, ok := acquireSystemScanLock()
+	if !ok {
+		return
+	}
+	if release != nil {
+		defer release()
+	}
+
 	c := loadCacheFn()
+	total := 0
 	var crit, warn int
 	for key, entry := range c {
-		ecosystem, name := cache.ParseKey(key)
+		ecosystem, name, version := cache.ParseKey(key)
 		if ecosystem == "" || name == "" {
 			continue
 		}
+		if version == "" {
+			version = entry.Version
+		}
+		if version == "" {
+			continue
+		}
+		total++
 		mgr := manager.Get(strings.ToLower(ecosystem))
 		if mgr == nil {
 			mgr = &manager.Manager{Name: ecosystem, Ecosystem: ecosystem}
 		}
-		vulns, err := securityCheckFn(mgr.Ecosystem, name, entry.Version)
+		vulns, err := securityCheckFn(mgr.Ecosystem, name, version)
 		if err != nil {
 			continue
 		}
-		r := scanResult{name: name, version: entry.Version, vulns: vulns}
+		r := scanResult{name: name, version: version, vulns: vulns}
 		switch {
 		case hasCriticalVulns(r):
 			crit++
@@ -95,7 +118,7 @@ func RunSystemScan() {
 		}
 	}
 	saveCacheFn(c)
-	saveSystemStatsFn(SystemStats{Crit: crit, Warn: warn, Total: len(c)})
+	saveSystemStatsFn(SystemStats{Crit: crit, Warn: warn, Total: total})
 }
 
 func scanAll(mgr *manager.Manager, packages []string, c cache.Cache) []scanResult {
@@ -112,7 +135,7 @@ func scanAll(mgr *manager.Manager, packages []string, c cache.Cache) []scanResul
 		name, version := manager.ParseSpec(mgr.Ecosystem, pkg)
 		if version != "" {
 			label := name + "@" + version
-			if cache.Hit(c, cache.Key(mgr.Ecosystem, name), version) {
+			if cache.Hit(c, cache.Key(mgr.Ecosystem, name, version)) {
 				results[i] = scanResult{name: name, version: version, label: label, cached: true}
 				continue
 			}
@@ -142,7 +165,7 @@ func scanAll(mgr *manager.Manager, packages []string, c cache.Cache) []scanResul
 					mu.Unlock()
 					return
 				}
-				if cache.Hit(c, cache.Key(mgr.Ecosystem, w.name), version) {
+				if cache.Hit(c, cache.Key(mgr.Ecosystem, w.name, version)) {
 					label := w.name + "@" + version
 					mu.Lock()
 					results[w.idx] = scanResult{name: w.name, version: version, label: label, cached: true}
@@ -186,8 +209,8 @@ func scanPackage(mgr *manager.Manager, spec string, c cache.Cache) scanResult {
 		label = name + "@" + version
 	}
 
-	key := cache.Key(mgr.Ecosystem, name)
-	if version != "" && cache.Hit(c, key, version) {
+	key := cache.Key(mgr.Ecosystem, name, version)
+	if version != "" && cache.Hit(c, key) {
 		return scanResult{name: name, version: version, label: label, cached: true}
 	}
 
@@ -197,8 +220,41 @@ func scanPackage(mgr *manager.Manager, spec string, c cache.Cache) scanResult {
 	}
 
 	if len(vulns) == 0 && version != "" {
-		cache.Set(c, key, version)
+		cache.Set(c, key)
 	}
 
 	return scanResult{name: name, version: version, label: label, vulns: vulns, updated: resolved}
+}
+
+func tryAcquireSystemScanLock() (func(), bool) {
+	path, err := systemScanLockPath()
+	if err != nil {
+		return nil, true
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return nil, true
+	}
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > systemScanLockStaleAfter {
+				_ = os.Remove(path)
+				return tryAcquireSystemScanLock()
+			}
+			return nil, false
+		}
+		return nil, true
+	}
+	_, _ = file.WriteString(time.Now().Format(time.RFC3339Nano))
+	_ = file.Close()
+	return func() { _ = os.Remove(path) }, true
+}
+
+func systemScanLockPath() (string, error) {
+	dir, err := statsCacheDirFn()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "pre", "system.lock"), nil
 }

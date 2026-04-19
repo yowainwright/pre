@@ -7,8 +7,7 @@ build:
 	$(BUILD) -o $(DIST)/pre ./cmd/pre
 
 tag:
-	git tag $(shell svu next)
-	git push origin $(shell svu next)
+	sh scripts/tag.sh
 
 release:
 	goreleaser release --clean

@@ -239,7 +239,7 @@ func TestInterceptInstallCacheHit(t *testing.T) {
 	defer withSaveCache(noopSave)()
 
 	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "react"), "18.0.0")
+	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
 	defer withLoadCache(func() cache.Cache { return c })()
 	Intercept(npmMgr(), []string{"install", "react@18.0.0"})
 	if !execCalled {
@@ -256,7 +256,7 @@ func TestInterceptSilentWhenAllCached(t *testing.T) {
 	defer withSaveCache(noopSave)()
 
 	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "react"), "18.0.0")
+	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
 	defer withLoadCache(func() cache.Cache { return c })()
 
 	Intercept(npmMgr(), []string{"install", "react@18.0.0"})
@@ -304,7 +304,7 @@ func TestOutputLevelFullOnError(t *testing.T) {
 func TestCountUncached(t *testing.T) {
 	mgr := npmMgr()
 	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "react"), "18.0.0")
+	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
 
 	n := countUncached(mgr, []string{"react@18.0.0", "lodash@4.17.21"}, c)
 	if n != 1 {
@@ -379,7 +379,7 @@ func TestScanPackageCacheHit(t *testing.T) {
 	})()
 
 	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "react"), "18.0.0")
+	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
 
 	r := scanPackage(npmMgr(), "react@18.0.0", c)
 	if !r.cached {
@@ -401,7 +401,7 @@ func TestScanPackageSetsCache(t *testing.T) {
 	c := make(cache.Cache)
 	scanPackage(npmMgr(), "react", c)
 
-	if !cache.Hit(c, cache.Key("npm", "react"), "18.0.0") {
+	if !cache.Hit(c, cache.Key("npm", "react", "18.0.0")) {
 		t.Error("expected cache populated after clean scan")
 	}
 }
@@ -419,7 +419,7 @@ func TestScanPackageEmptyResolvedVersion(t *testing.T) {
 	if r.err != nil {
 		t.Errorf("expected no error, got %v", r.err)
 	}
-	if cache.Hit(c, cache.Key("npm", "react"), "") {
+	if cache.Hit(c, cache.Key("npm", "react", "")) {
 		t.Error("empty version should not be cached")
 	}
 }
@@ -435,7 +435,7 @@ func TestScanPackageVulnsNotCached(t *testing.T) {
 	c := make(cache.Cache)
 	scanPackage(npmMgr(), "lodash", c)
 
-	if cache.Hit(c, cache.Key("npm", "lodash"), "4.17.4") {
+	if cache.Hit(c, cache.Key("npm", "lodash", "4.17.4")) {
 		t.Error("expected vulnerable package NOT cached")
 	}
 }

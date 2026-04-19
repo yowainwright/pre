@@ -52,7 +52,7 @@ func Intercept(mgr *manager.Manager, args []string) {
 
 	for _, r := range results {
 		if len(r.vulns) == 0 && r.version != "" && r.err == nil && !r.cached {
-			cache.Set(c, cache.Key(mgr.Ecosystem, r.name), r.version)
+			cache.Set(c, cache.Key(mgr.Ecosystem, r.name, r.version))
 		}
 	}
 	saveCacheFn(c)
@@ -111,7 +111,7 @@ func countUncached(mgr *manager.Manager, packages []string, c cache.Cache) int {
 	n := 0
 	for _, pkg := range packages {
 		name, version := manager.ParseSpec(mgr.Ecosystem, pkg)
-		if version == "" || !cache.Hit(c, cache.Key(mgr.Ecosystem, name), version) {
+		if version == "" || !cache.Hit(c, cache.Key(mgr.Ecosystem, name, version)) {
 			n++
 		}
 	}

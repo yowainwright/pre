@@ -44,6 +44,22 @@ func TestReadPackageLockJSONSkipsRoot(t *testing.T) {
 	}
 }
 
+func TestReadPackageLockJSONPreservesMultipleVersions(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/package-lock.json", []byte(`{
+		"packages": {
+			"node_modules/lodash": {"version": "4.17.21"},
+			"node_modules/pkg-a/node_modules/lodash": {"version": "4.17.20"}
+		}
+	}`), 0644)
+
+	pkgs := readPackageLockJSON(dir)
+	m := toSet(pkgs)
+	if !m["lodash@4.17.21"] || !m["lodash@4.17.20"] {
+		t.Errorf("expected both lodash versions, got %v", pkgs)
+	}
+}
+
 func TestReadPackageLockJSONBadJSON(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(dir+"/package-lock.json", []byte("not json"), 0644)
@@ -89,6 +105,24 @@ func TestReadBunLockBadJSON(t *testing.T) {
 	os.WriteFile(dir+"/bun.lock", []byte("not json"), 0644)
 	if readBunLock(dir) != nil {
 		t.Error("expected nil for bad JSON")
+	}
+}
+
+func TestReadBunLockPreservesMultipleVersions(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/bun.lock", []byte(`{
+  "lockfileVersion": 0,
+  "packages": {
+    "lodash@4.17.21": ["lodash@4.17.21", {}],
+    "lodash@4.17.20": ["lodash@4.17.20", {}]
+  }
+}
+`), 0644)
+
+	pkgs := readBunLock(dir)
+	m := toSet(pkgs)
+	if !m["lodash@4.17.21"] || !m["lodash@4.17.20"] {
+		t.Errorf("expected both lodash versions, got %v", pkgs)
 	}
 }
 
@@ -167,6 +201,24 @@ packages:
 func TestReadPNPMLockMissing(t *testing.T) {
 	if readPNPMLock(t.TempDir()) != nil {
 		t.Error("expected nil for missing file")
+	}
+}
+
+func TestReadPNPMLockPreservesMultipleVersions(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/pnpm-lock.yaml", []byte(`lockfileVersion: '9.0'
+
+packages:
+  lodash@4.17.21:
+    resolution: {integrity: sha512-a}
+  lodash@4.17.20:
+    resolution: {integrity: sha512-b}
+`), 0644)
+
+	pkgs := readPNPMLock(dir)
+	m := toSet(pkgs)
+	if !m["lodash@4.17.21"] || !m["lodash@4.17.20"] {
+		t.Errorf("expected both lodash versions, got %v", pkgs)
 	}
 }
 
