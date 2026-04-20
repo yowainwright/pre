@@ -80,6 +80,17 @@ verify_checksum() {
   fi
 }
 
+checksum_for_artifact() {
+  checksums_file="$1"
+  artifact="$2"
+  checksum="$(awk -v artifact="$artifact" '$2 == artifact { print $1; exit }' "$checksums_file")"
+  if [ -z "$checksum" ]; then
+    echo "pre: checksum entry not found for ${artifact}" >&2
+    return 1
+  fi
+  printf "%s" "$checksum"
+}
+
 verify_cosign() {
   bundle="$1"
   file="$2"
@@ -124,26 +135,24 @@ main() {
   validate_os
   target="$(detect_arch)"
   version="$(resolve_version)"
+  artifact="pre-${target}"
   bin_url="$(build_url "$REPO" "$version" "$target")"
-  sum_url="${bin_url}.sha256"
   bundle_url="https://github.com/${REPO}/releases/download/v${version}/checksums.txt.bundle"
   checksums_url="https://github.com/${REPO}/releases/download/v${version}/checksums.txt"
 
   echo "pre: installing v${version} (${target}) to ${BIN_DIR}/pre"
 
   tmp_bin="$(mktemp)"
-  tmp_sum="$(mktemp)"
   tmp_bundle="$(mktemp)"
   tmp_checksums="$(mktemp)"
-  trap 'rm -f "$tmp_bin" "$tmp_sum" "$tmp_bundle" "$tmp_checksums"' EXIT
+  trap 'rm -f "$tmp_bin" "$tmp_bundle" "$tmp_checksums"' EXIT
 
   download_file "$bin_url" "$tmp_bin"
-  download_file "$sum_url" "$tmp_sum"
+  download_file "$checksums_url" "$tmp_checksums"
 
-  verify_checksum "$tmp_bin" "$(cat "$tmp_sum")"
+  verify_checksum "$tmp_bin" "$(checksum_for_artifact "$tmp_checksums" "$artifact")"
 
   download_file "$bundle_url" "$tmp_bundle" 2>/dev/null || true
-  download_file "$checksums_url" "$tmp_checksums" 2>/dev/null || true
 
   if [ -s "$tmp_bundle" ] && [ -s "$tmp_checksums" ]; then
     verify_cosign "$tmp_bundle" "$tmp_checksums"

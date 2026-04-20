@@ -16,6 +16,18 @@ func npmMgr() *manager.Manager {
 	return &manager.Manager{Name: "npm", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i"}}
 }
 
+func pipMgr() *manager.Manager {
+	return &manager.Manager{Name: "pip", Ecosystem: "PyPI", InstallCmds: []string{"install"}}
+}
+
+func goMgr() *manager.Manager {
+	return &manager.Manager{Name: "go", Ecosystem: "Go", InstallCmds: []string{"install"}}
+}
+
+func brewMgr() *manager.Manager {
+	return &manager.Manager{Name: "brew", Ecosystem: "Homebrew", InstallCmds: []string{"install"}}
+}
+
 func withExecFn(fn func(string, []string)) func() {
 	orig := ExecFn
 	ExecFn = fn
@@ -312,6 +324,17 @@ func TestCountUncached(t *testing.T) {
 	}
 }
 
+func TestCountUncachedTreatsFloatingVersionsAsUncached(t *testing.T) {
+	mgr := npmMgr()
+	c := make(cache.Cache)
+	cache.Set(c, cache.Key("npm", "react"), "18.0.0")
+
+	n := countUncached(mgr, []string{"react@latest"}, c)
+	if n != 1 {
+		t.Errorf("expected 1 uncached for floating version, got %d", n)
+	}
+}
+
 func TestInterceptQuietWhenClean(t *testing.T) {
 	execCalled := false
 	defer withExecFn(func(name string, args []string) { execCalled = true })()
@@ -357,6 +380,52 @@ func TestScanPackageResolvesVersion(t *testing.T) {
 	r := scanPackage(npmMgr(), "react", make(cache.Cache))
 	if r.version != "17.0.0" {
 		t.Errorf("expected resolved version 17.0.0, got %q", r.version)
+	}
+}
+
+func TestScanPackageResolvesLatestVersionTag(t *testing.T) {
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		if name != "react" || ver != "18.3.1" {
+			t.Errorf("expected resolved react@18.3.1, got %s@%s", name, ver)
+		}
+		return nil, nil
+	})()
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		if pkg != "react" {
+			t.Errorf("expected package react, got %q", pkg)
+		}
+		return "18.3.1", nil
+	})()
+
+	r := scanPackage(npmMgr(), "react@latest", make(cache.Cache))
+	if !r.updated {
+		t.Error("expected latest tag to trigger version resolution")
+	}
+	if r.version != "18.3.1" {
+		t.Errorf("expected resolved version 18.3.1, got %q", r.version)
+	}
+}
+
+func TestScanPackageResolvesHomebrewVersionedFormula(t *testing.T) {
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		if name != "openssl@3" || ver != "3.3.1" {
+			t.Errorf("expected resolved openssl@3 3.3.1, got %s@%s", name, ver)
+		}
+		return nil, nil
+	})()
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		if pkg != "openssl@3" {
+			t.Errorf("expected formula name openssl@3, got %q", pkg)
+		}
+		return "3.3.1", nil
+	})()
+
+	r := scanPackage(brewMgr(), "openssl@3", make(cache.Cache))
+	if !r.updated {
+		t.Error("expected versioned formula name to resolve via brew info")
+	}
+	if r.version != "3.3.1" {
+		t.Errorf("expected resolved version 3.3.1, got %q", r.version)
 	}
 }
 
@@ -471,7 +540,7 @@ func TestInterceptSpawnsSystemScan(t *testing.T) {
 // confirm / extractPackages / execReal tests
 
 func TestExtractPackagesStripsFlags(t *testing.T) {
-	result := extractPackages([]string{"--save-dev", "./local", "react", "--legacy-peer-deps", "lodash"})
+	result := extractPackages(npmMgr(), []string{"--save-dev", "./local", "react", "--legacy-peer-deps", "lodash"})
 	if len(result) != 2 {
 		t.Errorf("expected 2 packages, got %d: %v", len(result), result)
 	}
@@ -480,8 +549,29 @@ func TestExtractPackagesStripsFlags(t *testing.T) {
 	}
 }
 
+func TestExtractPackagesSkipsWorkspaceValue(t *testing.T) {
+	result := extractPackages(npmMgr(), []string{"react", "--workspace", "app"})
+	if len(result) != 1 || result[0] != "react" {
+		t.Errorf("expected only react, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsRequirementFile(t *testing.T) {
+	result := extractPackages(pipMgr(), []string{"-r", "requirements.txt", "requests"})
+	if len(result) != 1 || result[0] != "requests" {
+		t.Errorf("expected only requests, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsEditablePath(t *testing.T) {
+	result := extractPackages(pipMgr(), []string{"-e", ".", "requests"})
+	if len(result) != 1 || result[0] != "requests" {
+		t.Errorf("expected only requests, got %v", result)
+	}
+}
+
 func TestExtractPackagesEmpty(t *testing.T) {
-	result := extractPackages([]string{})
+	result := extractPackages(npmMgr(), []string{})
 	if len(result) != 0 {
 		t.Errorf("expected empty result, got %v", result)
 	}

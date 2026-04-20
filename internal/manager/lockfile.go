@@ -270,7 +270,7 @@ func readBrewfileLockJSON(dir string) []string {
 	result := make([]string, 0, len(lockfile.Entries.Brew))
 	for name, pkg := range lockfile.Entries.Brew {
 		if pkg.Version != "" {
-			result = append(result, name+"@"+pkg.Version)
+			result = append(result, name+brewLockVersionSeparator+pkg.Version)
 		} else {
 			result = append(result, name)
 		}

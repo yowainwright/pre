@@ -62,6 +62,16 @@ check "verify_checksum passes" "0" "$(exit_code verify_checksum "$tmp" "$good_su
 check "verify_checksum fails"  "1" "$(exit_code verify_checksum "$tmp" "$bad_sum")"
 rm -f "$tmp"
 
+# checksum_for_artifact
+tmp="$(mktemp)"
+cat > "$tmp" <<'EOF'
+abc123  pre-darwin-arm64
+def456  pre-linux-amd64
+EOF
+check "checksum_for_artifact finds entry" "def456" "$(checksum_for_artifact "$tmp" "pre-linux-amd64")"
+check "checksum_for_artifact missing entry" "1" "$(exit_code checksum_for_artifact "$tmp" "pre-linux-arm64")"
+rm -f "$tmp"
+
 # ensure_dir
 tmp_dir="$(mktemp -d)"
 rm -rf "$tmp_dir"

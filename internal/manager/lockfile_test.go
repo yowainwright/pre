@@ -331,7 +331,7 @@ func TestReadBrewfileLockJSON(t *testing.T) {
 		t.Fatalf("expected 2, got %d: %v", len(pkgs), pkgs)
 	}
 	m := toSet(pkgs)
-	if !m["git@2.43.0"] || !m["ripgrep@14.0.3"] {
+	if !m["git@@2.43.0"] || !m["ripgrep@@14.0.3"] {
 		t.Errorf("unexpected packages: %v", pkgs)
 	}
 }
@@ -360,8 +360,8 @@ func TestReadBrewfileLockJSONNoVersion(t *testing.T) {
 	if !m["git"] {
 		t.Errorf("expected git without version, got %v", pkgs)
 	}
-	if !m["ripgrep@14.0.3"] {
-		t.Errorf("expected ripgrep@14.0.3, got %v", pkgs)
+	if !m["ripgrep@@14.0.3"] {
+		t.Errorf("expected ripgrep@@14.0.3, got %v", pkgs)
 	}
 }
 
@@ -488,7 +488,7 @@ func TestReadLockfileHomebrew(t *testing.T) {
 	}`), 0644)
 	mgr := &Manager{Ecosystem: "Homebrew"}
 	pkgs := ReadLockfile(mgr, dir)
-	if len(pkgs) != 1 || pkgs[0] != "git@2.43.0" {
+	if len(pkgs) != 1 || pkgs[0] != "git@@2.43.0" {
 		t.Errorf("unexpected: %v", pkgs)
 	}
 }

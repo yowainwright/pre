@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -63,6 +65,14 @@ func Check(ecosystem, name, version string) ([]Vulnerability, error) {
 		return nil, fmt.Errorf("request: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return nil, fmt.Errorf("request: unexpected status %s: %s", resp.Status, msg)
+	}
 
 	var result response
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -125,5 +126,25 @@ func TestCheckInvalidJSON(t *testing.T) {
 	_, err := Check("npm", "react", "18.0.0")
 	if err == nil {
 		t.Error("expected error for invalid JSON response")
+	}
+}
+
+func TestCheckHTTPStatusError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprintln(w, `{"error":"upstream failed"}`)
+	}))
+	defer srv.Close()
+
+	origEndpoint := Endpoint
+	Endpoint = srv.URL
+	defer func() { Endpoint = origEndpoint }()
+
+	_, err := Check("npm", "react", "18.0.0")
+	if err == nil {
+		t.Fatal("expected error for non-200 response")
+	}
+	if got := err.Error(); !strings.Contains(got, "502") {
+		t.Errorf("expected status code in error, got %q", got)
 	}
 }

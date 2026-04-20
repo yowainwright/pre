@@ -156,6 +156,9 @@ func TestRunSystemScanWithVulns(t *testing.T) {
 	if savedStats.Crit != 1 {
 		t.Errorf("expected Crit=1, got %d", savedStats.Crit)
 	}
+	if savedStats.Total != 1 {
+		t.Errorf("expected Total=1, got %d", savedStats.Total)
+	}
 }
 
 func TestRunSystemScanSecurityError(t *testing.T) {
@@ -174,6 +177,9 @@ func TestRunSystemScanSecurityError(t *testing.T) {
 
 	if savedStats.Crit != 0 || savedStats.Warn != 0 {
 		t.Errorf("expected no vulns when check errors, Crit=%d Warn=%d", savedStats.Crit, savedStats.Warn)
+	}
+	if savedStats.Total != 1 {
+		t.Errorf("expected Total=1, got %d", savedStats.Total)
 	}
 }
 

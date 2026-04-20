@@ -25,6 +25,8 @@ func TestParseSpec(t *testing.T) {
 		{"PyPI", "requests!=1.5", "requests", ""},
 		{"PyPI", "requests~=1.0", "requests", ""},
 		{"Homebrew", "nginx", "nginx", ""},
+		{"Homebrew", "openssl@3", "openssl@3", ""},
+		{"Homebrew", "git@@2.43.0", "git", "2.43.0"},
 	}
 
 	for _, tc := range tests {

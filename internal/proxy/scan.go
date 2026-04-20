@@ -70,12 +70,13 @@ func RunBackgroundScan(mgr *manager.Manager) {
 
 func RunSystemScan() {
 	c := loadCacheFn()
-	var crit, warn int
+	var crit, warn, total int
 	for key, entry := range c {
 		ecosystem, name := cache.ParseKey(key)
 		if ecosystem == "" || name == "" {
 			continue
 		}
+		total++
 		mgr := manager.Get(strings.ToLower(ecosystem))
 		if mgr == nil {
 			mgr = &manager.Manager{Name: ecosystem, Ecosystem: ecosystem}
@@ -95,7 +96,7 @@ func RunSystemScan() {
 		}
 	}
 	saveCacheFn(c)
-	saveSystemStatsFn(SystemStats{Crit: crit, Warn: warn, Total: len(c)})
+	saveSystemStatsFn(SystemStats{Crit: crit, Warn: warn, Total: total})
 }
 
 func scanAll(mgr *manager.Manager, packages []string, c cache.Cache) []scanResult {
@@ -110,7 +111,7 @@ func scanAll(mgr *manager.Manager, packages []string, c cache.Cache) []scanResul
 
 	for i, pkg := range packages {
 		name, version := manager.ParseSpec(mgr.Ecosystem, pkg)
-		if version != "" {
+		if version != "" && !shouldResolveVersion(mgr.Ecosystem, version) {
 			label := name + "@" + version
 			if cache.Hit(c, cache.Key(mgr.Ecosystem, name), version) {
 				results[i] = scanResult{name: name, version: version, label: label, cached: true}
@@ -132,7 +133,7 @@ func scanAll(mgr *manager.Manager, packages []string, c cache.Cache) []scanResul
 			defer func() { <-sem }()
 
 			version := w.version
-			resolved := version == ""
+			resolved := shouldResolveVersion(mgr.Ecosystem, version)
 			if resolved {
 				var err error
 				version, err = resolveVersionFn(mgr, w.name)
@@ -172,7 +173,7 @@ func scanAll(mgr *manager.Manager, packages []string, c cache.Cache) []scanResul
 func scanPackage(mgr *manager.Manager, spec string, c cache.Cache) scanResult {
 	name, version := manager.ParseSpec(mgr.Ecosystem, spec)
 
-	resolved := version == ""
+	resolved := shouldResolveVersion(mgr.Ecosystem, version)
 	if resolved {
 		var err error
 		version, err = resolveVersionFn(mgr, name)
