@@ -39,6 +39,7 @@ integration:
 script-test:
 	sh tests/scripts/install_test.sh
 	sh tests/scripts/setup_test.sh
+	sh tests/scripts/tag_test.sh
 
 docker-build:
 	docker build -f opts/Dockerfile -t pre-demo .
