@@ -80,16 +80,16 @@ func handleConfig(args []string, cfg *config.Config, stdout, stderr io.Writer) {
 	if args[0] == "set" && len(args) >= 3 {
 		key, val := args[1], strings.Join(args[2:], " ")
 		switch key {
-		case "endpoint":
+		case "endpoint", "api.endpoint":
 			cfg.API.Endpoint = val
-		case "ttl":
+		case "ttl", "cache.ttl":
 			cfg.Cache.TTL = val
 		case "systemScan":
 			cfg.SystemScan = val == "true"
 		case "systemTTL":
 			cfg.SystemTTL = val
 		default:
-			fmt.Fprintf(stderr, "pre config: unknown key %q (endpoint, ttl, systemScan, systemTTL)\n", key)
+			fmt.Fprintf(stderr, "pre config: unknown key %q (endpoint, api.endpoint, ttl, cache.ttl, systemScan, systemTTL)\n", key)
 			return
 		}
 		if err := config.Save(cfg); err != nil {

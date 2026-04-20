@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -63,6 +65,10 @@ func Check(ecosystem, name, version string) ([]Vulnerability, error) {
 		return nil, fmt.Errorf("request: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("request: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
 
 	var result response
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

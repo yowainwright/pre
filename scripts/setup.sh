@@ -42,20 +42,41 @@ hook_installed() {
 
 hook_path() {
   root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
-  echo "${root}/.git/hooks/pre-commit"
+  name="${2:-pre-commit}"
+  echo "${root}/.git/hooks/${name}"
+}
+
+pre_commit_content() {
+  cat <<'HOOK'
+#!/usr/bin/env sh
+set -e
+make fmt-check
+make lint
+go build ./...
+go test ./...
+HOOK
+}
+
+post_merge_content() {
+  cat <<'HOOK'
+#!/usr/bin/env sh
+set -e
+sh scripts/setup.sh
+HOOK
+}
+
+hook_content() {
+  name="${1:-pre-commit}"
+  case "$name" in
+    post-merge) post_merge_content ;;
+    *)          pre_commit_content ;;
+  esac
 }
 
 install_hook() {
   hook="$1"
-  cat > "$hook" <<'HOOK'
-#!/usr/bin/env sh
-set -e
-if gofmt -l . | grep -q .; then
-  echo "pre-commit: formatting issues, run 'make fmt'"
-  exit 1
-fi
-go vet ./...
-HOOK
+  name="${2:-pre-commit}"
+  hook_content "$name" > "$hook"
   chmod +x "$hook"
 }
 
@@ -100,13 +121,16 @@ check_secrets() {
 }
 
 check_hooks() {
-  hook="${1:-$(hook_path)}"
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
   echo "--- git hooks"
-  if hook_installed "$hook"; then
-    ok "pre-commit hook installed"
-  else
-    install_hook "$hook" && ok "pre-commit hook installed" || fail "pre-commit hook" "could not write $hook"
-  fi
+  for name in pre-commit post-merge; do
+    hook="$(hook_path "$root" "$name")"
+    if hook_installed "$hook"; then
+      ok "$name hook installed"
+    else
+      install_hook "$hook" "$name" && ok "$name hook installed" || fail "$name hook" "could not write $hook"
+    fi
+  done
 }
 
 main() {

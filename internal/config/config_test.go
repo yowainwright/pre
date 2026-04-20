@@ -149,6 +149,20 @@ func TestSaveConfigMkdirError(t *testing.T) {
 	}
 }
 
+func TestSaveMarshalError(t *testing.T) {
+	orig := marshalIndentFn
+	marshalIndentFn = func(any, string, string) ([]byte, error) {
+		return nil, errors.New("marshal fail")
+	}
+	defer func() { marshalIndentFn = orig }()
+
+	defer withConfigDir(t.TempDir())()
+	err := Save(defaults())
+	if err == nil || err.Error() != "marshal fail" {
+		t.Errorf("expected marshal error, got %v", err)
+	}
+}
+
 func TestSaveCreatesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	defer withConfigDir(dir)()

@@ -42,16 +42,16 @@ func readPackageJSON(dir string) []string {
 	}
 	seen := make(map[string]bool, len(pkg.Dependencies)+len(pkg.DevDependencies))
 	names := make([]string, 0, len(pkg.Dependencies)+len(pkg.DevDependencies))
-	for name := range pkg.Dependencies {
+	for name, spec := range pkg.Dependencies {
 		if !seen[name] {
 			seen[name] = true
-			names = append(names, name)
+			names = append(names, npmDependencySpec(name, spec))
 		}
 	}
-	for name := range pkg.DevDependencies {
+	for name, spec := range pkg.DevDependencies {
 		if !seen[name] {
 			seen[name] = true
-			names = append(names, name)
+			names = append(names, npmDependencySpec(name, spec))
 		}
 	}
 	return names
@@ -131,4 +131,24 @@ func readBrewfile(dir string) []string {
 		}
 	}
 	return names
+}
+
+func npmDependencySpec(name, spec string) string {
+	spec = strings.TrimSpace(spec)
+	if spec == "" || !supportedNPMRegistrySpec(spec) {
+		return name
+	}
+	return name + "@" + spec
+}
+
+func supportedNPMRegistrySpec(spec string) bool {
+	for _, prefix := range []string{
+		"file:", "git+", "github:", "workspace:", "link:", "npm:",
+		"http://", "https://",
+	} {
+		if strings.HasPrefix(spec, prefix) {
+			return false
+		}
+	}
+	return !strings.HasPrefix(spec, "./") && !strings.HasPrefix(spec, "../") && !strings.HasPrefix(spec, "/")
 }

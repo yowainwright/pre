@@ -92,6 +92,19 @@ func TestNpmVersionError(t *testing.T) {
 	}
 }
 
+func TestNpmVersionEmpty(t *testing.T) {
+	orig := runCmd
+	runCmd = func(name string, args ...string) ([]byte, error) {
+		return []byte("\n"), nil
+	}
+	defer func() { runCmd = orig }()
+
+	_, err := npmVersion("react")
+	if err == nil {
+		t.Error("expected error for empty version")
+	}
+}
+
 func TestGoVersionSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, `{"Version":"v1.2.3"}`)
@@ -138,6 +151,38 @@ func TestGoVersionInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestGoVersionStatusError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	defer srv.Close()
+
+	origBase := goProxyBase
+	goProxyBase = srv.URL
+	defer func() { goProxyBase = origBase }()
+
+	_, err := goVersion("github.com/foo/bar")
+	if err == nil {
+		t.Error("expected error for non-2xx status")
+	}
+}
+
+func TestGoVersionEmptyVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, `{}`)
+	}))
+	defer srv.Close()
+
+	origBase := goProxyBase
+	goProxyBase = srv.URL
+	defer func() { goProxyBase = origBase }()
+
+	_, err := goVersion("github.com/foo/bar")
+	if err == nil {
+		t.Error("expected error for empty version")
+	}
+}
+
 func TestPypiVersionSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, `{"info":{"version":"2.28.0"}}`)
@@ -181,6 +226,38 @@ func TestPypiVersionInvalidJSON(t *testing.T) {
 	_, err := pypiVersion("requests")
 	if err == nil {
 		t.Error("expected error for invalid JSON")
+	}
+}
+
+func TestPypiVersionStatusError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	origBase := pypiBase
+	pypiBase = srv.URL
+	defer func() { pypiBase = origBase }()
+
+	_, err := pypiVersion("requests")
+	if err == nil {
+		t.Error("expected error for non-2xx status")
+	}
+}
+
+func TestPypiVersionEmptyVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, `{"info":{}}`)
+	}))
+	defer srv.Close()
+
+	origBase := pypiBase
+	pypiBase = srv.URL
+	defer func() { pypiBase = origBase }()
+
+	_, err := pypiVersion("requests")
+	if err == nil {
+		t.Error("expected error for empty version")
 	}
 }
 
