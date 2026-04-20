@@ -529,6 +529,30 @@ func TestInterceptSpawnsSystemScan(t *testing.T) {
 	}
 }
 
+func TestInterceptUpdateCacheCallback(t *testing.T) {
+	var updated cache.Cache
+	defer withExecFn(noopExec)()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		return "18.0.0", nil
+	})()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(func(fn func(cache.Cache)) {
+		c := make(cache.Cache)
+		fn(c)
+		updated = c
+	})()
+	defer withSpawnBackgroundScan(func(string) {})()
+
+	Intercept(npmMgr(), []string{"install", "react"})
+
+	if !cache.Hit(updated, cache.Key("npm", "react", "18.0.0")) {
+		t.Error("expected update callback to populate cache with clean package")
+	}
+}
+
 func TestInterceptSpawnsBackgroundScan(t *testing.T) {
 	backgroundMgr := ""
 

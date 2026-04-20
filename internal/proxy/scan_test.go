@@ -282,6 +282,90 @@ func TestScanPackageSecurityError(t *testing.T) {
 	}
 }
 
+func TestIsExactVersionNonNpm(t *testing.T) {
+	if !isExactVersion("pypi", "1.0.0") {
+		t.Error("expected true for non-npm ecosystem with non-empty version")
+	}
+}
+
+func TestIsExactVersionEmpty(t *testing.T) {
+	if isExactVersion("npm", "") {
+		t.Error("expected false for empty version")
+	}
+}
+
+func TestCanResolveConstraintNonNpm(t *testing.T) {
+	if canResolveConstraint("pypi", "^1.0.0") {
+		t.Error("expected false for non-npm ecosystem")
+	}
+}
+
+func TestCanResolveConstraintEmpty(t *testing.T) {
+	if canResolveConstraint("npm", "") {
+		t.Error("expected false for empty version")
+	}
+}
+
+func TestCanResolveConstraintSpecialPrefixes(t *testing.T) {
+	prefixes := []string{
+		"file:/path", "git+https://github.com/foo/bar", "github:foo/bar",
+		"workspace:*", "link:/path", "npm:pkg",
+		"http://example.com/pkg.tgz", "https://example.com/pkg.tgz",
+	}
+	for _, v := range prefixes {
+		if canResolveConstraint("npm", v) {
+			t.Errorf("expected false for prefix %q", v)
+		}
+	}
+}
+
+func TestCanResolveConstraintPathPrefixes(t *testing.T) {
+	for _, v := range []string{"./local", "../sibling", "/absolute"} {
+		if canResolveConstraint("npm", v) {
+			t.Errorf("expected false for path %q", v)
+		}
+	}
+}
+
+func TestCanResolveConstraintSemverRange(t *testing.T) {
+	if !canResolveConstraint("npm", "^1.0.0") {
+		t.Error("expected true for semver range ^1.0.0")
+	}
+	if !canResolveConstraint("npm", "~1.0.0") {
+		t.Error("expected true for semver range ~1.0.0")
+	}
+}
+
+func TestResolveScanVersionEmptyNoAllow(t *testing.T) {
+	_, label, updated, exact, err := resolveScanVersion(npmMgr(), "react", "", false)
+	if err != nil || updated || exact {
+		t.Errorf("expected skip: label=%q updated=%v exact=%v err=%v", label, updated, exact, err)
+	}
+}
+
+func TestResolveScanVersionConstraintEmptyResolved(t *testing.T) {
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		return "", nil
+	})()
+	_, _, updated, exact, err := resolveScanVersion(npmMgr(), "react", "^18.0.0", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !updated {
+		t.Error("expected updated=true when constraint resolves to empty")
+	}
+	if exact {
+		t.Error("expected exact=false when resolved is empty")
+	}
+}
+
+func TestResolveScanVersionDefault(t *testing.T) {
+	_, _, updated, exact, err := resolveScanVersion(npmMgr(), "react", "file:/local/pkg", false)
+	if err != nil || updated || exact {
+		t.Errorf("expected default skip: updated=%v exact=%v err=%v", updated, exact, err)
+	}
+}
+
 func TestScanAllPostResolveCacheHit(t *testing.T) {
 	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
 		return "18.0.0", nil

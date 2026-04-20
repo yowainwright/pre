@@ -177,7 +177,7 @@ func TestReadManifestFallsBackToManifest(t *testing.T) {
 	}
 }
 
-func TestReadPackageJSONSkipsLocalSpecs(t *testing.T) {
+func TestReadPackageJSONFallsBackForLocalSpecs(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(dir+"/package.json", []byte(`{
 		"dependencies": {

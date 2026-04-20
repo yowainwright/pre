@@ -261,6 +261,68 @@ func TestLoadBadJSON(t *testing.T) {
 	}
 }
 
+func TestUpdateNilFn(t *testing.T) {
+	defer withCacheDir(t.TempDir())()
+	Update(nil)
+}
+
+func TestUpdateAcquireLockError(t *testing.T) {
+	dir := t.TempDir()
+	defer withCacheDir(dir)()
+	preDir := filepath.Join(dir, "pre")
+	if err := os.MkdirAll(preDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(preDir, "versions.lock"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	Update(func(c Cache) { Set(c, Key("npm", "react", "18.0.0")) })
+}
+
+func TestSaveAcquireLockError(t *testing.T) {
+	dir := t.TempDir()
+	defer withCacheDir(dir)()
+	preDir := filepath.Join(dir, "pre")
+	if err := os.MkdirAll(preDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(preDir, "versions.lock"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	c := make(Cache)
+	Set(c, Key("npm", "react", "18.0.0"))
+	Save(c)
+}
+
+func TestAcquireLockNonErrExist(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "versions.lock")
+	if err := os.Mkdir(lockPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := acquireLock(lockPath)
+	if err == nil {
+		t.Error("expected error when lock path is a directory")
+	}
+}
+
+func TestAcquireLockStaleLock(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "versions.lock")
+	if err := os.WriteFile(lockPath, []byte("stale"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-2 * cacheLockStaleAfter)
+	if err := os.Chtimes(lockPath, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	release, err := acquireLock(lockPath)
+	if err != nil {
+		t.Fatalf("expected stale lock to be evicted, got: %v", err)
+	}
+	release()
+}
+
 func TestLoadMigratesLegacyKeys(t *testing.T) {
 	dir := t.TempDir()
 	defer withCacheDir(dir)()
