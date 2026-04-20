@@ -261,6 +261,13 @@ func TestLoadBadJSON(t *testing.T) {
 	}
 }
 
+func TestUpdateCacheDirError(t *testing.T) {
+	orig := cacheDirFn
+	cacheDirFn = func() (string, error) { return "", errors.New("no dir") }
+	defer func() { cacheDirFn = orig }()
+	Update(func(c Cache) { Set(c, Key("npm", "react", "18.0.0")) })
+}
+
 func TestUpdateNilFn(t *testing.T) {
 	defer withCacheDir(t.TempDir())()
 	Update(nil)
@@ -304,6 +311,26 @@ func TestAcquireLockNonErrExist(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when lock path is a directory")
 	}
+}
+
+func TestAcquireLockDeadlineExceeded(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "versions.lock")
+
+	orig := cacheLockTimeout
+	cacheLockTimeout = 20 * time.Millisecond
+	defer func() { cacheLockTimeout = orig }()
+
+	release, err := acquireLock(lockPath)
+	if err != nil {
+		t.Fatalf("first lock unexpected error: %v", err)
+	}
+
+	_, err = acquireLock(lockPath)
+	if err == nil {
+		t.Error("expected deadline error when lock is held")
+	}
+	release()
 }
 
 func TestAcquireLockStaleLock(t *testing.T) {

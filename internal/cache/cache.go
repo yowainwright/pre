@@ -13,10 +13,11 @@ import (
 
 const defaultTTL = 24 * time.Hour
 
-const (
-	cacheLockStaleAfter = 30 * time.Second
-	cacheLockTimeout    = 2 * time.Second
-	cacheLockRetry      = 10 * time.Millisecond
+const cacheLockStaleAfter = 30 * time.Second
+
+var (
+	cacheLockTimeout = 2 * time.Second
+	cacheLockRetry   = 10 * time.Millisecond
 )
 
 var configuredTTL = defaultTTL

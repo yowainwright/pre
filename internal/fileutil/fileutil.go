@@ -5,10 +5,20 @@ import (
 	"path/filepath"
 )
 
-// AtomicWriteFile writes data to a temp file in the target directory and then
-// renames it into place so readers never see partial contents.
+type writableFile interface {
+	Write([]byte) (int, error)
+	Chmod(os.FileMode) error
+	Sync() error
+	Close() error
+	Name() string
+}
+
+var createTempFn = func(dir, pattern string) (writableFile, error) {
+	return os.CreateTemp(dir, pattern)
+}
+
 func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	tmp, err := createTempFn(filepath.Dir(path), filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}

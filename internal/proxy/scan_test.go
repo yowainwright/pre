@@ -471,6 +471,37 @@ func TestRunSystemScanWithRelease(t *testing.T) {
 	}
 }
 
+func TestRunSystemScanLegacyKeyMigrated(t *testing.T) {
+	var savedStats SystemStats
+	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
+	defer withSaveCache(noopSave)()
+	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+
+	c := make(cache.Cache)
+	c["npm/lodash"] = cache.Entry{Version: "4.17.21"}
+	defer withLoadCache(func() cache.Cache { return c })()
+
+	var updated cache.Cache
+	defer withUpdateCache(func(fn func(cache.Cache)) {
+		cur := make(cache.Cache)
+		fn(cur)
+		updated = cur
+	})()
+
+	RunSystemScan()
+
+	if savedStats.Total != 1 {
+		t.Errorf("expected Total=1, got %d", savedStats.Total)
+	}
+	canonicalKey := cache.Key("npm", "lodash", "4.17.21")
+	if !cache.Hit(updated, canonicalKey) {
+		t.Errorf("expected canonical key %q in updated cache", canonicalKey)
+	}
+}
+
 func TestRunSystemScanVersionFromEntry(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
