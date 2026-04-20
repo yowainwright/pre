@@ -2,6 +2,7 @@ package cache
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,12 @@ import (
 )
 
 const defaultTTL = 24 * time.Hour
+
+const (
+	cacheLockStaleAfter = 30 * time.Second
+	cacheLockTimeout    = 2 * time.Second
+	cacheLockRetry      = 10 * time.Millisecond
+)
 
 var configuredTTL = defaultTTL
 
@@ -45,15 +52,7 @@ func Load() Cache {
 	if err != nil {
 		return make(Cache)
 	}
-	data, err := os.ReadFile(p)
-	if err != nil {
-		return make(Cache)
-	}
-	var c Cache
-	if err := json.Unmarshal(data, &c); err != nil {
-		return make(Cache)
-	}
-	return migrate(c)
+	return loadFromPath(p)
 }
 
 func Save(c Cache) {
@@ -64,8 +63,36 @@ func Save(c Cache) {
 	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
 		return
 	}
-	data, _ := json.Marshal(c)
-	_ = fileutil.AtomicWriteFile(p, data, 0644)
+	release, err := acquireLock(filepath.Join(filepath.Dir(p), "versions.lock"))
+	if err != nil {
+		return
+	}
+	defer release()
+	writeCache(p, c)
+}
+
+func Update(fn func(Cache)) {
+	if fn == nil {
+		return
+	}
+
+	p, err := cacheFile()
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		return
+	}
+
+	release, err := acquireLock(filepath.Join(filepath.Dir(p), "versions.lock"))
+	if err != nil {
+		return
+	}
+	defer release()
+
+	c := loadFromPath(p)
+	fn(c)
+	writeCache(p, c)
 }
 
 func TTL() time.Duration {
@@ -131,4 +158,45 @@ func migrate(c Cache) Cache {
 		}
 	}
 	return migrated
+}
+
+func loadFromPath(path string) Cache {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return make(Cache)
+	}
+	var c Cache
+	if err := json.Unmarshal(data, &c); err != nil {
+		return make(Cache)
+	}
+	return migrate(c)
+}
+
+func writeCache(path string, c Cache) {
+	data, _ := json.Marshal(migrate(c))
+	_ = fileutil.AtomicWriteFile(path, data, 0644)
+}
+
+func acquireLock(path string) (func(), error) {
+	deadline := time.Now().Add(cacheLockTimeout)
+	for {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		if err == nil {
+			_, _ = file.WriteString(time.Now().Format(time.RFC3339Nano))
+			_ = file.Close()
+			return func() { _ = os.Remove(path) }, nil
+		}
+
+		if !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
+		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > cacheLockStaleAfter {
+			_ = os.Remove(path)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return nil, err
+		}
+		time.Sleep(cacheLockRetry)
+	}
 }

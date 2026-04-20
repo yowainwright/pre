@@ -46,10 +46,28 @@ func withSaveCache(fn func(cache.Cache)) func() {
 	return func() { saveCacheFn = orig }
 }
 
+func withUpdateCache(fn func(func(cache.Cache))) func() {
+	orig := updateCacheFn
+	updateCacheFn = fn
+	return func() { updateCacheFn = orig }
+}
+
 func withReadManifest(fn func(*manager.Manager) []string) func() {
 	orig := readManifestFn
 	readManifestFn = fn
 	return func() { readManifestFn = orig }
+}
+
+func withSpawnBackgroundScan(fn func(string)) func() {
+	orig := spawnBackgroundScanFn
+	spawnBackgroundScanFn = fn
+	return func() { spawnBackgroundScanFn = orig }
+}
+
+func withSpawnSystemScan(fn func()) func() {
+	orig := spawnSystemScanFn
+	spawnSystemScanFn = fn
+	return func() { spawnSystemScanFn = orig }
 }
 
 func withStdinInput(input string) func() {
@@ -58,8 +76,9 @@ func withStdinInput(input string) func() {
 	return func() { stdinReader = orig }
 }
 
-func emptyCache() cache.Cache { return make(cache.Cache) }
-func noopSave(cache.Cache)    {}
+func emptyCache() cache.Cache      { return make(cache.Cache) }
+func noopSave(cache.Cache)         {}
+func noopUpdate(func(cache.Cache)) {}
 
 // Intercept flow tests
 
@@ -93,7 +112,8 @@ func TestInterceptInstallManifestFallback(t *testing.T) {
 		return "1.0.0", nil
 	})()
 	defer withLoadCache(emptyCache)()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
 	defer withReadManifest(func(mgr *manager.Manager) []string {
 		return []string{"lodash", "react"}
 	})()
@@ -134,7 +154,8 @@ func TestInterceptInstallCleanPackage(t *testing.T) {
 		return "18.0.0", nil
 	})()
 	defer withLoadCache(emptyCache)()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
 	Intercept(npmMgr(), []string{"install", "react@18.0.0"})
 	if !execCalled {
 		t.Error("expected ExecFn to be called for clean package")
@@ -151,7 +172,8 @@ func TestInterceptInstallVersionResolutionFailure(t *testing.T) {
 		return "", errors.New("resolution failed")
 	})()
 	defer withLoadCache(emptyCache)()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
 	Intercept(npmMgr(), []string{"install", "react"})
 	if !execCalled {
 		t.Error("expected ExecFn to be called even when version resolution fails")
@@ -168,7 +190,8 @@ func TestInterceptInstallSecurityCheckFailure(t *testing.T) {
 		return "1.0.0", nil
 	})()
 	defer withLoadCache(emptyCache)()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
 	Intercept(npmMgr(), []string{"install", "lodash"})
 	if !execCalled {
 		t.Error("expected ExecFn to be called when security check fails (don't block)")
@@ -187,7 +210,8 @@ func TestInterceptInstallVulnsUserYes(t *testing.T) {
 				return "1.0.0", nil
 			})()
 			defer withLoadCache(emptyCache)()
-			defer withSaveCache(noopSave)()
+			defer withUpdateCache(noopUpdate)()
+			defer withSpawnBackgroundScan(func(string) {})()
 			defer withStdinInput(answer + "\n")()
 
 			Intercept(npmMgr(), []string{"install", "lodash"})
@@ -208,7 +232,7 @@ func TestInterceptInstallVulnsUserNo(t *testing.T) {
 		return "1.0.0", nil
 	})()
 	defer withLoadCache(emptyCache)()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
 
 	origStdin := stdinReader
 	stdinReader = strings.NewReader("N\n")
@@ -236,7 +260,8 @@ func TestInterceptInstallCacheHit(t *testing.T) {
 		securityCalled = true
 		return nil, nil
 	})()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
 
 	c := make(cache.Cache)
 	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
@@ -253,7 +278,8 @@ func TestInterceptInstallCacheHit(t *testing.T) {
 func TestInterceptSilentWhenAllCached(t *testing.T) {
 	execCalled := false
 	defer withExecFn(func(name string, args []string) { execCalled = true })()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
 
 	c := make(cache.Cache)
 	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
@@ -322,11 +348,40 @@ func TestInterceptQuietWhenClean(t *testing.T) {
 		return "18.0.0", nil
 	})()
 	defer withLoadCache(emptyCache)()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
 
 	Intercept(npmMgr(), []string{"install", "react"})
 	if !execCalled {
 		t.Error("expected ExecFn called after quiet clean scan")
+	}
+}
+
+func TestInterceptManifestFallbackSkipsLatestGuess(t *testing.T) {
+	resolveCalled := false
+	checkedVersion := "unset"
+
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		checkedVersion = ver
+		return nil, nil
+	})()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		resolveCalled = true
+		return "18.0.0", nil
+	})()
+	defer withReadManifest(func(*manager.Manager) []string { return []string{"react"} })()
+
+	Intercept(npmMgr(), []string{"install"})
+
+	if resolveCalled {
+		t.Error("expected manifest fallback without an exact version to skip latest-version resolution")
+	}
+	if checkedVersion != "" {
+		t.Errorf("expected package-level check without a guessed version, got %q", checkedVersion)
 	}
 }
 
@@ -454,9 +509,12 @@ func TestInterceptSpawnsSystemScan(t *testing.T) {
 	systemScanEnabled = true
 	defer func() { systemScanEnabled = origEnabled }()
 
+	systemSpawned := false
 	defer withExecFn(noopExec)()
 	defer withLoadCache(emptyCache)()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+	defer withSpawnSystemScan(func() { systemSpawned = true })()
 	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
 		return nil, nil
 	})()
@@ -466,6 +524,31 @@ func TestInterceptSpawnsSystemScan(t *testing.T) {
 	defer withReadManifest(func(*manager.Manager) []string { return []string{"react"} })()
 
 	Intercept(npmMgr(), []string{"install"})
+	if !systemSpawned {
+		t.Error("expected system scan to be spawned")
+	}
+}
+
+func TestInterceptSpawnsBackgroundScan(t *testing.T) {
+	backgroundMgr := ""
+
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(name string) { backgroundMgr = name })()
+	defer withSpawnSystemScan(func() {})()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		return "18.0.0", nil
+	})()
+
+	Intercept(npmMgr(), []string{"install", "react"})
+
+	if backgroundMgr != "npm" {
+		t.Errorf("expected background scan for npm, got %q", backgroundMgr)
+	}
 }
 
 // confirm / extractPackages / execReal tests

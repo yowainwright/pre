@@ -165,6 +165,41 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestUpdateAddsToExistingCache(t *testing.T) {
+	defer withCacheDir(t.TempDir())()
+
+	c := make(Cache)
+	Set(c, Key("npm", "react", "18.0.0"))
+	Save(c)
+
+	Update(func(current Cache) {
+		Set(current, Key("npm", "lodash", "4.17.21"))
+	})
+
+	loaded := Load()
+	if !Hit(loaded, Key("npm", "react", "18.0.0")) || !Hit(loaded, Key("npm", "lodash", "4.17.21")) {
+		t.Errorf("expected update to preserve old entries and add new ones, got %v", loaded)
+	}
+}
+
+func TestUpdateDeletesEntries(t *testing.T) {
+	defer withCacheDir(t.TempDir())()
+
+	c := make(Cache)
+	key := Key("npm", "react", "18.0.0")
+	Set(c, key)
+	Save(c)
+
+	Update(func(current Cache) {
+		delete(current, key)
+	})
+
+	loaded := Load()
+	if Hit(loaded, key) {
+		t.Error("expected deleted entry to stay removed after update")
+	}
+}
+
 func TestSaveBadDir(t *testing.T) {
 	defer withCacheDir(filepath.Join(t.TempDir(), "nonexistent-parent"))()
 	c := make(Cache)

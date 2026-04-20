@@ -73,7 +73,7 @@ func TestRunBackgroundScan(t *testing.T) {
 	var savedStats SystemStats
 	savedCache := make(cache.Cache)
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
-	defer withSaveCache(func(c cache.Cache) { savedCache = c })()
+	defer withUpdateCache(func(apply func(cache.Cache)) { apply(savedCache) })()
 	defer withLoadCache(emptyCache)()
 	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
 		return "4.17.21", nil
@@ -137,7 +137,7 @@ func TestRunBackgroundScanWarn(t *testing.T) {
 func TestRunSystemScan(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
 	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
 		return nil, nil
@@ -157,7 +157,7 @@ func TestRunSystemScan(t *testing.T) {
 func TestRunSystemScanWithVulns(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
 	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
 		return []security.Vulnerability{{ID: "CVE-1234", Severity: "CRITICAL"}}, nil
@@ -177,7 +177,7 @@ func TestRunSystemScanWithVulns(t *testing.T) {
 func TestRunSystemScanSecurityError(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
 	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
 		return nil, errors.New("check failed")
@@ -197,7 +197,7 @@ func TestRunSystemScanSecurityError(t *testing.T) {
 func TestRunSystemScanWarn(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
 	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
 		return []security.Vulnerability{{ID: "CVE-1234", Severity: "MEDIUM"}}, nil
@@ -214,10 +214,30 @@ func TestRunSystemScanWarn(t *testing.T) {
 	}
 }
 
+func TestRunSystemScanRefreshesCleanEntries(t *testing.T) {
+	defer withSaveSystemStats(func(SystemStats) {})()
+	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+
+	c := make(cache.Cache)
+	key := cache.Key("npm", "lodash", "4.17.21")
+	c[key] = cache.Entry{Version: "4.17.21", CheckedAt: time.Now().Add(-48 * time.Hour)}
+	defer withLoadCache(func() cache.Cache { return c })()
+	defer withUpdateCache(func(apply func(cache.Cache)) { apply(c) })()
+
+	RunSystemScan()
+
+	if !cache.Hit(c, key) {
+		t.Error("expected clean system scan to refresh cache TTL")
+	}
+}
+
 func TestRunSystemScanSkipsBadKey(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
 	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 
 	c := make(cache.Cache)
@@ -234,7 +254,7 @@ func TestRunSystemScanSkipsBadKey(t *testing.T) {
 func TestRunSystemScanNilManager(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
 	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
 		return nil, nil
@@ -283,6 +303,62 @@ func TestScanAllPostResolveCacheHit(t *testing.T) {
 	}
 }
 
+func TestScanAllResolvesNPMSemverConstraint(t *testing.T) {
+	resolveArg := ""
+	defer withResolveVersion(func(_ *manager.Manager, pkg string) (string, error) {
+		resolveArg = pkg
+		return "18.2.0", nil
+	})()
+	defer withSecurityCheck(func(_, _, ver string) ([]security.Vulnerability, error) {
+		if ver != "18.2.0" {
+			t.Errorf("expected resolved npm version 18.2.0, got %q", ver)
+		}
+		return nil, nil
+	})()
+
+	results := scanAllWithPolicy(npmMgr(), []string{"react@^18.0.0"}, make(cache.Cache), false)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if resolveArg != "react@^18.0.0" {
+		t.Errorf("expected constraint-aware resolution, got %q", resolveArg)
+	}
+	if results[0].version != "18.2.0" || !results[0].cacheable {
+		t.Errorf("expected cacheable resolved result, got %+v", results[0])
+	}
+}
+
+func TestScanPackageWithoutVersionDoesNotResolveWhenDisabled(t *testing.T) {
+	resolveCalled := false
+	checkedVersion := "unset"
+
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		resolveCalled = true
+		return "18.0.0", nil
+	})()
+	defer withSecurityCheck(func(_, _, ver string) ([]security.Vulnerability, error) {
+		checkedVersion = ver
+		return nil, nil
+	})()
+
+	c := make(cache.Cache)
+	r := scanPackageWithPolicy(npmMgr(), "react", c, false)
+
+	if resolveCalled {
+		t.Error("expected disabled missing-version resolution")
+	}
+	if checkedVersion != "" {
+		t.Errorf("expected generic package check without a guessed version, got %q", checkedVersion)
+	}
+	if r.version != "" || r.cacheable {
+		t.Errorf("expected non-cacheable generic result, got %+v", r)
+	}
+	if len(c) != 0 {
+		t.Errorf("expected cache to remain empty, got %v", c)
+	}
+}
+
 func TestRunSystemScanSkipsWhenLocked(t *testing.T) {
 	called := false
 	defer withSystemScanLock(func() (func(), bool) { return nil, false })()
@@ -298,7 +374,7 @@ func TestRunSystemScanSkipsWhenLocked(t *testing.T) {
 func TestRunSystemScanWithRelease(t *testing.T) {
 	released := false
 	defer withSaveSystemStats(func(SystemStats) {})()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
 	defer withSystemScanLock(func() (func(), bool) {
 		return func() { released = true }, true
 	})()
@@ -314,7 +390,7 @@ func TestRunSystemScanWithRelease(t *testing.T) {
 func TestRunSystemScanVersionFromEntry(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
 	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
 		return nil, nil

@@ -22,6 +22,7 @@ var (
 	resolveVersionFn           = manager.ResolveVersion
 	loadCacheFn                = cache.Load
 	saveCacheFn                = cache.Save
+	updateCacheFn              = cache.Update
 	readManifestFn             = manager.ReadManifest
 )
 
@@ -33,8 +34,10 @@ func Intercept(mgr *manager.Manager, args []string) {
 	}
 
 	packages := extractPackages(args[1:])
+	fromManifest := false
 	if len(packages) == 0 {
 		packages = readManifestFn(mgr)
+		fromManifest = true
 	}
 	if len(packages) == 0 {
 		ExecFn(mgr.Name, args)
@@ -48,14 +51,21 @@ func Intercept(mgr *manager.Manager, args []string) {
 		fmt.Print(display.Dim(fmt.Sprintf("scanning %d package(s)...\n", uncachedCount)))
 	}
 
-	results := scanAll(mgr, packages, c)
+	results := scanAllWithPolicy(mgr, packages, c, !fromManifest)
 
+	fresh := make(cache.Cache)
 	for _, r := range results {
-		if len(r.vulns) == 0 && r.version != "" && r.err == nil && !r.cached {
-			cache.Set(c, cache.Key(mgr.Ecosystem, r.name, r.version))
+		if len(r.vulns) == 0 && r.version != "" && r.err == nil && r.cacheable && !r.cached {
+			cache.Set(fresh, cache.Key(mgr.Ecosystem, r.name, r.version))
 		}
 	}
-	saveCacheFn(c)
+	if len(fresh) > 0 {
+		updateCacheFn(func(current cache.Cache) {
+			for key := range fresh {
+				cache.Set(current, key)
+			}
+		})
+	}
 
 	switch outputLevel(results) {
 	case outputSilent:
@@ -80,8 +90,9 @@ func Intercept(mgr *manager.Manager, args []string) {
 	}
 
 	ExecFn(mgr.Name, args)
+	spawnBackgroundScanFn(mgr.Name)
 	if systemScanEnabled && shouldRunSystemScan() {
-		spawnSystemScan()
+		spawnSystemScanFn()
 	}
 }
 
