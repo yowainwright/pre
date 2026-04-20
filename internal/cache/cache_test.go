@@ -87,6 +87,23 @@ func TestKey(t *testing.T) {
 	}
 }
 
+func TestKeyNoVersion(t *testing.T) {
+	if Key("npm", "react", "") != "npm/react" {
+		t.Errorf("unexpected key: %s", Key("npm", "react", ""))
+	}
+}
+
+func TestMigrateVersionFromKey(t *testing.T) {
+	c := Cache{
+		"npm/react@18.0.0": Entry{Version: "", CheckedAt: time.Now()},
+	}
+	m := migrate(c)
+	e := m["npm/react@18.0.0"]
+	if e.Version != "18.0.0" {
+		t.Errorf("expected version populated from key, got %q", e.Version)
+	}
+}
+
 func TestHitMiss(t *testing.T) {
 	c := make(Cache)
 	if Hit(c, "npm/react@18.0.0") {
