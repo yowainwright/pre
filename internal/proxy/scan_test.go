@@ -12,7 +12,6 @@ import (
 	"github.com/yowainwright/pre/internal/security"
 )
 
-
 func withExecutableFn(fn func() (string, error)) func() {
 	orig := executableFn
 	executableFn = fn
