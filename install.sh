@@ -86,17 +86,6 @@ verify_checksum() {
   fi
 }
 
-checksum_for_artifact() {
-  checksums_file="$1"
-  artifact="$2"
-  checksum="$(awk -v artifact="$artifact" '$2 == artifact { print $1; exit }' "$checksums_file")"
-  if [ -z "$checksum" ]; then
-    echo "pre: checksum entry not found for ${artifact}" >&2
-    return 1
-  fi
-  printf "%s" "$checksum"
-}
-
 verify_cosign() {
   bundle="$1"
   file="$2"
