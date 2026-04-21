@@ -18,7 +18,7 @@ func TestReadPackageJSON(t *testing.T) {
 	if len(names) != 3 {
 		t.Fatalf("expected 3 packages, got %d: %v", len(names), names)
 	}
-	if names[0] != "lodash" || names[1] != "react" || names[2] != "typescript" {
+	if names[0] != "lodash@^4.17.21" || names[1] != "react@^18.0.0" || names[2] != "typescript@^5.0.0" {
 		t.Errorf("unexpected packages: %v", names)
 	}
 }
@@ -40,6 +40,9 @@ func TestReadPackageJSONDeduplicates(t *testing.T) {
 	names := readPackageJSON(dir)
 	if len(names) != 1 {
 		t.Errorf("expected 1 (deduped), got %d: %v", len(names), names)
+	}
+	if len(names) == 1 && names[0] != "lodash@^4.0.0" {
+		t.Errorf("expected preserved npm spec, got %v", names)
 	}
 }
 
@@ -107,7 +110,7 @@ func TestReadManifestNpmEcosystem(t *testing.T) {
 	os.WriteFile(dir+"/package.json", []byte(`{"dependencies":{"lodash":"^4.0.0"}}`), 0644)
 
 	names := readManifestDir(mgr, dir)
-	if len(names) != 1 || names[0] != "lodash" {
+	if len(names) != 1 || names[0] != "lodash@^4.0.0" {
 		t.Errorf("unexpected: %v", names)
 	}
 }
@@ -169,8 +172,27 @@ func TestReadManifestFallsBackToManifest(t *testing.T) {
 
 	mgr := &Manager{Ecosystem: "npm"}
 	pkgs := ReadManifest(mgr)
-	if len(pkgs) != 1 || pkgs[0] != "react" {
+	if len(pkgs) != 1 || pkgs[0] != "react@^18.0.0" {
 		t.Errorf("expected manifest fallback result, got %v", pkgs)
+	}
+}
+
+func TestReadPackageJSONFallsBackForLocalSpecs(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/package.json", []byte(`{
+		"dependencies": {
+			"localpkg": "file:../localpkg",
+			"workspacepkg": "workspace:*"
+		}
+	}`), 0644)
+
+	names := readPackageJSON(dir)
+	sort.Strings(names)
+	if len(names) != 2 {
+		t.Fatalf("expected 2 packages, got %d: %v", len(names), names)
+	}
+	if names[0] != "localpkg" || names[1] != "workspacepkg" {
+		t.Errorf("expected unsupported specs to fall back to names, got %v", names)
 	}
 }
 

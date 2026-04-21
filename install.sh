@@ -60,6 +60,12 @@ download_file() {
   curl -fsSL "$url" -o "$dest"
 }
 
+checksum_for_asset() {
+  asset="$1"
+  checksums_file="$2"
+  awk -v asset="$asset" '$2 == asset { print $1; found=1; exit } END { if (!found) exit 1 }' "$checksums_file"
+}
+
 compute_checksum() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
@@ -139,6 +145,7 @@ main() {
   bin_url="$(build_url "$REPO" "$version" "$target")"
   bundle_url="https://github.com/${REPO}/releases/download/v${version}/checksums.txt.bundle"
   checksums_url="https://github.com/${REPO}/releases/download/v${version}/checksums.txt"
+  asset_name="${bin_url##*/}"
 
   echo "pre: installing v${version} (${target}) to ${BIN_DIR}/pre"
 
@@ -150,7 +157,11 @@ main() {
   download_file "$bin_url" "$tmp_bin"
   download_file "$checksums_url" "$tmp_checksums"
 
-  verify_checksum "$tmp_bin" "$(checksum_for_artifact "$tmp_checksums" "$artifact")"
+  expected_checksum="$(checksum_for_asset "$asset_name" "$tmp_checksums")" || {
+    echo "pre: missing checksum for ${asset_name}" >&2
+    return 1
+  }
+  verify_checksum "$tmp_bin" "$expected_checksum"
 
   download_file "$bundle_url" "$tmp_bundle" 2>/dev/null || true
 

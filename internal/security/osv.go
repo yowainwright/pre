@@ -65,13 +65,9 @@ func Check(ecosystem, name, version string) ([]Vulnerability, error) {
 		return nil, fmt.Errorf("request: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		msg := strings.TrimSpace(string(body))
-		if msg == "" {
-			msg = resp.Status
-		}
-		return nil, fmt.Errorf("request: unexpected status %s: %s", resp.Status, msg)
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("request: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var result response
