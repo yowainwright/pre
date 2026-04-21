@@ -298,8 +298,6 @@ func resolveScanVersion(mgr *manager.Manager, name, version string, allowMissing
 			return "", name, true, false, nil
 		}
 		return resolved, name + "@" + resolved, true, isExactVersion(mgr.Ecosystem, resolved), nil
-	case isExactVersion(mgr.Ecosystem, version):
-		return version, label, false, true, nil
 	case shouldResolveVersion(mgr.Ecosystem, version):
 		resolved, err := resolveVersionFn(mgr, name)
 		if err != nil {
@@ -309,6 +307,8 @@ func resolveScanVersion(mgr *manager.Manager, name, version string, allowMissing
 			return "", name, true, false, nil
 		}
 		return resolved, name + "@" + resolved, true, isExactVersion(mgr.Ecosystem, resolved), nil
+	case isExactVersion(mgr.Ecosystem, version):
+		return version, label, false, true, nil
 	case canResolveConstraint(mgr.Ecosystem, version):
 		resolved, err := resolveVersionFn(mgr, name+"@"+version)
 		if err != nil {
