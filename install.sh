@@ -132,16 +132,16 @@ main() {
   version="$(resolve_version)"
   artifact="pre-${target}"
   bin_url="$(build_url "$REPO" "$version" "$target")"
-  bundle_url="https://github.com/${REPO}/releases/download/v${version}/checksums.txt.bundle"
   checksums_url="https://github.com/${REPO}/releases/download/v${version}/checksums.txt"
+  bundle_url="${checksums_url}.bundle"
   asset_name="${bin_url##*/}"
 
   echo "pre: installing v${version} (${target}) to ${BIN_DIR}/pre"
 
   tmp_bin="$(mktemp)"
-  tmp_bundle="$(mktemp)"
   tmp_checksums="$(mktemp)"
-  trap 'rm -f "$tmp_bin" "$tmp_bundle" "$tmp_checksums"' EXIT
+  tmp_bundle="$(mktemp)"
+  trap 'rm -f "$tmp_bin" "$tmp_checksums" "$tmp_bundle"' EXIT
 
   download_file "$bin_url" "$tmp_bin"
   download_file "$checksums_url" "$tmp_checksums"
