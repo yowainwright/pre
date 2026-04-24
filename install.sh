@@ -130,6 +130,7 @@ main() {
   validate_os
   target="$(detect_arch)"
   version="$(resolve_version)"
+  artifact="pre-${target}"
   bin_url="$(build_url "$REPO" "$version" "$target")"
   bundle_url="https://github.com/${REPO}/releases/download/v${version}/checksums.txt.bundle"
   checksums_url="https://github.com/${REPO}/releases/download/v${version}/checksums.txt"

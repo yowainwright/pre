@@ -33,7 +33,7 @@ func Intercept(mgr *manager.Manager, args []string) {
 		return
 	}
 
-	packages := extractPackages(args[1:])
+	packages := extractPackages(mgr, args[1:])
 	fromManifest := false
 	if len(packages) == 0 {
 		packages = readManifestFn(mgr)
@@ -122,11 +122,18 @@ func countUncached(mgr *manager.Manager, packages []string, c cache.Cache) int {
 	n := 0
 	for _, pkg := range packages {
 		name, version := manager.ParseSpec(mgr.Ecosystem, pkg)
-		if version == "" || !cache.Hit(c, cache.Key(mgr.Ecosystem, name, version)) {
+		if !hasExactCacheHit(mgr, c, name, version) {
 			n++
 		}
 	}
 	return n
+}
+
+func hasExactCacheHit(mgr *manager.Manager, c cache.Cache, name, version string) bool {
+	return version != "" &&
+		!shouldResolveVersion(mgr.Ecosystem, version) &&
+		isExactVersion(mgr.Ecosystem, version) &&
+		cache.Hit(c, cache.Key(mgr.Ecosystem, name, version))
 }
 
 func hasCriticalVulns(r scanResult) bool {
@@ -157,19 +164,6 @@ func confirm(prompt string) bool {
 	}
 	answer := strings.ToLower(strings.TrimSpace(string(line)))
 	return answer == "y" || answer == "yes"
-}
-
-func extractPackages(args []string) []string {
-	isPackage := func(a string) bool {
-		return !strings.HasPrefix(a, "-") && !strings.HasPrefix(a, ".")
-	}
-	result := make([]string, 0, len(args))
-	for _, a := range args {
-		if isPackage(a) {
-			result = append(result, a)
-		}
-	}
-	return result
 }
 
 func execReal(name string, args []string) {

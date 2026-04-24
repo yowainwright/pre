@@ -172,6 +172,9 @@ func TestRunSystemScanWithVulns(t *testing.T) {
 	if savedStats.Crit != 1 {
 		t.Errorf("expected Crit=1, got %d", savedStats.Crit)
 	}
+	if savedStats.Total != 1 {
+		t.Errorf("expected Total=1, got %d", savedStats.Total)
+	}
 }
 
 func TestRunSystemScanSecurityError(t *testing.T) {
@@ -191,6 +194,9 @@ func TestRunSystemScanSecurityError(t *testing.T) {
 
 	if savedStats.Crit != 0 || savedStats.Warn != 0 {
 		t.Errorf("expected no vulns when check errors, Crit=%d Warn=%d", savedStats.Crit, savedStats.Warn)
+	}
+	if savedStats.Total != 1 {
+		t.Errorf("expected Total=1, got %d", savedStats.Total)
 	}
 }
 
@@ -410,6 +416,39 @@ func TestScanAllResolvesNPMSemverConstraint(t *testing.T) {
 	}
 	if results[0].version != "18.2.0" || !results[0].cacheable {
 		t.Errorf("expected cacheable resolved result, got %+v", results[0])
+	}
+}
+
+func TestScanAllIgnoresNonExactCacheHit(t *testing.T) {
+	resolveArg := ""
+	securityCalled := false
+	defer withResolveVersion(func(_ *manager.Manager, pkg string) (string, error) {
+		resolveArg = pkg
+		return "18.2.0", nil
+	})()
+	defer withSecurityCheck(func(_, _, ver string) ([]security.Vulnerability, error) {
+		securityCalled = true
+		if ver != "18.2.0" {
+			t.Errorf("expected resolved npm version 18.2.0, got %q", ver)
+		}
+		return nil, nil
+	})()
+
+	c := make(cache.Cache)
+	cache.Set(c, cache.Key("npm", "react", "^18.0.0"))
+	results := scanAllWithPolicy(npmMgr(), []string{"react@^18.0.0"}, c, false)
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if resolveArg != "react@^18.0.0" {
+		t.Errorf("expected constraint-aware resolution, got %q", resolveArg)
+	}
+	if !securityCalled {
+		t.Error("expected security check after resolving non-exact cached spec")
+	}
+	if results[0].cached {
+		t.Errorf("expected non-exact cache entry to be ignored, got %+v", results[0])
 	}
 }
 

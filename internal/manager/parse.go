@@ -2,10 +2,14 @@ package manager
 
 import "strings"
 
+const brewLockVersionSeparator = "@@"
+
 func ParseSpec(ecosystem, spec string) (name, version string) {
 	switch ecosystem {
-	case "npm", "Go", "Homebrew":
+	case "npm", "Go":
 		return parseAtSeparator(spec)
+	case "Homebrew":
+		return parseHomebrewSpec(spec)
 	case "PyPI":
 		return parsePySpec(spec)
 	default:
@@ -19,6 +23,14 @@ func parseAtSeparator(spec string) (string, string) {
 		return spec, ""
 	}
 	return spec[:idx], spec[idx+1:]
+}
+
+func parseHomebrewSpec(spec string) (string, string) {
+	idx := strings.LastIndex(spec, brewLockVersionSeparator)
+	if idx <= 0 {
+		return spec, ""
+	}
+	return spec[:idx], spec[idx+len(brewLockVersionSeparator):]
 }
 
 func parsePySpec(spec string) (string, string) {

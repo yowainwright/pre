@@ -16,6 +16,18 @@ func npmMgr() *manager.Manager {
 	return &manager.Manager{Name: "npm", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i"}}
 }
 
+func pipMgr() *manager.Manager {
+	return &manager.Manager{Name: "pip", Ecosystem: "PyPI", InstallCmds: []string{"install"}}
+}
+
+func goMgr() *manager.Manager {
+	return &manager.Manager{Name: "go", Ecosystem: "Go", InstallCmds: []string{"install"}}
+}
+
+func brewMgr() *manager.Manager {
+	return &manager.Manager{Name: "brew", Ecosystem: "Homebrew", InstallCmds: []string{"install"}}
+}
+
 func withExecFn(fn func(string, []string)) func() {
 	orig := ExecFn
 	ExecFn = fn
@@ -338,6 +350,29 @@ func TestCountUncached(t *testing.T) {
 	}
 }
 
+func TestCountUncachedTreatsFloatingVersionsAsUncached(t *testing.T) {
+	mgr := npmMgr()
+	c := make(cache.Cache)
+	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
+	cache.Set(c, cache.Key("npm", "react", "latest"))
+
+	n := countUncached(mgr, []string{"react@latest"}, c)
+	if n != 1 {
+		t.Errorf("expected 1 uncached for floating version, got %d", n)
+	}
+}
+
+func TestCountUncachedTreatsConstraintsAsUncached(t *testing.T) {
+	mgr := npmMgr()
+	c := make(cache.Cache)
+	cache.Set(c, cache.Key("npm", "react", "^18.0.0"))
+
+	n := countUncached(mgr, []string{"react@^18.0.0"}, c)
+	if n != 1 {
+		t.Errorf("expected 1 uncached for semver constraint, got %d", n)
+	}
+}
+
 func TestInterceptQuietWhenClean(t *testing.T) {
 	execCalled := false
 	defer withExecFn(func(name string, args []string) { execCalled = true })()
@@ -412,6 +447,104 @@ func TestScanPackageResolvesVersion(t *testing.T) {
 	r := scanPackage(npmMgr(), "react", make(cache.Cache))
 	if r.version != "17.0.0" {
 		t.Errorf("expected resolved version 17.0.0, got %q", r.version)
+	}
+}
+
+func TestScanPackageResolvesLatestVersionTag(t *testing.T) {
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		if name != "react" || ver != "18.3.1" {
+			t.Errorf("expected resolved react@18.3.1, got %s@%s", name, ver)
+		}
+		return nil, nil
+	})()
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		if pkg != "react" {
+			t.Errorf("expected package react, got %q", pkg)
+		}
+		return "18.3.1", nil
+	})()
+
+	r := scanPackage(npmMgr(), "react@latest", make(cache.Cache))
+	if !r.updated {
+		t.Error("expected latest tag to trigger version resolution")
+	}
+	if r.version != "18.3.1" {
+		t.Errorf("expected resolved version 18.3.1, got %q", r.version)
+	}
+}
+
+func TestScanPackageResolvesNPMDistTag(t *testing.T) {
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		if name != "react" || ver != "19.0.0-rc.1" {
+			t.Errorf("expected resolved react@19.0.0-rc.1, got %s@%s", name, ver)
+		}
+		return nil, nil
+	})()
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		if pkg != "react@next" {
+			t.Errorf("expected package spec react@next, got %q", pkg)
+		}
+		return "19.0.0-rc.1", nil
+	})()
+
+	r := scanPackage(npmMgr(), "react@next", make(cache.Cache))
+	if !r.updated {
+		t.Error("expected dist-tag to trigger version resolution")
+	}
+	if r.version != "19.0.0-rc.1" {
+		t.Errorf("expected resolved version 19.0.0-rc.1, got %q", r.version)
+	}
+}
+
+func TestScanPackageGoBranchDoesNotResolveAsLatest(t *testing.T) {
+	resolveCalled := false
+	checkedVersion := "unset"
+
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		resolveCalled = true
+		return "v1.2.3", nil
+	})()
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		checkedVersion = ver
+		return nil, nil
+	})()
+
+	c := make(cache.Cache)
+	r := scanPackage(goMgr(), "golang.org/x/tools/gopls@master", c)
+	if resolveCalled {
+		t.Error("expected floating Go branch to avoid latest-version resolution")
+	}
+	if checkedVersion != "" {
+		t.Errorf("expected package-level Go check, got version %q", checkedVersion)
+	}
+	if r.cacheable {
+		t.Error("expected floating Go branch result to be non-cacheable")
+	}
+	if cache.Hit(c, cache.Key("Go", "golang.org/x/tools/gopls", "master")) {
+		t.Error("expected floating Go branch not to be cached as an exact version")
+	}
+}
+
+func TestScanPackageResolvesHomebrewVersionedFormula(t *testing.T) {
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		if name != "openssl@3" || ver != "3.3.1" {
+			t.Errorf("expected resolved openssl@3 3.3.1, got %s@%s", name, ver)
+		}
+		return nil, nil
+	})()
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		if pkg != "openssl@3" {
+			t.Errorf("expected formula name openssl@3, got %q", pkg)
+		}
+		return "3.3.1", nil
+	})()
+
+	r := scanPackage(brewMgr(), "openssl@3", make(cache.Cache))
+	if !r.updated {
+		t.Error("expected versioned formula name to resolve via brew info")
+	}
+	if r.version != "3.3.1" {
+		t.Errorf("expected resolved version 3.3.1, got %q", r.version)
 	}
 }
 
@@ -578,7 +711,7 @@ func TestInterceptSpawnsBackgroundScan(t *testing.T) {
 // confirm / extractPackages / execReal tests
 
 func TestExtractPackagesStripsFlags(t *testing.T) {
-	result := extractPackages([]string{"--save-dev", "./local", "react", "--legacy-peer-deps", "lodash"})
+	result := extractPackages(npmMgr(), []string{"--save-dev", "./local", "react", "--legacy-peer-deps", "lodash"})
 	if len(result) != 2 {
 		t.Errorf("expected 2 packages, got %d: %v", len(result), result)
 	}
@@ -587,8 +720,66 @@ func TestExtractPackagesStripsFlags(t *testing.T) {
 	}
 }
 
+func TestExtractPackagesSkipsWorkspaceValue(t *testing.T) {
+	result := extractPackages(npmMgr(), []string{"react", "--workspace", "app"})
+	if len(result) != 1 || result[0] != "react" {
+		t.Errorf("expected only react, got %v", result)
+	}
+}
+
+func TestExtractPackagesKeepsArgsAfterTerminator(t *testing.T) {
+	result := extractPackages(npmMgr(), []string{"--", "react", "--save-dev", "lodash"})
+	if len(result) != 2 || result[0] != "react" || result[1] != "lodash" {
+		t.Errorf("expected react and lodash after --, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsCustomNPMManagerWorkspaceValue(t *testing.T) {
+	mgr := &manager.Manager{Name: "custom-npm", Ecosystem: "npm", InstallCmds: []string{"install"}}
+	result := extractPackages(mgr, []string{"--workspace", "app", "react"})
+	if len(result) != 1 || result[0] != "react" {
+		t.Errorf("expected only react, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsNPMValueFlags(t *testing.T) {
+	result := extractPackages(npmMgr(), []string{"--save-prefix", "~", "--tag=next", "react"})
+	if len(result) != 1 || result[0] != "react" {
+		t.Errorf("expected only react, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsRequirementFile(t *testing.T) {
+	result := extractPackages(pipMgr(), []string{"-r", "requirements.txt", "requests"})
+	if len(result) != 1 || result[0] != "requests" {
+		t.Errorf("expected only requests, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsPythonManagerValueFlags(t *testing.T) {
+	mgr := &manager.Manager{Name: "poetry", Ecosystem: "PyPI", InstallCmds: []string{"add"}}
+	result := extractPackages(mgr, []string{"--group", "dev", "--source", "internal", "requests"})
+	if len(result) != 1 || result[0] != "requests" {
+		t.Errorf("expected only requests, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsEditablePath(t *testing.T) {
+	result := extractPackages(pipMgr(), []string{"-e", ".", "requests"})
+	if len(result) != 1 || result[0] != "requests" {
+		t.Errorf("expected only requests, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsUnsupportedSources(t *testing.T) {
+	result := extractPackages(npmMgr(), []string{"github:user/repo", "git@github.com:user/repo.git", "alias@npm:react@18", "react"})
+	if len(result) != 1 || result[0] != "react" {
+		t.Errorf("expected only react, got %v", result)
+	}
+}
+
 func TestExtractPackagesEmpty(t *testing.T) {
-	result := extractPackages([]string{})
+	result := extractPackages(npmMgr(), []string{})
 	if len(result) != 0 {
 		t.Errorf("expected empty result, got %v", result)
 	}

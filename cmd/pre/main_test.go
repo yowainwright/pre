@@ -94,11 +94,11 @@ func TestRunConfigSet(t *testing.T) {
 	os.Setenv("HOME", dir)
 
 	var out, errOut bytes.Buffer
-	code := run([]string{"config", "set", "ttl", "12h"}, &out, &errOut)
+	code := run([]string{"config", "set", "cache.ttl", "12h"}, &out, &errOut)
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d — err: %s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "ttl") {
+	if !strings.Contains(out.String(), "cache.ttl") {
 		t.Errorf("expected confirmation output, got: %s", out.String())
 	}
 }
@@ -120,9 +120,63 @@ func TestRunConfigSetDottedTTL(t *testing.T) {
 
 func TestRunConfigSetUnknownKey(t *testing.T) {
 	var out, errOut bytes.Buffer
-	run([]string{"config", "set", "boguskey", "val"}, &out, &errOut)
+	code := run([]string{"config", "set", "boguskey", "val"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
 	if !strings.Contains(errOut.String(), "unknown key") {
 		t.Errorf("expected unknown key error, got: %s", errOut.String())
+	}
+}
+
+func TestRunConfigUsageErrors(t *testing.T) {
+	tests := [][]string{
+		{"config", "get", "cache.ttl"},
+		{"config", "set", "cache.ttl"},
+	}
+	for _, args := range tests {
+		var out, errOut bytes.Buffer
+		code := run(args, &out, &errOut)
+		if code != 1 {
+			t.Errorf("%v: expected exit 1, got %d", args, code)
+		}
+		if !strings.Contains(errOut.String(), "usage:") {
+			t.Errorf("%v: expected usage error, got: %s", args, errOut.String())
+		}
+	}
+}
+
+func TestRunConfigRejectsInvalidDuration(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	tests := [][]string{
+		{"config", "set", "cache.ttl", "soon"},
+		{"config", "set", "systemTTL", "weekly"},
+	}
+	for _, args := range tests {
+		var out, errOut bytes.Buffer
+		code := run(args, &out, &errOut)
+		if code != 1 {
+			t.Errorf("%v: expected exit 1, got %d", args, code)
+		}
+		if !strings.Contains(errOut.String(), "invalid duration") {
+			t.Errorf("%v: expected invalid duration error, got: %s", args, errOut.String())
+		}
+	}
+}
+
+func TestRunConfigRejectsInvalidSystemScanBool(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"config", "set", "systemScan", "sometimes"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "invalid boolean") {
+		t.Errorf("expected invalid boolean error, got: %s", errOut.String())
 	}
 }
 
@@ -203,11 +257,11 @@ func TestRunConfigSetEndpoint(t *testing.T) {
 	t.Setenv("HOME", dir)
 
 	var out, errOut bytes.Buffer
-	code := run([]string{"config", "set", "endpoint", "https://custom.example.com"}, &out, &errOut)
+	code := run([]string{"config", "set", "api.endpoint", "https://custom.example.com"}, &out, &errOut)
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d — err: %s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "endpoint") {
+	if !strings.Contains(out.String(), "api.endpoint") {
 		t.Errorf("expected endpoint in output, got: %s", out.String())
 	}
 }
@@ -297,7 +351,10 @@ func TestRunConfigSetSaveError(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/dev/null")
 
 	var out, errOut bytes.Buffer
-	run([]string{"config", "set", "endpoint", "https://example.com"}, &out, &errOut)
+	code := run([]string{"config", "set", "endpoint", "https://example.com"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
 	if !strings.Contains(errOut.String(), "pre config:") {
 		t.Errorf("expected config error, got: %s", errOut.String())
 	}
