@@ -18,4 +18,4 @@ WORKDIR /home/demo/demo
 
 RUN pre setup
 
-CMD ["bash", "-i"]
+CMD ["bash", "/home/demo/demo/demo.sh"]

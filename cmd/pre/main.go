@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yowainwright/pre/internal/cache"
 	"github.com/yowainwright/pre/internal/config"
@@ -53,7 +55,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		proxy.RunBackgroundScan(mgr)
 	case "config":
-		handleConfig(args[1:], cfg, stdout, stderr)
+		return handleConfig(args[1:], cfg, stdout, stderr)
 	case "status":
 		handleStatus(cfg, stdout)
 	case "--version", "-v":
@@ -69,34 +71,66 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func handleConfig(args []string, cfg *config.Config, stdout, stderr io.Writer) {
+func handleConfig(args []string, cfg *config.Config, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintf(stdout, "endpoint    %s\n", cfg.API.Endpoint)
-		fmt.Fprintf(stdout, "ttl         %s\n", cfg.Cache.TTL)
-		fmt.Fprintf(stdout, "systemScan  %v\n", cfg.SystemScan)
-		fmt.Fprintf(stdout, "systemTTL   %s\n", cfg.SystemTTL)
-		return
+		fmt.Fprintf(stdout, "api.endpoint  %s\n", cfg.API.Endpoint)
+		fmt.Fprintf(stdout, "cache.ttl     %s\n", cfg.Cache.TTL)
+		fmt.Fprintf(stdout, "systemScan    %v\n", cfg.SystemScan)
+		fmt.Fprintf(stdout, "systemTTL     %s\n", cfg.SystemTTL)
+		return 0
 	}
-	if args[0] == "set" && len(args) >= 3 {
-		key, val := args[1], strings.Join(args[2:], " ")
-		switch key {
-		case "endpoint":
-			cfg.API.Endpoint = val
-		case "ttl":
-			cfg.Cache.TTL = val
-		case "systemScan":
-			cfg.SystemScan = val == "true"
-		case "systemTTL":
-			cfg.SystemTTL = val
-		default:
-			fmt.Fprintf(stderr, "pre config: unknown key %q (endpoint, ttl, systemScan, systemTTL)\n", key)
-			return
+	if args[0] != "set" {
+		fmt.Fprintln(stderr, "usage: pre config [set <key> <value>]")
+		return 1
+	}
+	if len(args) < 3 {
+		fmt.Fprintln(stderr, "usage: pre config set <key> <value>")
+		return 1
+	}
+
+	key, val := normalizeConfigKey(args[1]), strings.Join(args[2:], " ")
+	switch key {
+	case "endpoint":
+		cfg.API.Endpoint = val
+	case "ttl":
+		if _, err := time.ParseDuration(val); err != nil {
+			fmt.Fprintf(stderr, "pre config: invalid duration for %s: %q\n", args[1], val)
+			return 1
 		}
-		if err := config.Save(cfg); err != nil {
-			fmt.Fprintf(stderr, "pre config: %v\n", err)
-			return
+		cfg.Cache.TTL = val
+	case "systemScan":
+		enabled, err := strconv.ParseBool(val)
+		if err != nil {
+			fmt.Fprintf(stderr, "pre config: invalid boolean for %s: %q\n", args[1], val)
+			return 1
 		}
-		fmt.Fprintf(stdout, "%s = %s\n", key, val)
+		cfg.SystemScan = enabled
+	case "systemTTL":
+		if _, err := time.ParseDuration(val); err != nil {
+			fmt.Fprintf(stderr, "pre config: invalid duration for %s: %q\n", args[1], val)
+			return 1
+		}
+		cfg.SystemTTL = val
+	default:
+		fmt.Fprintf(stderr, "pre config: unknown key %q (api.endpoint, cache.ttl, systemScan, systemTTL)\n", args[1])
+		return 1
+	}
+	if err := config.Save(cfg); err != nil {
+		fmt.Fprintf(stderr, "pre config: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "%s = %s\n", args[1], val)
+	return 0
+}
+
+func normalizeConfigKey(key string) string {
+	switch key {
+	case "api.endpoint", "endpoint":
+		return "endpoint"
+	case "cache.ttl", "ttl":
+		return "ttl"
+	default:
+		return key
 	}
 }
 

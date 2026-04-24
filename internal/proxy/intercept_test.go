@@ -16,6 +16,18 @@ func npmMgr() *manager.Manager {
 	return &manager.Manager{Name: "npm", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i"}}
 }
 
+func pipMgr() *manager.Manager {
+	return &manager.Manager{Name: "pip", Ecosystem: "PyPI", InstallCmds: []string{"install"}}
+}
+
+func goMgr() *manager.Manager {
+	return &manager.Manager{Name: "go", Ecosystem: "Go", InstallCmds: []string{"install"}}
+}
+
+func brewMgr() *manager.Manager {
+	return &manager.Manager{Name: "brew", Ecosystem: "Homebrew", InstallCmds: []string{"install"}}
+}
+
 func withExecFn(fn func(string, []string)) func() {
 	orig := ExecFn
 	ExecFn = fn
@@ -46,10 +58,28 @@ func withSaveCache(fn func(cache.Cache)) func() {
 	return func() { saveCacheFn = orig }
 }
 
+func withUpdateCache(fn func(func(cache.Cache))) func() {
+	orig := updateCacheFn
+	updateCacheFn = fn
+	return func() { updateCacheFn = orig }
+}
+
 func withReadManifest(fn func(*manager.Manager) []string) func() {
 	orig := readManifestFn
 	readManifestFn = fn
 	return func() { readManifestFn = orig }
+}
+
+func withSpawnBackgroundScan(fn func(string)) func() {
+	orig := spawnBackgroundScanFn
+	spawnBackgroundScanFn = fn
+	return func() { spawnBackgroundScanFn = orig }
+}
+
+func withSpawnSystemScan(fn func()) func() {
+	orig := spawnSystemScanFn
+	spawnSystemScanFn = fn
+	return func() { spawnSystemScanFn = orig }
 }
 
 func withStdinInput(input string) func() {
@@ -58,8 +88,9 @@ func withStdinInput(input string) func() {
 	return func() { stdinReader = orig }
 }
 
-func emptyCache() cache.Cache { return make(cache.Cache) }
-func noopSave(cache.Cache)    {}
+func emptyCache() cache.Cache      { return make(cache.Cache) }
+func noopSave(cache.Cache)         {}
+func noopUpdate(func(cache.Cache)) {}
 
 // Intercept flow tests
 
@@ -93,7 +124,8 @@ func TestInterceptInstallManifestFallback(t *testing.T) {
 		return "1.0.0", nil
 	})()
 	defer withLoadCache(emptyCache)()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
 	defer withReadManifest(func(mgr *manager.Manager) []string {
 		return []string{"lodash", "react"}
 	})()
@@ -134,7 +166,8 @@ func TestInterceptInstallCleanPackage(t *testing.T) {
 		return "18.0.0", nil
 	})()
 	defer withLoadCache(emptyCache)()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
 	Intercept(npmMgr(), []string{"install", "react@18.0.0"})
 	if !execCalled {
 		t.Error("expected ExecFn to be called for clean package")
@@ -151,7 +184,8 @@ func TestInterceptInstallVersionResolutionFailure(t *testing.T) {
 		return "", errors.New("resolution failed")
 	})()
 	defer withLoadCache(emptyCache)()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
 	Intercept(npmMgr(), []string{"install", "react"})
 	if !execCalled {
 		t.Error("expected ExecFn to be called even when version resolution fails")
@@ -168,7 +202,8 @@ func TestInterceptInstallSecurityCheckFailure(t *testing.T) {
 		return "1.0.0", nil
 	})()
 	defer withLoadCache(emptyCache)()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
 	Intercept(npmMgr(), []string{"install", "lodash"})
 	if !execCalled {
 		t.Error("expected ExecFn to be called when security check fails (don't block)")
@@ -187,7 +222,8 @@ func TestInterceptInstallVulnsUserYes(t *testing.T) {
 				return "1.0.0", nil
 			})()
 			defer withLoadCache(emptyCache)()
-			defer withSaveCache(noopSave)()
+			defer withUpdateCache(noopUpdate)()
+			defer withSpawnBackgroundScan(func(string) {})()
 			defer withStdinInput(answer + "\n")()
 
 			Intercept(npmMgr(), []string{"install", "lodash"})
@@ -208,7 +244,7 @@ func TestInterceptInstallVulnsUserNo(t *testing.T) {
 		return "1.0.0", nil
 	})()
 	defer withLoadCache(emptyCache)()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
 
 	origStdin := stdinReader
 	stdinReader = strings.NewReader("N\n")
@@ -236,10 +272,11 @@ func TestInterceptInstallCacheHit(t *testing.T) {
 		securityCalled = true
 		return nil, nil
 	})()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
 
 	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "react"), "18.0.0")
+	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
 	defer withLoadCache(func() cache.Cache { return c })()
 	Intercept(npmMgr(), []string{"install", "react@18.0.0"})
 	if !execCalled {
@@ -253,10 +290,11 @@ func TestInterceptInstallCacheHit(t *testing.T) {
 func TestInterceptSilentWhenAllCached(t *testing.T) {
 	execCalled := false
 	defer withExecFn(func(name string, args []string) { execCalled = true })()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
 
 	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "react"), "18.0.0")
+	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
 	defer withLoadCache(func() cache.Cache { return c })()
 
 	Intercept(npmMgr(), []string{"install", "react@18.0.0"})
@@ -304,11 +342,34 @@ func TestOutputLevelFullOnError(t *testing.T) {
 func TestCountUncached(t *testing.T) {
 	mgr := npmMgr()
 	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "react"), "18.0.0")
+	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
 
 	n := countUncached(mgr, []string{"react@18.0.0", "lodash@4.17.21"}, c)
 	if n != 1 {
 		t.Errorf("expected 1 uncached, got %d", n)
+	}
+}
+
+func TestCountUncachedTreatsFloatingVersionsAsUncached(t *testing.T) {
+	mgr := npmMgr()
+	c := make(cache.Cache)
+	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
+	cache.Set(c, cache.Key("npm", "react", "latest"))
+
+	n := countUncached(mgr, []string{"react@latest"}, c)
+	if n != 1 {
+		t.Errorf("expected 1 uncached for floating version, got %d", n)
+	}
+}
+
+func TestCountUncachedTreatsConstraintsAsUncached(t *testing.T) {
+	mgr := npmMgr()
+	c := make(cache.Cache)
+	cache.Set(c, cache.Key("npm", "react", "^18.0.0"))
+
+	n := countUncached(mgr, []string{"react@^18.0.0"}, c)
+	if n != 1 {
+		t.Errorf("expected 1 uncached for semver constraint, got %d", n)
 	}
 }
 
@@ -322,11 +383,40 @@ func TestInterceptQuietWhenClean(t *testing.T) {
 		return "18.0.0", nil
 	})()
 	defer withLoadCache(emptyCache)()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
 
 	Intercept(npmMgr(), []string{"install", "react"})
 	if !execCalled {
 		t.Error("expected ExecFn called after quiet clean scan")
+	}
+}
+
+func TestInterceptManifestFallbackSkipsLatestGuess(t *testing.T) {
+	resolveCalled := false
+	checkedVersion := "unset"
+
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		checkedVersion = ver
+		return nil, nil
+	})()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		resolveCalled = true
+		return "18.0.0", nil
+	})()
+	defer withReadManifest(func(*manager.Manager) []string { return []string{"react"} })()
+
+	Intercept(npmMgr(), []string{"install"})
+
+	if resolveCalled {
+		t.Error("expected manifest fallback without an exact version to skip latest-version resolution")
+	}
+	if checkedVersion != "" {
+		t.Errorf("expected package-level check without a guessed version, got %q", checkedVersion)
 	}
 }
 
@@ -360,6 +450,104 @@ func TestScanPackageResolvesVersion(t *testing.T) {
 	}
 }
 
+func TestScanPackageResolvesLatestVersionTag(t *testing.T) {
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		if name != "react" || ver != "18.3.1" {
+			t.Errorf("expected resolved react@18.3.1, got %s@%s", name, ver)
+		}
+		return nil, nil
+	})()
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		if pkg != "react" {
+			t.Errorf("expected package react, got %q", pkg)
+		}
+		return "18.3.1", nil
+	})()
+
+	r := scanPackage(npmMgr(), "react@latest", make(cache.Cache))
+	if !r.updated {
+		t.Error("expected latest tag to trigger version resolution")
+	}
+	if r.version != "18.3.1" {
+		t.Errorf("expected resolved version 18.3.1, got %q", r.version)
+	}
+}
+
+func TestScanPackageResolvesNPMDistTag(t *testing.T) {
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		if name != "react" || ver != "19.0.0-rc.1" {
+			t.Errorf("expected resolved react@19.0.0-rc.1, got %s@%s", name, ver)
+		}
+		return nil, nil
+	})()
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		if pkg != "react@next" {
+			t.Errorf("expected package spec react@next, got %q", pkg)
+		}
+		return "19.0.0-rc.1", nil
+	})()
+
+	r := scanPackage(npmMgr(), "react@next", make(cache.Cache))
+	if !r.updated {
+		t.Error("expected dist-tag to trigger version resolution")
+	}
+	if r.version != "19.0.0-rc.1" {
+		t.Errorf("expected resolved version 19.0.0-rc.1, got %q", r.version)
+	}
+}
+
+func TestScanPackageGoBranchDoesNotResolveAsLatest(t *testing.T) {
+	resolveCalled := false
+	checkedVersion := "unset"
+
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		resolveCalled = true
+		return "v1.2.3", nil
+	})()
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		checkedVersion = ver
+		return nil, nil
+	})()
+
+	c := make(cache.Cache)
+	r := scanPackage(goMgr(), "golang.org/x/tools/gopls@master", c)
+	if resolveCalled {
+		t.Error("expected floating Go branch to avoid latest-version resolution")
+	}
+	if checkedVersion != "" {
+		t.Errorf("expected package-level Go check, got version %q", checkedVersion)
+	}
+	if r.cacheable {
+		t.Error("expected floating Go branch result to be non-cacheable")
+	}
+	if cache.Hit(c, cache.Key("Go", "golang.org/x/tools/gopls", "master")) {
+		t.Error("expected floating Go branch not to be cached as an exact version")
+	}
+}
+
+func TestScanPackageResolvesHomebrewVersionedFormula(t *testing.T) {
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		if name != "openssl@3" || ver != "3.3.1" {
+			t.Errorf("expected resolved openssl@3 3.3.1, got %s@%s", name, ver)
+		}
+		return nil, nil
+	})()
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		if pkg != "openssl@3" {
+			t.Errorf("expected formula name openssl@3, got %q", pkg)
+		}
+		return "3.3.1", nil
+	})()
+
+	r := scanPackage(brewMgr(), "openssl@3", make(cache.Cache))
+	if !r.updated {
+		t.Error("expected versioned formula name to resolve via brew info")
+	}
+	if r.version != "3.3.1" {
+		t.Errorf("expected resolved version 3.3.1, got %q", r.version)
+	}
+}
+
 func TestScanPackageResolutionError(t *testing.T) {
 	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
 		return "", errors.New("resolution failed")
@@ -379,7 +567,7 @@ func TestScanPackageCacheHit(t *testing.T) {
 	})()
 
 	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "react"), "18.0.0")
+	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
 
 	r := scanPackage(npmMgr(), "react@18.0.0", c)
 	if !r.cached {
@@ -401,7 +589,7 @@ func TestScanPackageSetsCache(t *testing.T) {
 	c := make(cache.Cache)
 	scanPackage(npmMgr(), "react", c)
 
-	if !cache.Hit(c, cache.Key("npm", "react"), "18.0.0") {
+	if !cache.Hit(c, cache.Key("npm", "react", "18.0.0")) {
 		t.Error("expected cache populated after clean scan")
 	}
 }
@@ -419,7 +607,7 @@ func TestScanPackageEmptyResolvedVersion(t *testing.T) {
 	if r.err != nil {
 		t.Errorf("expected no error, got %v", r.err)
 	}
-	if cache.Hit(c, cache.Key("npm", "react"), "") {
+	if cache.Hit(c, cache.Key("npm", "react", "")) {
 		t.Error("empty version should not be cached")
 	}
 }
@@ -435,7 +623,7 @@ func TestScanPackageVulnsNotCached(t *testing.T) {
 	c := make(cache.Cache)
 	scanPackage(npmMgr(), "lodash", c)
 
-	if cache.Hit(c, cache.Key("npm", "lodash"), "4.17.4") {
+	if cache.Hit(c, cache.Key("npm", "lodash", "4.17.4")) {
 		t.Error("expected vulnerable package NOT cached")
 	}
 }
@@ -454,9 +642,12 @@ func TestInterceptSpawnsSystemScan(t *testing.T) {
 	systemScanEnabled = true
 	defer func() { systemScanEnabled = origEnabled }()
 
+	systemSpawned := false
 	defer withExecFn(noopExec)()
 	defer withLoadCache(emptyCache)()
-	defer withSaveCache(noopSave)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+	defer withSpawnSystemScan(func() { systemSpawned = true })()
 	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
 		return nil, nil
 	})()
@@ -466,12 +657,61 @@ func TestInterceptSpawnsSystemScan(t *testing.T) {
 	defer withReadManifest(func(*manager.Manager) []string { return []string{"react"} })()
 
 	Intercept(npmMgr(), []string{"install"})
+	if !systemSpawned {
+		t.Error("expected system scan to be spawned")
+	}
+}
+
+func TestInterceptUpdateCacheCallback(t *testing.T) {
+	var updated cache.Cache
+	defer withExecFn(noopExec)()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		return "18.0.0", nil
+	})()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(func(fn func(cache.Cache)) {
+		c := make(cache.Cache)
+		fn(c)
+		updated = c
+	})()
+	defer withSpawnBackgroundScan(func(string) {})()
+
+	Intercept(npmMgr(), []string{"install", "react"})
+
+	if !cache.Hit(updated, cache.Key("npm", "react", "18.0.0")) {
+		t.Error("expected update callback to populate cache with clean package")
+	}
+}
+
+func TestInterceptSpawnsBackgroundScan(t *testing.T) {
+	backgroundMgr := ""
+
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(name string) { backgroundMgr = name })()
+	defer withSpawnSystemScan(func() {})()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		return "18.0.0", nil
+	})()
+
+	Intercept(npmMgr(), []string{"install", "react"})
+
+	if backgroundMgr != "npm" {
+		t.Errorf("expected background scan for npm, got %q", backgroundMgr)
+	}
 }
 
 // confirm / extractPackages / execReal tests
 
 func TestExtractPackagesStripsFlags(t *testing.T) {
-	result := extractPackages([]string{"--save-dev", "./local", "react", "--legacy-peer-deps", "lodash"})
+	result := extractPackages(npmMgr(), []string{"--save-dev", "./local", "react", "--legacy-peer-deps", "lodash"})
 	if len(result) != 2 {
 		t.Errorf("expected 2 packages, got %d: %v", len(result), result)
 	}
@@ -480,8 +720,66 @@ func TestExtractPackagesStripsFlags(t *testing.T) {
 	}
 }
 
+func TestExtractPackagesSkipsWorkspaceValue(t *testing.T) {
+	result := extractPackages(npmMgr(), []string{"react", "--workspace", "app"})
+	if len(result) != 1 || result[0] != "react" {
+		t.Errorf("expected only react, got %v", result)
+	}
+}
+
+func TestExtractPackagesKeepsArgsAfterTerminator(t *testing.T) {
+	result := extractPackages(npmMgr(), []string{"--", "react", "--save-dev", "lodash"})
+	if len(result) != 2 || result[0] != "react" || result[1] != "lodash" {
+		t.Errorf("expected react and lodash after --, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsCustomNPMManagerWorkspaceValue(t *testing.T) {
+	mgr := &manager.Manager{Name: "custom-npm", Ecosystem: "npm", InstallCmds: []string{"install"}}
+	result := extractPackages(mgr, []string{"--workspace", "app", "react"})
+	if len(result) != 1 || result[0] != "react" {
+		t.Errorf("expected only react, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsNPMValueFlags(t *testing.T) {
+	result := extractPackages(npmMgr(), []string{"--save-prefix", "~", "--tag=next", "react"})
+	if len(result) != 1 || result[0] != "react" {
+		t.Errorf("expected only react, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsRequirementFile(t *testing.T) {
+	result := extractPackages(pipMgr(), []string{"-r", "requirements.txt", "requests"})
+	if len(result) != 1 || result[0] != "requests" {
+		t.Errorf("expected only requests, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsPythonManagerValueFlags(t *testing.T) {
+	mgr := &manager.Manager{Name: "poetry", Ecosystem: "PyPI", InstallCmds: []string{"add"}}
+	result := extractPackages(mgr, []string{"--group", "dev", "--source", "internal", "requests"})
+	if len(result) != 1 || result[0] != "requests" {
+		t.Errorf("expected only requests, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsEditablePath(t *testing.T) {
+	result := extractPackages(pipMgr(), []string{"-e", ".", "requests"})
+	if len(result) != 1 || result[0] != "requests" {
+		t.Errorf("expected only requests, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsUnsupportedSources(t *testing.T) {
+	result := extractPackages(npmMgr(), []string{"github:user/repo", "git@github.com:user/repo.git", "alias@npm:react@18", "react"})
+	if len(result) != 1 || result[0] != "react" {
+		t.Errorf("expected only react, got %v", result)
+	}
+}
+
 func TestExtractPackagesEmpty(t *testing.T) {
-	result := extractPackages([]string{})
+	result := extractPackages(npmMgr(), []string{})
 	if len(result) != 0 {
 		t.Errorf("expected empty result, got %v", result)
 	}

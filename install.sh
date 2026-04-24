@@ -60,6 +60,12 @@ download_file() {
   curl -fsSL "$url" -o "$dest"
 }
 
+checksum_for_asset() {
+  asset="$1"
+  checksums_file="$2"
+  awk -v asset="$asset" '$2 == asset { print $1; found=1; exit } END { if (!found) exit 1 }' "$checksums_file"
+}
+
 compute_checksum() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
@@ -124,9 +130,11 @@ main() {
   validate_os
   target="$(detect_arch)"
   version="$(resolve_version)"
+  artifact="pre-${target}"
   bin_url="$(build_url "$REPO" "$version" "$target")"
   checksums_url="https://github.com/${REPO}/releases/download/v${version}/checksums.txt"
   bundle_url="${checksums_url}.bundle"
+  asset_name="${bin_url##*/}"
 
   echo "pre: installing v${version} (${target}) to ${BIN_DIR}/pre"
 
@@ -138,11 +146,15 @@ main() {
   download_file "$bin_url" "$tmp_bin"
   download_file "$checksums_url" "$tmp_checksums"
 
-  expected="$(awk -v name="pre-${target}" '$2 == name {print $1}' "$tmp_checksums")"
-  verify_checksum "$tmp_bin" "$expected"
+  expected_checksum="$(checksum_for_asset "$asset_name" "$tmp_checksums")" || {
+    echo "pre: missing checksum for ${asset_name}" >&2
+    return 1
+  }
+  verify_checksum "$tmp_bin" "$expected_checksum"
 
   download_file "$bundle_url" "$tmp_bundle" 2>/dev/null || true
-  if [ -s "$tmp_bundle" ]; then
+
+  if [ -s "$tmp_bundle" ] && [ -s "$tmp_checksums" ]; then
     verify_cosign "$tmp_bundle" "$tmp_checksums"
   fi
 

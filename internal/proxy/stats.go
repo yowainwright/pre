@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/yowainwright/pre/internal/fileutil"
 )
 
 const defaultSystemScanTTL = 7 * 24 * time.Hour
@@ -78,5 +80,5 @@ func saveSystemStats(s SystemStats) {
 		return
 	}
 	data, _ := json.Marshal(s)
-	os.WriteFile(path, data, 0644)
+	_ = fileutil.AtomicWriteFile(path, data, 0644)
 }

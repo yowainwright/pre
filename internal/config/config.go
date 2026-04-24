@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/yowainwright/pre/internal/fileutil"
 )
 
 const (
@@ -34,7 +36,10 @@ type ManagerConfig struct {
 	InstallCmds []string `json:"installCmds"`
 }
 
-var configDirFn = os.UserConfigDir
+var (
+	configDirFn     = os.UserConfigDir
+	marshalIndentFn = json.MarshalIndent
+)
 
 func Load() *Config {
 	cfg := defaults()
@@ -68,11 +73,11 @@ func Save(cfg *Config) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := marshalIndentFn(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0644)
+	return fileutil.AtomicWriteFile(p, data, 0644)
 }
 
 func configPath() (string, error) {

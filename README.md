@@ -29,6 +29,14 @@ pre teardown # removes them
 
 After setup, every `npm install`, `pip install`, `brew install`, etc. goes through `pre` automatically — no extra commands needed.
 
+## Demo
+
+```sh
+make demo
+```
+
+Requires Docker. Builds a container with `pre` installed and shell hooks active, then plays through real scans across npm and pip — clean installs, CVE detection, and blocked installs. Colors render fully via the TTY allocated by `docker run -it`.
+
 ## How it works
 
 ```mermaid
@@ -178,3 +186,7 @@ make lint        # format check + vet
 make snapshot    # local release dry-run (all 4 binaries, no publish)
 make demo        # run in Docker
 ```
+
+## License
+
+MIT

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -63,7 +64,11 @@ func npmVersion(pkg string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("npm view: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	version := strings.TrimSpace(string(out))
+	if version == "" {
+		return "", fmt.Errorf("npm view: empty version for %q", pkg)
+	}
+	return version, nil
 }
 
 func goVersion(module string) (string, error) {
@@ -73,11 +78,18 @@ func goVersion(module string) (string, error) {
 		return "", fmt.Errorf("go proxy: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("go proxy: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
 	var result struct {
 		Version string `json:"Version"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", fmt.Errorf("parse go proxy: %w", err)
+	}
+	if result.Version == "" {
+		return "", fmt.Errorf("go proxy: empty version for %q", module)
 	}
 	return result.Version, nil
 }
@@ -88,6 +100,10 @@ func pypiVersion(pkg string) (string, error) {
 		return "", fmt.Errorf("pypi: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("pypi: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
 	var result struct {
 		Info struct {
 			Version string `json:"version"`
@@ -95,6 +111,9 @@ func pypiVersion(pkg string) (string, error) {
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", fmt.Errorf("parse pypi: %w", err)
+	}
+	if result.Info.Version == "" {
+		return "", fmt.Errorf("pypi: empty version for %q", pkg)
 	}
 	return result.Info.Version, nil
 }

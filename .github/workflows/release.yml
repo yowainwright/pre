@@ -1,5 +1,9 @@
 name: Release
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions: {}
 
 on:
@@ -8,7 +12,36 @@ on:
       - "v*"
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: Lint
+        run: make lint
+
+      - name: Unit tests
+        run: go test ./...
+
+      - name: Script tests
+        run: make script-test
+
+      - uses: goreleaser/goreleaser-action@ec59f474b9834571250b370d4735c50f8e2d1e29 # v7.0.0
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --skip=sign
+
   release:
+    needs: preflight
     runs-on: ubuntu-latest
     permissions:
       contents: write

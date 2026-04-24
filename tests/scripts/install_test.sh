@@ -46,6 +46,16 @@ check "build_url" \
   "https://github.com/yowainwright/pre/releases/download/v1.0.0/pre-darwin-arm64" \
   "$(build_url "yowainwright/pre" "1.0.0" "darwin-arm64")"
 
+# checksum_for_asset
+tmp_checksums="$(mktemp)"
+cat > "$tmp_checksums" <<'EOF'
+abc123  pre-darwin-arm64
+def456  pre-linux-amd64
+EOF
+check "checksum_for_asset finds checksum" "abc123" "$(checksum_for_asset "pre-darwin-arm64" "$tmp_checksums")"
+check "checksum_for_asset missing asset" "1" "$(exit_code checksum_for_asset "pre-linux-arm64" "$tmp_checksums")"
+rm -f "$tmp_checksums"
+
 # compute_checksum
 tmp="$(mktemp)"
 printf "hello" > "$tmp"

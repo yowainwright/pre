@@ -44,6 +44,22 @@ func TestReadPackageLockJSONSkipsRoot(t *testing.T) {
 	}
 }
 
+func TestReadPackageLockJSONPreservesMultipleVersions(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/package-lock.json", []byte(`{
+		"packages": {
+			"node_modules/lodash": {"version": "4.17.21"},
+			"node_modules/pkg-a/node_modules/lodash": {"version": "4.17.20"}
+		}
+	}`), 0644)
+
+	pkgs := readPackageLockJSON(dir)
+	m := toSet(pkgs)
+	if !m["lodash@4.17.21"] || !m["lodash@4.17.20"] {
+		t.Errorf("expected both lodash versions, got %v", pkgs)
+	}
+}
+
 func TestReadPackageLockJSONBadJSON(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(dir+"/package-lock.json", []byte("not json"), 0644)
@@ -89,6 +105,24 @@ func TestReadBunLockBadJSON(t *testing.T) {
 	os.WriteFile(dir+"/bun.lock", []byte("not json"), 0644)
 	if readBunLock(dir) != nil {
 		t.Error("expected nil for bad JSON")
+	}
+}
+
+func TestReadBunLockPreservesMultipleVersions(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/bun.lock", []byte(`{
+  "lockfileVersion": 0,
+  "packages": {
+    "lodash@4.17.21": ["lodash@4.17.21", {}],
+    "lodash@4.17.20": ["lodash@4.17.20", {}]
+  }
+}
+`), 0644)
+
+	pkgs := readBunLock(dir)
+	m := toSet(pkgs)
+	if !m["lodash@4.17.21"] || !m["lodash@4.17.20"] {
+		t.Errorf("expected both lodash versions, got %v", pkgs)
 	}
 }
 
@@ -167,6 +201,24 @@ packages:
 func TestReadPNPMLockMissing(t *testing.T) {
 	if readPNPMLock(t.TempDir()) != nil {
 		t.Error("expected nil for missing file")
+	}
+}
+
+func TestReadPNPMLockPreservesMultipleVersions(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/pnpm-lock.yaml", []byte(`lockfileVersion: '9.0'
+
+packages:
+  lodash@4.17.21:
+    resolution: {integrity: sha512-a}
+  lodash@4.17.20:
+    resolution: {integrity: sha512-b}
+`), 0644)
+
+	pkgs := readPNPMLock(dir)
+	m := toSet(pkgs)
+	if !m["lodash@4.17.21"] || !m["lodash@4.17.20"] {
+		t.Errorf("expected both lodash versions, got %v", pkgs)
 	}
 }
 
@@ -331,7 +383,7 @@ func TestReadBrewfileLockJSON(t *testing.T) {
 		t.Fatalf("expected 2, got %d: %v", len(pkgs), pkgs)
 	}
 	m := toSet(pkgs)
-	if !m["git@2.43.0"] || !m["ripgrep@14.0.3"] {
+	if !m["git@@2.43.0"] || !m["ripgrep@@14.0.3"] {
 		t.Errorf("unexpected packages: %v", pkgs)
 	}
 }
@@ -360,8 +412,8 @@ func TestReadBrewfileLockJSONNoVersion(t *testing.T) {
 	if !m["git"] {
 		t.Errorf("expected git without version, got %v", pkgs)
 	}
-	if !m["ripgrep@14.0.3"] {
-		t.Errorf("expected ripgrep@14.0.3, got %v", pkgs)
+	if !m["ripgrep@@14.0.3"] {
+		t.Errorf("expected ripgrep@@14.0.3, got %v", pkgs)
 	}
 }
 
@@ -488,7 +540,7 @@ func TestReadLockfileHomebrew(t *testing.T) {
 	}`), 0644)
 	mgr := &Manager{Ecosystem: "Homebrew"}
 	pkgs := ReadLockfile(mgr, dir)
-	if len(pkgs) != 1 || pkgs[0] != "git@2.43.0" {
+	if len(pkgs) != 1 || pkgs[0] != "git@@2.43.0" {
 		t.Errorf("unexpected: %v", pkgs)
 	}
 }
@@ -510,11 +562,11 @@ func TestReadPackageLockJSONNested(t *testing.T) {
 	}`), 0644)
 	pkgs := readPackageLockJSON(dir)
 	m := toSet(pkgs)
-	if !m["bar@1.0.0"] && !m["bar@2.0.0"] {
-		t.Errorf("expected bar in result, got %v", pkgs)
+	if !m["bar@1.0.0"] || !m["bar@2.0.0"] {
+		t.Errorf("expected both bar versions in result, got %v", pkgs)
 	}
-	if len(pkgs) != 1 {
-		t.Errorf("expected 1 (deduped), got %d: %v", len(pkgs), pkgs)
+	if len(pkgs) != 2 {
+		t.Errorf("expected 2 (both versions preserved), got %d: %v", len(pkgs), pkgs)
 	}
 }
 
