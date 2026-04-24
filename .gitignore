@@ -3,7 +3,10 @@ dist/
 coverage.out
 
 # Demo (generated in Docker)
+opts/demo/package.json
 opts/demo/package-lock.json
+package.json
+package-lock.json
 
 # Logs
 logs

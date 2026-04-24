@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 
 reset="\033[0m"
-bold="\033[1m"
 dim="\033[2m"
-red="\033[31m"
 cyan="\033[36m"
 yellow="\033[33m"
 fluo_yellow="\033[38;5;226m"
