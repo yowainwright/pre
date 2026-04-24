@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yowainwright/pre/internal/cache"
 	"github.com/yowainwright/pre/internal/config"
@@ -91,10 +93,23 @@ func handleConfig(args []string, cfg *config.Config, stdout, stderr io.Writer) i
 	case "endpoint":
 		cfg.API.Endpoint = val
 	case "ttl":
+		if _, err := time.ParseDuration(val); err != nil {
+			fmt.Fprintf(stderr, "pre config: invalid duration for %s: %q\n", args[1], val)
+			return 1
+		}
 		cfg.Cache.TTL = val
 	case "systemScan":
-		cfg.SystemScan = val == "true"
+		enabled, err := strconv.ParseBool(val)
+		if err != nil {
+			fmt.Fprintf(stderr, "pre config: invalid boolean for %s: %q\n", args[1], val)
+			return 1
+		}
+		cfg.SystemScan = enabled
 	case "systemTTL":
+		if _, err := time.ParseDuration(val); err != nil {
+			fmt.Fprintf(stderr, "pre config: invalid duration for %s: %q\n", args[1], val)
+			return 1
+		}
 		cfg.SystemTTL = val
 	default:
 		fmt.Fprintf(stderr, "pre config: unknown key %q (api.endpoint, cache.ttl, systemScan, systemTTL)\n", args[1])

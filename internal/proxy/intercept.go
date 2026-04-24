@@ -122,11 +122,18 @@ func countUncached(mgr *manager.Manager, packages []string, c cache.Cache) int {
 	n := 0
 	for _, pkg := range packages {
 		name, version := manager.ParseSpec(mgr.Ecosystem, pkg)
-		if version == "" || !cache.Hit(c, cache.Key(mgr.Ecosystem, name, version)) {
+		if !hasExactCacheHit(mgr, c, name, version) {
 			n++
 		}
 	}
 	return n
+}
+
+func hasExactCacheHit(mgr *manager.Manager, c cache.Cache, name, version string) bool {
+	return version != "" &&
+		!shouldResolveVersion(mgr.Ecosystem, version) &&
+		isExactVersion(mgr.Ecosystem, version) &&
+		cache.Hit(c, cache.Key(mgr.Ecosystem, name, version))
 }
 
 func hasCriticalVulns(r scanResult) bool {

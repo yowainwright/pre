@@ -34,7 +34,10 @@ var (
 	acquireSystemScanLock = tryAcquireSystemScanLock
 )
 
-var npmExactVersionRE = regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+var (
+	npmExactVersionRE = regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+	goExactVersionRE  = regexp.MustCompile(`^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+)
 
 const systemScanLockStaleAfter = 30 * time.Minute
 
@@ -169,12 +172,10 @@ func scanAllWithPolicy(mgr *manager.Manager, packages []string, c cache.Cache, a
 
 	for i, pkg := range packages {
 		name, version := manager.ParseSpec(mgr.Ecosystem, pkg)
-		if version != "" && !shouldResolveVersion(mgr.Ecosystem, version) {
+		if hasExactCacheHit(mgr, c, name, version) {
 			label := name + "@" + version
-			if cache.Hit(c, cache.Key(mgr.Ecosystem, name, version)) {
-				results[i] = scanResult{name: name, version: version, label: label, cached: true}
-				continue
-			}
+			results[i] = scanResult{name: name, version: version, label: label, cached: true}
+			continue
 		}
 		pending = append(pending, work{idx: i, name: name, version: version})
 	}
@@ -299,7 +300,11 @@ func resolveScanVersion(mgr *manager.Manager, name, version string, allowMissing
 		}
 		return resolved, name + "@" + resolved, true, isExactVersion(mgr.Ecosystem, resolved), nil
 	case shouldResolveVersion(mgr.Ecosystem, version):
-		resolved, err := resolveVersionFn(mgr, name)
+		target := name
+		if mgr.Ecosystem == "npm" && strings.ToLower(version) != "latest" {
+			target = label
+		}
+		resolved, err := resolveVersionFn(mgr, target)
 		if err != nil {
 			return "", label, false, false, err
 		}
@@ -345,8 +350,11 @@ func isExactVersion(ecosystem, version string) bool {
 	if version == "" {
 		return false
 	}
-	if ecosystem == "npm" {
+	switch ecosystem {
+	case "npm":
 		return npmExactVersionRE.MatchString(version)
+	case "Go":
+		return goExactVersionRE.MatchString(version)
 	}
 	return true
 }

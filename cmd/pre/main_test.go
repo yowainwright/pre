@@ -129,6 +129,57 @@ func TestRunConfigSetUnknownKey(t *testing.T) {
 	}
 }
 
+func TestRunConfigUsageErrors(t *testing.T) {
+	tests := [][]string{
+		{"config", "get", "cache.ttl"},
+		{"config", "set", "cache.ttl"},
+	}
+	for _, args := range tests {
+		var out, errOut bytes.Buffer
+		code := run(args, &out, &errOut)
+		if code != 1 {
+			t.Errorf("%v: expected exit 1, got %d", args, code)
+		}
+		if !strings.Contains(errOut.String(), "usage:") {
+			t.Errorf("%v: expected usage error, got: %s", args, errOut.String())
+		}
+	}
+}
+
+func TestRunConfigRejectsInvalidDuration(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	tests := [][]string{
+		{"config", "set", "cache.ttl", "soon"},
+		{"config", "set", "systemTTL", "weekly"},
+	}
+	for _, args := range tests {
+		var out, errOut bytes.Buffer
+		code := run(args, &out, &errOut)
+		if code != 1 {
+			t.Errorf("%v: expected exit 1, got %d", args, code)
+		}
+		if !strings.Contains(errOut.String(), "invalid duration") {
+			t.Errorf("%v: expected invalid duration error, got: %s", args, errOut.String())
+		}
+	}
+}
+
+func TestRunConfigRejectsInvalidSystemScanBool(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"config", "set", "systemScan", "sometimes"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "invalid boolean") {
+		t.Errorf("expected invalid boolean error, got: %s", errOut.String())
+	}
+}
+
 func TestRunStatus(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := run([]string{"status"}, &out, &errOut)

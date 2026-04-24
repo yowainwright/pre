@@ -354,10 +354,22 @@ func TestCountUncachedTreatsFloatingVersionsAsUncached(t *testing.T) {
 	mgr := npmMgr()
 	c := make(cache.Cache)
 	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
+	cache.Set(c, cache.Key("npm", "react", "latest"))
 
 	n := countUncached(mgr, []string{"react@latest"}, c)
 	if n != 1 {
 		t.Errorf("expected 1 uncached for floating version, got %d", n)
+	}
+}
+
+func TestCountUncachedTreatsConstraintsAsUncached(t *testing.T) {
+	mgr := npmMgr()
+	c := make(cache.Cache)
+	cache.Set(c, cache.Key("npm", "react", "^18.0.0"))
+
+	n := countUncached(mgr, []string{"react@^18.0.0"}, c)
+	if n != 1 {
+		t.Errorf("expected 1 uncached for semver constraint, got %d", n)
 	}
 }
 
@@ -458,6 +470,58 @@ func TestScanPackageResolvesLatestVersionTag(t *testing.T) {
 	}
 	if r.version != "18.3.1" {
 		t.Errorf("expected resolved version 18.3.1, got %q", r.version)
+	}
+}
+
+func TestScanPackageResolvesNPMDistTag(t *testing.T) {
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		if name != "react" || ver != "19.0.0-rc.1" {
+			t.Errorf("expected resolved react@19.0.0-rc.1, got %s@%s", name, ver)
+		}
+		return nil, nil
+	})()
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		if pkg != "react@next" {
+			t.Errorf("expected package spec react@next, got %q", pkg)
+		}
+		return "19.0.0-rc.1", nil
+	})()
+
+	r := scanPackage(npmMgr(), "react@next", make(cache.Cache))
+	if !r.updated {
+		t.Error("expected dist-tag to trigger version resolution")
+	}
+	if r.version != "19.0.0-rc.1" {
+		t.Errorf("expected resolved version 19.0.0-rc.1, got %q", r.version)
+	}
+}
+
+func TestScanPackageGoBranchDoesNotResolveAsLatest(t *testing.T) {
+	resolveCalled := false
+	checkedVersion := "unset"
+
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		resolveCalled = true
+		return "v1.2.3", nil
+	})()
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		checkedVersion = ver
+		return nil, nil
+	})()
+
+	c := make(cache.Cache)
+	r := scanPackage(goMgr(), "golang.org/x/tools/gopls@master", c)
+	if resolveCalled {
+		t.Error("expected floating Go branch to avoid latest-version resolution")
+	}
+	if checkedVersion != "" {
+		t.Errorf("expected package-level Go check, got version %q", checkedVersion)
+	}
+	if r.cacheable {
+		t.Error("expected floating Go branch result to be non-cacheable")
+	}
+	if cache.Hit(c, cache.Key("Go", "golang.org/x/tools/gopls", "master")) {
+		t.Error("expected floating Go branch not to be cached as an exact version")
 	}
 }
 
@@ -663,8 +727,38 @@ func TestExtractPackagesSkipsWorkspaceValue(t *testing.T) {
 	}
 }
 
+func TestExtractPackagesKeepsArgsAfterTerminator(t *testing.T) {
+	result := extractPackages(npmMgr(), []string{"--", "react", "--save-dev", "lodash"})
+	if len(result) != 2 || result[0] != "react" || result[1] != "lodash" {
+		t.Errorf("expected react and lodash after --, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsCustomNPMManagerWorkspaceValue(t *testing.T) {
+	mgr := &manager.Manager{Name: "custom-npm", Ecosystem: "npm", InstallCmds: []string{"install"}}
+	result := extractPackages(mgr, []string{"--workspace", "app", "react"})
+	if len(result) != 1 || result[0] != "react" {
+		t.Errorf("expected only react, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsNPMValueFlags(t *testing.T) {
+	result := extractPackages(npmMgr(), []string{"--save-prefix", "~", "--tag=next", "react"})
+	if len(result) != 1 || result[0] != "react" {
+		t.Errorf("expected only react, got %v", result)
+	}
+}
+
 func TestExtractPackagesSkipsRequirementFile(t *testing.T) {
 	result := extractPackages(pipMgr(), []string{"-r", "requirements.txt", "requests"})
+	if len(result) != 1 || result[0] != "requests" {
+		t.Errorf("expected only requests, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsPythonManagerValueFlags(t *testing.T) {
+	mgr := &manager.Manager{Name: "poetry", Ecosystem: "PyPI", InstallCmds: []string{"add"}}
+	result := extractPackages(mgr, []string{"--group", "dev", "--source", "internal", "requests"})
 	if len(result) != 1 || result[0] != "requests" {
 		t.Errorf("expected only requests, got %v", result)
 	}
@@ -674,6 +768,13 @@ func TestExtractPackagesSkipsEditablePath(t *testing.T) {
 	result := extractPackages(pipMgr(), []string{"-e", ".", "requests"})
 	if len(result) != 1 || result[0] != "requests" {
 		t.Errorf("expected only requests, got %v", result)
+	}
+}
+
+func TestExtractPackagesSkipsUnsupportedSources(t *testing.T) {
+	result := extractPackages(npmMgr(), []string{"github:user/repo", "git@github.com:user/repo.git", "alias@npm:react@18", "react"})
+	if len(result) != 1 || result[0] != "react" {
+		t.Errorf("expected only react, got %v", result)
 	}
 }
 
