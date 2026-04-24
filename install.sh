@@ -125,27 +125,24 @@ main() {
   target="$(detect_arch)"
   version="$(resolve_version)"
   bin_url="$(build_url "$REPO" "$version" "$target")"
-  sum_url="${bin_url}.sha256"
-  bundle_url="https://github.com/${REPO}/releases/download/v${version}/checksums.txt.bundle"
   checksums_url="https://github.com/${REPO}/releases/download/v${version}/checksums.txt"
+  bundle_url="${checksums_url}.bundle"
 
   echo "pre: installing v${version} (${target}) to ${BIN_DIR}/pre"
 
   tmp_bin="$(mktemp)"
-  tmp_sum="$(mktemp)"
-  tmp_bundle="$(mktemp)"
   tmp_checksums="$(mktemp)"
-  trap 'rm -f "$tmp_bin" "$tmp_sum" "$tmp_bundle" "$tmp_checksums"' EXIT
+  tmp_bundle="$(mktemp)"
+  trap 'rm -f "$tmp_bin" "$tmp_checksums" "$tmp_bundle"' EXIT
 
   download_file "$bin_url" "$tmp_bin"
-  download_file "$sum_url" "$tmp_sum"
+  download_file "$checksums_url" "$tmp_checksums"
 
-  verify_checksum "$tmp_bin" "$(cat "$tmp_sum")"
+  expected="$(awk -v name="pre-${target}" '$2 == name {print $1}' "$tmp_checksums")"
+  verify_checksum "$tmp_bin" "$expected"
 
   download_file "$bundle_url" "$tmp_bundle" 2>/dev/null || true
-  download_file "$checksums_url" "$tmp_checksums" 2>/dev/null || true
-
-  if [ -s "$tmp_bundle" ] && [ -s "$tmp_checksums" ]; then
+  if [ -s "$tmp_bundle" ]; then
     verify_cosign "$tmp_bundle" "$tmp_checksums"
   fi
 
