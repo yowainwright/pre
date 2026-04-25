@@ -141,3 +141,72 @@ func TestInterceptChecksPackage(t *testing.T) {
 		t.Errorf("expected security check output, got: %s", stdout)
 	}
 }
+
+func runInDir(dir string, env []string, args ...string) (stdout, stderr string, code int) {
+	cmd := exec.Command(preBin, args...)
+	cmd.Dir = dir
+	cmd.Env = env
+	var out, errOut bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+	err := cmd.Run()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			code = exitErr.ExitCode()
+		} else {
+			code = 1
+		}
+	}
+	return out.String(), errOut.String(), code
+}
+
+func TestBunLockNewFormatReadsExactVersions(t *testing.T) {
+	if _, err := exec.LookPath("npm"); err != nil {
+		t.Skip("npm not available")
+	}
+	home := t.TempDir()
+	dir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"test","version":"1.0.0","dependencies":{"react":"^18.0.0"}}`), 0644)
+	os.WriteFile(filepath.Join(dir, "bun.lock"), []byte(`# Bun Lockfile v1
+
+{
+  "lockfileVersion": 1,
+  "packages": {
+    "react": ["react@18.2.0", {}, "sha512-abc"]
+  }
+}
+`), 0644)
+
+	stdout, _, _ := runInDir(dir, baseEnv(home), "npm", "install", "--dry-run")
+
+	if strings.Contains(stdout, "exit status 1") {
+		t.Errorf("got npm view error — bun.lock new format not parsed correctly:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "resolution failed") {
+		t.Errorf("got resolution error — bun.lock new format not parsed correctly:\n%s", stdout)
+	}
+	hasOutput := strings.Contains(stdout, "packages clean") || strings.Contains(stdout, "checking")
+	if !hasOutput {
+		t.Errorf("expected scan output, got:\n%s", stdout)
+	}
+}
+
+func TestSemverConstraintResolvesWithoutError(t *testing.T) {
+	if _, err := exec.LookPath("npm"); err != nil {
+		t.Skip("npm not available")
+	}
+	home := t.TempDir()
+	dir := t.TempDir()
+
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"test","version":"1.0.0","dependencies":{"react":"^18.0.0"}}`), 0644)
+
+	stdout, _, _ := runInDir(dir, baseEnv(home), "npm", "install", "--dry-run")
+
+	if strings.Contains(stdout, "exit status 1") {
+		t.Errorf("npm view called with range — semver constraint not handled correctly:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "resolution failed") {
+		t.Errorf("got resolution error for semver constraint:\n%s", stdout)
+	}
+}

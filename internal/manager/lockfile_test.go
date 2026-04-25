@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 )
@@ -143,6 +144,23 @@ func TestReadBunLockKeyNoAt(t *testing.T) {
 	}
 	if m["badkey"] {
 		t.Error("expected badkey to be skipped")
+	}
+}
+
+func TestBunPackageSpecBadValue(t *testing.T) {
+	cases := []struct {
+		key string
+		raw json.RawMessage
+	}{
+		{"react", json.RawMessage(`not-json`)},
+		{"react", json.RawMessage(`[]`)},
+		{"react", json.RawMessage(`[123]`)},
+		{"react", json.RawMessage(`["noatsign"]`)},
+	}
+	for _, c := range cases {
+		if got := bunPackageSpec(c.key, c.raw); got != "" {
+			t.Errorf("bunPackageSpec(%q, %s) = %q, want empty", c.key, c.raw, got)
+		}
 	}
 }
 
