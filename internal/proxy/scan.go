@@ -315,7 +315,7 @@ func resolveScanVersion(mgr *manager.Manager, name, version string, allowMissing
 	case isExactVersion(mgr.Ecosystem, version):
 		return version, label, false, true, nil
 	case canResolveConstraint(mgr.Ecosystem, version):
-		resolved, err := resolveVersionFn(mgr, name+"@"+version)
+		resolved, err := resolveVersionFn(mgr, name)
 		if err != nil {
 			return "", label, false, false, err
 		}
