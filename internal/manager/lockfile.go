@@ -84,20 +84,35 @@ func readBunLock(dir string) []string {
 	}
 	seen := make(map[string]bool, len(lockfile.Packages))
 	var result []string
-	for key := range lockfile.Packages {
-		atIdx := strings.LastIndex(key, "@")
-		if atIdx <= 0 {
+	for key, raw := range lockfile.Packages {
+		spec := bunPackageSpec(key, raw)
+		if spec == "" || seen[spec] {
 			continue
 		}
-		name := key[:atIdx]
-		version := key[atIdx+1:]
-		spec := name + "@" + version
-		if !seen[spec] {
-			seen[spec] = true
-			result = append(result, spec)
-		}
+		seen[spec] = true
+		result = append(result, spec)
 	}
 	return result
+}
+
+func bunPackageSpec(key string, raw json.RawMessage) string {
+	atIdx := strings.LastIndex(key, "@")
+	if atIdx > 0 {
+		return key
+	}
+	var parts []json.RawMessage
+	if json.Unmarshal(raw, &parts) != nil || len(parts) == 0 {
+		return ""
+	}
+	var nameVersion string
+	if json.Unmarshal(parts[0], &nameVersion) != nil {
+		return ""
+	}
+	atIdx = strings.LastIndex(nameVersion, "@")
+	if atIdx <= 0 {
+		return ""
+	}
+	return nameVersion
 }
 
 func readPNPMLock(dir string) []string {

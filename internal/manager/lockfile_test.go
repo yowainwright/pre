@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 )
@@ -143,6 +144,47 @@ func TestReadBunLockKeyNoAt(t *testing.T) {
 	}
 	if m["badkey"] {
 		t.Error("expected badkey to be skipped")
+	}
+}
+
+func TestBunPackageSpecBadValue(t *testing.T) {
+	cases := []struct {
+		key string
+		raw json.RawMessage
+	}{
+		{"react", json.RawMessage(`not-json`)},
+		{"react", json.RawMessage(`[]`)},
+		{"react", json.RawMessage(`[123]`)},
+		{"react", json.RawMessage(`["noatsign"]`)},
+	}
+	for _, c := range cases {
+		if got := bunPackageSpec(c.key, c.raw); got != "" {
+			t.Errorf("bunPackageSpec(%q, %s) = %q, want empty", c.key, c.raw, got)
+		}
+	}
+}
+
+func TestReadBunLockNewFormat(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/bun.lock", []byte(`# Bun Lockfile v1
+
+{
+  "lockfileVersion": 1,
+  "packages": {
+    "react": ["react@18.2.0", {}, "sha512-abc"],
+    "@opentelemetry/api": ["@opentelemetry/api@1.9.0", {}, "sha512-def"],
+    "next": ["next@15.2.3", {}, "sha512-ghi"]
+  }
+}
+`), 0644)
+
+	pkgs := readBunLock(dir)
+	if len(pkgs) != 3 {
+		t.Fatalf("expected 3, got %d: %v", len(pkgs), pkgs)
+	}
+	m := toSet(pkgs)
+	if !m["react@18.2.0"] || !m["@opentelemetry/api@1.9.0"] || !m["next@15.2.3"] {
+		t.Errorf("unexpected packages: %v", pkgs)
 	}
 }
 

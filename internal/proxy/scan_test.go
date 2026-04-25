@@ -411,8 +411,8 @@ func TestScanAllResolvesNPMSemverConstraint(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if resolveArg != "react@^18.0.0" {
-		t.Errorf("expected constraint-aware resolution, got %q", resolveArg)
+	if resolveArg != "react" {
+		t.Errorf("expected name-only resolution for semver constraint, got %q", resolveArg)
 	}
 	if results[0].version != "18.2.0" || !results[0].cacheable {
 		t.Errorf("expected cacheable resolved result, got %+v", results[0])
@@ -441,8 +441,8 @@ func TestScanAllIgnoresNonExactCacheHit(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if resolveArg != "react@^18.0.0" {
-		t.Errorf("expected constraint-aware resolution, got %q", resolveArg)
+	if resolveArg != "react" {
+		t.Errorf("expected name-only resolution for semver constraint, got %q", resolveArg)
 	}
 	if !securityCalled {
 		t.Error("expected security check after resolving non-exact cached spec")

@@ -62,11 +62,11 @@ func brewVersion(name string) (string, error) {
 func npmVersion(pkg string) (string, error) {
 	out, err := runCmd("npm", "view", pkg, "version")
 	if err != nil {
-		return "", fmt.Errorf("npm view: %w", err)
+		return "", fmt.Errorf("npm: version unavailable")
 	}
 	version := strings.TrimSpace(string(out))
 	if version == "" {
-		return "", fmt.Errorf("npm view: empty version for %q", pkg)
+		return "", fmt.Errorf("npm: version unavailable")
 	}
 	return version, nil
 }
