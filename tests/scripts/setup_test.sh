@@ -29,6 +29,22 @@ check "cmd_exists finds sh"       "0" "$(exit_code cmd_exists "sh")"
 check "cmd_exists finds ls"       "0" "$(exit_code cmd_exists "ls")"
 check "cmd_exists rejects fake"   "1" "$(exit_code cmd_exists "notarealcmd_xyz")"
 
+check_deps_missing_optional_counts() (
+  passed=0
+  failed=0
+  warned=0
+  cmd_exists() {
+    case "$1" in
+      svu|cosign) return 1 ;;
+      *)          return 0 ;;
+    esac
+  }
+  check_deps >/dev/null
+  printf "%s/%s/%s" "$passed" "$warned" "$failed"
+)
+
+check "check_deps treats svu optional" "6/2/0" "$(check_deps_missing_optional_counts)"
+
 # gh_authed
 check "gh_authed passes with true"  "0" "$(exit_code gh_authed "true")"
 check "gh_authed fails with false"  "1" "$(exit_code gh_authed "false")"
