@@ -25,9 +25,33 @@ Every release ships with SHA256 checksums and a cosign signature. The install sc
 ```sh
 pre setup    # adds shell hooks to ~/.zshrc or ~/.bashrc
 pre teardown # removes them
+pre status   # shows install state, cache, managers, and scan status
 ```
 
 After setup, every `npm install`, `pip install`, `brew install`, etc. goes through `pre` automatically — no extra commands needed.
+
+## Package Manager
+
+```sh
+pre manage
+# or
+pre m
+```
+
+The manager opens a full-screen, keyboard-driven terminal UI for installed packages from available managers. It supports themed rows, arrow or `j`/`k` navigation, live `/` search with no enter-to-apply step, `m` manager toggles, `enter`/`o` action dialogs, `x`/`esc` dialog close, and `q` or `ctrl+c` exit. The default theme uses Catppuccin Mocha truecolor values; set `PRE_MANAGE_THEME=contrast` for a brighter theme or `PRE_MANAGE_THEME=mono` for no color. Package actions run back through `pre <manager> ...`, so install and downgrade flows still use the vulnerability scan before the package manager runs.
+
+Non-interactive package commands are available too:
+
+```sh
+pre installed                    # package inventory
+pre manage --package react --manager npm --upgrade
+pre manage --package react --manager npm --downgrade 18.2.0
+pre manage --package ripgrep --uninstall
+pre install npm react
+pre update npm react
+pre downgrade pip urllib3 1.24.1
+pre uninstall brew ripgrep
+```
 
 ## Demo
 
@@ -84,10 +108,22 @@ Supported managers: `brew`, `npm`, `pnpm`, `bun`, `go`, `pip`, `pip3`, `uv`, `po
 ```sh
 pre setup                     # inject shell hooks
 pre teardown                  # remove shell hooks
-pre status                    # managers, cache size, last system scan
+pre status                    # pre install state, managers, cache size, last system scan
+pre manage                    # package manager TUI
+pre m                         # short alias for pre manage
+pre installed                 # package inventory
+pre manage --package <pkg> --manager <mgr> --upgrade [version]
+pre manage --package <pkg> --manager <mgr> --downgrade <version>
+pre manage --package <pkg> --manager <mgr> --uninstall
+pre install <mgr> <pkg>       # install a package through pre
+pre update <mgr> [pkg]        # update a package, or all where supported
+pre downgrade <mgr> <pkg> <v> # install an older package version
+pre uninstall <mgr> <pkg>     # remove a package
 pre config                    # show current config
 pre config set <key> <value>  # update a config value
 pre scan system               # scan all cached packages now
+pre self update               # update the pre binary
+pre self uninstall [--purge]  # remove pre itself
 ```
 
 ## Configuration
@@ -130,12 +166,22 @@ Entries matching a built-in `name` replace it; new names extend the list.
 - Binaries signed with cosign (sigstore keyless) on every release
 - SHA256 checksums for all platforms
 
-## Uninstall
+## Update pre
 
 ```sh
-pre teardown && rm $(which pre)
-# or: brew uninstall pre
+pre self update
 ```
+
+Homebrew installs run `brew upgrade pre`. Curl/manual installs rerun the checksum-verifying installer into the current binary directory.
+
+## Uninstall pre
+
+```sh
+pre self uninstall
+pre self uninstall --purge # also removes config/cache data
+```
+
+Homebrew installs run `brew uninstall pre`. Manual installs remove the current `pre` binary after removing shell hooks.
 
 ## Project layout
 
@@ -183,6 +229,10 @@ make test        # unit tests
 make e2e         # end-to-end (requires npm)
 make integration # live API calls (requires network)
 make lint        # format check + vet
+make gosec       # static security checks (requires Go 1.26+)
+make vuln        # govulncheck scan (requires network)
+make security    # govulncheck + gosec
+make screenshots # generate TUI SVG screenshots in dist/screenshots
 make snapshot    # local release dry-run (all 4 binaries, no publish)
 make demo        # run in Docker
 ```

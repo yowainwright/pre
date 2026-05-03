@@ -56,12 +56,16 @@ func Load() Cache {
 	return loadFromPath(p)
 }
 
+func Path() (string, error) {
+	return cacheFile()
+}
+
 func Save(c Cache) {
 	p, err := cacheFile()
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		return
 	}
 	release, err := acquireLock(filepath.Join(filepath.Dir(p), "versions.lock"))
@@ -81,7 +85,7 @@ func Update(fn func(Cache)) {
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		return
 	}
 
@@ -175,13 +179,13 @@ func loadFromPath(path string) Cache {
 
 func writeCache(path string, c Cache) {
 	data, _ := json.Marshal(migrate(c))
-	_ = fileutil.AtomicWriteFile(path, data, 0644)
+	_ = fileutil.AtomicWriteFile(path, data, 0600)
 }
 
 func acquireLock(path string) (func(), error) {
 	deadline := time.Now().Add(cacheLockTimeout)
 	for {
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err == nil {
 			_, _ = file.WriteString(time.Now().Format(time.RFC3339Nano))
 			_ = file.Close()

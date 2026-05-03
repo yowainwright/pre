@@ -18,7 +18,7 @@ var (
 	runCmd      = func(name string, args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return exec.CommandContext(ctx, name, args...).Output()
+		return exec.CommandContext(ctx, name, args...).Output() // #nosec G204 -- executable names are package manager tools.
 	}
 )
 

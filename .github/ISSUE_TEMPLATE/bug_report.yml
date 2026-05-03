@@ -10,6 +10,15 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      description: Exact command that failed.
+      placeholder: pre manage
+    validations:
+      required: true
+
   - type: textarea
     id: reproduce
     attributes:
@@ -28,13 +37,49 @@ body:
       required: true
 
   - type: textarea
+    id: logs
+    attributes:
+      label: Output / Logs
+      description: Paste relevant terminal output. Redact tokens, private package names, or internal URLs.
+      render: shell
+
+  - type: textarea
     id: environment
     attributes:
       label: Environment
       placeholder: |
-        - OS: macOS 14 / Ubuntu 22.04
+        - OS: macOS 15 / Ubuntu 24.04
         - Shell: zsh / bash
-        - pre version: v0.1.0
-        - Package manager: npm 10.x
+        - Terminal: Terminal.app / iTerm2 / Ghostty / Windows Terminal
+        - Install method: Homebrew / curl installer / source
+        - pre version: v0.2.0
+        - Go version: go1.26.x
+        - Package manager: npm 10.x / pnpm 9.x / pip 24.x / brew 4.x
     validations:
       required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - TUI / pre manage
+        - package install/update/downgrade/uninstall
+        - security scan / OSV
+        - shell setup / teardown
+        - release / install script
+        - docs
+        - other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues.
+          required: true
+        - label: I removed secrets or private tokens from logs.
+          required: true
