@@ -167,7 +167,7 @@ func confirm(prompt string) bool {
 }
 
 func execReal(name string, args []string) {
-	c := exec.Command(name, args...)
+	c := exec.Command(name, args...) // #nosec G204 -- proxy intentionally execs the requested package manager.
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr

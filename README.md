@@ -229,6 +229,10 @@ make test        # unit tests
 make e2e         # end-to-end (requires npm)
 make integration # live API calls (requires network)
 make lint        # format check + vet
+make gosec       # static security checks (requires Go 1.26+)
+make vuln        # govulncheck scan (requires network)
+make security    # govulncheck + gosec
+make screenshots # generate TUI SVG screenshots in dist/screenshots
 make snapshot    # local release dry-run (all 4 binaries, no publish)
 make demo        # run in Docker
 ```

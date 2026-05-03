@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/yowainwright/pre/security/advisories/new
+    about: Report vulnerabilities privately through GitHub Security Advisories.
+  - name: Questions and usage help
+    url: https://github.com/yowainwright/pre/discussions
+    about: Ask usage questions or discuss ideas before opening an issue.
