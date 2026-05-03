@@ -56,6 +56,10 @@ func Load() Cache {
 	return loadFromPath(p)
 }
 
+func Path() (string, error) {
+	return cacheFile()
+}
+
 func Save(c Cache) {
 	p, err := cacheFile()
 	if err != nil {

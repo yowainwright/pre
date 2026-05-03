@@ -30,6 +30,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if len(args) < 1 {
 		fmt.Fprintln(stderr, "usage: pre <manager> <command> [args]")
+		fmt.Fprintln(stderr, "       pre manage | m | installed | install | update | downgrade | uninstall")
 		fmt.Fprintln(stderr, "       pre setup | teardown | status | config [set <key> <value>]")
 		return 1
 	}
@@ -58,6 +59,30 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return handleConfig(args[1:], cfg, stdout, stderr)
 	case "status":
 		handleStatus(cfg, stdout)
+	case "installed":
+		return handlePackageInventory(stdout, stderr)
+	case "manage", "m", "tui":
+		return handleManage(args[1:], stdout, stderr)
+	case "install":
+		return handlePackageAction(actionInstall, args[1:], stdout, stderr)
+	case "update", "upgrade":
+		if len(args) == 1 {
+			fmt.Fprintln(stderr, "usage: pre update <manager> [package]")
+			return 1
+		}
+		return handlePackageAction(actionUpdate, args[1:], stdout, stderr)
+	case "downgrade":
+		return handlePackageAction(actionDowngrade, args[1:], stdout, stderr)
+	case "uninstall":
+		if len(args) == 1 {
+			fmt.Fprintln(stderr, "usage: pre uninstall <manager> <package>")
+			return 1
+		}
+		return handlePackageAction(actionUninstall, args[1:], stdout, stderr)
+	case "packages":
+		return handlePackages(args[1:], stdout, stderr)
+	case "self":
+		return handleSelf(args[1:], cfg, stdout, stderr)
 	case "--version", "-v":
 		fmt.Fprintln(stdout, version)
 	default:
@@ -69,6 +94,27 @@ func run(args []string, stdout, stderr io.Writer) int {
 		proxy.Intercept(mgr, args[1:])
 	}
 	return 0
+}
+
+func handlePackages(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return handlePackageInventory(stdout, stderr)
+	}
+	switch args[0] {
+	case "manage", "m", "tui":
+		return handleManage(args[1:], stdout, stderr)
+	case "install":
+		return handlePackageAction(actionInstall, args[1:], stdout, stderr)
+	case "update", "upgrade":
+		return handlePackageAction(actionUpdate, args[1:], stdout, stderr)
+	case "downgrade":
+		return handlePackageAction(actionDowngrade, args[1:], stdout, stderr)
+	case "uninstall", "remove":
+		return handlePackageAction(actionUninstall, args[1:], stdout, stderr)
+	default:
+		fmt.Fprintln(stderr, "usage: pre packages [manage|install|update|downgrade|uninstall]")
+		return 1
+	}
 }
 
 func handleConfig(args []string, cfg *config.Config, stdout, stderr io.Writer) int {
@@ -135,6 +181,10 @@ func normalizeConfigKey(key string) string {
 }
 
 func handleStatus(cfg *config.Config, stdout io.Writer) {
+	info := collectInstallInfo(cfg)
+	renderInstallInfo(stdout, info)
+	fmt.Fprintln(stdout)
+
 	mgrs := manager.All()
 	fmt.Fprintf(stdout, "managers (%d):\n", len(mgrs))
 	for _, m := range mgrs {

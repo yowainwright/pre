@@ -80,6 +80,10 @@ func Save(cfg *Config) error {
 	return fileutil.AtomicWriteFile(p, data, 0644)
 }
 
+func Path() (string, error) {
+	return configPath()
+}
+
 func configPath() (string, error) {
 	dir, err := configDirFn()
 	if err != nil {
