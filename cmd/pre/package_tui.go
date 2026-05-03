@@ -193,7 +193,7 @@ func (t manageTerminal) suspend() {
 	if !t.raw || t.saved == "" {
 		return
 	}
-	cmd := exec.Command("stty", t.saved)
+	cmd := exec.Command("stty", t.saved) // #nosec G204 -- saved terminal state is captured from `stty -g`.
 	cmd.Stdin = t.input
 	_ = cmd.Run()
 }
@@ -991,8 +991,9 @@ func readManageKey(r io.Reader) (int, error) {
 
 func readEscapeKey(r io.Reader) int {
 	if file, ok := r.(*os.File); ok {
-		_ = syscall.SetNonblock(int(file.Fd()), true)
-		defer syscall.SetNonblock(int(file.Fd()), false)
+		if err := setNonblockFile(file, true); err == nil {
+			defer func() { _ = setNonblockFile(file, false) }()
+		}
 	}
 	b1, ok := readByteOptional(r)
 	if !ok {
@@ -1013,6 +1014,15 @@ func readEscapeKey(r io.Reader) int {
 	default:
 		return keyEsc
 	}
+}
+
+func setNonblockFile(file *os.File, nonblocking bool) error {
+	fd := file.Fd()
+	maxInt := uintptr(^uint(0) >> 1)
+	if fd > maxInt {
+		return errors.New("file descriptor out of range")
+	}
+	return syscall.SetNonblock(int(fd), nonblocking) // #nosec G115 -- fd is checked against max int above.
 }
 
 func readByteBlocking(r io.Reader) (byte, error) {
@@ -1954,7 +1964,7 @@ func runCommandOutput(name string, args []string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- command name is a detected package manager executable.
 	out, err := cmd.Output()
 	debugManageTiming(name, args, start, err)
 	if ctx.Err() == context.DeadlineExceeded {

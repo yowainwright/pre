@@ -17,7 +17,48 @@ body:
     validations:
       required: true
 
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - TUI / pre manage
+        - package lifecycle commands
+        - vulnerability scanning
+        - package manager support
+        - install / update / uninstall
+        - release / CI
+        - docs
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: user-flow
+    attributes:
+      label: Desired User Flow
+      description: Show the command, screen, or workflow you expect.
+      placeholder: |
+        1. Run `pre manage`
+        2. Press `/`
+        3. Filter packages and choose an action
+
   - type: textarea
     id: alternatives
     attributes:
       label: Alternatives Considered
+
+  - type: textarea
+    id: security
+    attributes:
+      label: Security / Dependency Impact
+      description: Note any new dependency, network behavior, package-manager behavior, or security tradeoff.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues.
+          required: true

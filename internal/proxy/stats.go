@@ -76,9 +76,9 @@ func saveSystemStats(s SystemStats) {
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return
 	}
 	data, _ := json.Marshal(s)
-	_ = fileutil.AtomicWriteFile(path, data, 0644)
+	_ = fileutil.AtomicWriteFile(path, data, 0600)
 }

@@ -284,7 +284,7 @@ func removeInstallDir(label, dir string, stdout, stderr io.Writer) bool {
 }
 
 func runExternalCommand(name string, args []string, env []string, stdout, stderr io.Writer) error {
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) // #nosec G204,G702 -- lifecycle commands use fixed executables and argument builders.
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr

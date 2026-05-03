@@ -50,8 +50,8 @@ func spawnBackgroundScan(mgrName string) {
 	if err != nil {
 		return
 	}
-	cmd := exec.Command(self, "scan", mgrName)
-	cmd.Start()
+	cmd := exec.Command(self, "scan", mgrName) // #nosec G204 -- self is the current pre executable path.
+	_ = cmd.Start()
 }
 
 func spawnSystemScan() {
@@ -59,8 +59,8 @@ func spawnSystemScan() {
 	if err != nil {
 		return
 	}
-	cmd := exec.Command(self, "scan", "system")
-	cmd.Start()
+	cmd := exec.Command(self, "scan", "system") // #nosec G204 -- self is the current pre executable path.
+	_ = cmd.Start()
 }
 
 func RunBackgroundScan(mgr *manager.Manager) {
@@ -252,11 +252,11 @@ func tryAcquireSystemScanLock() (func(), bool) {
 	if err != nil {
 		return nil, true
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, true
 	}
 
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > systemScanLockStaleAfter {

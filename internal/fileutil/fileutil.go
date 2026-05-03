@@ -26,19 +26,23 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	defer os.Remove(tmpPath)
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
+		return closeWithError(tmp, err)
 	}
 	if err := tmp.Chmod(perm); err != nil {
-		tmp.Close()
-		return err
+		return closeWithError(tmp, err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
+		return closeWithError(tmp, err)
 	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+func closeWithError(file writableFile, err error) error {
+	if closeErr := file.Close(); closeErr != nil {
+		return closeErr
+	}
+	return err
 }

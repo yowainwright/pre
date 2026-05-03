@@ -28,7 +28,7 @@ func Setup() {
 			return
 		}
 		appended := append([]byte(cleaned), []byte(buildShellHook())...)
-		if err := os.WriteFile(rcFile, appended, 0644); err != nil {
+		if err := os.WriteFile(rcFile, appended, 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "pre setup: %v\n", err)
 			processExit(1)
 			return
@@ -39,7 +39,7 @@ func Setup() {
 	}
 
 	appended := append(content, []byte(buildShellHook())...)
-	if err := os.WriteFile(rcFile, appended, 0644); err != nil {
+	if err := os.WriteFile(rcFile, appended, 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "pre setup: %v\n", err)
 		processExit(1)
 		return
@@ -116,7 +116,7 @@ func RemoveShellHooks() (string, bool, error) {
 	if !removed {
 		return rcFile, false, nil
 	}
-	if err := os.WriteFile(rcFile, []byte(cleaned), 0644); err != nil {
+	if err := os.WriteFile(rcFile, []byte(cleaned), 0600); err != nil {
 		return rcFile, false, err
 	}
 	return rcFile, true, nil

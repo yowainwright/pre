@@ -52,6 +52,7 @@ pre_commit_content() {
 set -e
 make fmt-check
 make lint
+make gosec
 go build ./...
 go test ./...
 HOOK

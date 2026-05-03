@@ -83,6 +83,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return handlePackages(args[1:], stdout, stderr)
 	case "self":
 		return handleSelf(args[1:], cfg, stdout, stderr)
+	case "screenshots":
+		return handleScreenshots(args[1:], stdout, stderr)
 	case "--version", "-v":
 		fmt.Fprintln(stdout, version)
 	default:
