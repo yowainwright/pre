@@ -1,6 +1,7 @@
 package fileutil
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 )
@@ -42,7 +43,7 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 
 func closeWithError(file writableFile, err error) error {
 	if closeErr := file.Close(); closeErr != nil {
-		return closeErr
+		return errors.Join(err, closeErr)
 	}
 	return err
 }
