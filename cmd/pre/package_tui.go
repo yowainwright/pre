@@ -1924,8 +1924,7 @@ func manageFooterLine(ui manageUI, pageSize, width int) string {
 }
 
 func printPadded(stdout io.Writer, line string, width int) {
-	_ = width
-	fmt.Fprintln(stdout, line)
+	fmt.Fprintln(stdout, fitLine(line, width))
 }
 
 func fitLine(s string, width int) string {

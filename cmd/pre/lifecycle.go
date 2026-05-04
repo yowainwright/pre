@@ -14,7 +14,7 @@ import (
 	"github.com/yowainwright/pre/internal/proxy"
 )
 
-const installScriptURL = "https://raw.githubusercontent.com/yowainwright/pre/main/install.sh"
+const installScriptURL = "https://github.com/yowainwright/pre/releases/latest/download/install.sh"
 
 const (
 	installSourceManual   = "manual"
@@ -110,6 +110,33 @@ func handleSelfUninstall(args []string, cfg *config.Config, stdout, stderr io.Wr
 
 	info := collectInstallInfo(cfg)
 
+	if info.Source == installSourceHomebrew {
+		if _, err := lookPathFn("brew"); err != nil {
+			fmt.Fprintln(stderr, "pre uninstall: Homebrew install detected, but brew is not on PATH")
+			fmt.Fprintln(stderr, "pre uninstall: run: brew uninstall pre")
+			return 1
+		}
+		fmt.Fprintln(stdout, "pre: uninstalling Homebrew formula")
+		if err := commandRunnerFn("brew", []string{"uninstall", "pre"}, nil, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "pre uninstall: %v\n", err)
+			return 1
+		}
+	} else {
+		if info.BinaryPath == "" {
+			fmt.Fprintln(stderr, "pre uninstall: could not locate the pre binary")
+			return 1
+		}
+		if filepath.Base(info.BinaryPath) != "pre" {
+			fmt.Fprintf(stderr, "pre uninstall: refusing to remove %s because its filename is not pre\n", info.BinaryPath)
+			return 1
+		}
+		if err := removeFileFn(info.BinaryPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(stderr, "pre uninstall: remove %s: %v\n", info.BinaryPath, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "pre: removed binary %s\n", info.BinaryPath)
+	}
+
 	rcFile, removedHooks, err := proxy.RemoveShellHooks()
 	if err != nil {
 		fmt.Fprintf(stderr, "pre uninstall: %v\n", err)
@@ -124,34 +151,6 @@ func handleSelfUninstall(args []string, cfg *config.Config, stdout, stderr io.Wr
 	if purge && !purgeInstallData(stdout, stderr) {
 		return 1
 	}
-
-	if info.Source == installSourceHomebrew {
-		if _, err := lookPathFn("brew"); err != nil {
-			fmt.Fprintln(stderr, "pre uninstall: Homebrew install detected, but brew is not on PATH")
-			fmt.Fprintln(stderr, "pre uninstall: run: brew uninstall pre")
-			return 1
-		}
-		fmt.Fprintln(stdout, "pre: uninstalling Homebrew formula")
-		if err := commandRunnerFn("brew", []string{"uninstall", "pre"}, nil, stdout, stderr); err != nil {
-			fmt.Fprintf(stderr, "pre uninstall: %v\n", err)
-			return 1
-		}
-		return 0
-	}
-
-	if info.BinaryPath == "" {
-		fmt.Fprintln(stderr, "pre uninstall: could not locate the pre binary")
-		return 1
-	}
-	if filepath.Base(info.BinaryPath) != "pre" {
-		fmt.Fprintf(stderr, "pre uninstall: refusing to remove %s because its filename is not pre\n", info.BinaryPath)
-		return 1
-	}
-	if err := removeFileFn(info.BinaryPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintf(stderr, "pre uninstall: remove %s: %v\n", info.BinaryPath, err)
-		return 1
-	}
-	fmt.Fprintf(stdout, "pre: removed binary %s\n", info.BinaryPath)
 	return 0
 }
 
