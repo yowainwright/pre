@@ -925,3 +925,270 @@ func withRemoveAll(fn func(string) error) func() {
 	removeAllFn = fn
 	return func() { removeAllFn = orig }
 }
+
+func TestRunSelfNoArgs(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"self"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "usage:") {
+		t.Errorf("expected usage in stderr, got: %s", errOut.String())
+	}
+}
+
+func TestRunSelfUnknownSubcommand(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "badcmd"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "usage:") {
+		t.Errorf("expected usage in stderr, got: %s", errOut.String())
+	}
+}
+
+func TestRunSelfInstalledCommand(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "installed"}, &out, &errOut)
+	if code != 0 {
+		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "pre:") {
+		t.Errorf("expected pre: in stdout, got: %s", out.String())
+	}
+}
+
+func TestRunSelfStatusAlias(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "status"}, &out, &errOut)
+	if code != 0 {
+		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+}
+
+func TestRunSelfInstalledExtraArgs(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "installed", "extra"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+}
+
+func TestRunSelfUpdateTooManyArgs(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "update", "extra"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "usage:") {
+		t.Errorf("expected usage in stderr, got: %s", errOut.String())
+	}
+}
+
+func TestRunSelfUpdateNoBinaryPath(t *testing.T) {
+	defer withExecutablePath(func() (string, error) { return "", os.ErrNotExist })()
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "update"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "could not locate") {
+		t.Errorf("expected could not locate in stderr, got: %s", errOut.String())
+	}
+}
+
+func TestRunSelfUpdateHomebrewNoBrew(t *testing.T) {
+	defer withExecutablePath(func() (string, error) {
+		return "/opt/homebrew/Cellar/pre/1.0/bin/pre", nil
+	})()
+	defer withLookPath(func(string) (string, error) { return "", os.ErrNotExist })()
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "update"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "brew is not on PATH") {
+		t.Errorf("expected brew is not on PATH in stderr, got: %s", errOut.String())
+	}
+}
+
+func TestRunSelfUpdateHomebrewCommandFails(t *testing.T) {
+	defer withExecutablePath(func() (string, error) {
+		return "/opt/homebrew/Cellar/pre/1.0/bin/pre", nil
+	})()
+	defer withLookPath(func(name string) (string, error) { return "/usr/bin/" + name, nil })()
+	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
+		return os.ErrInvalid
+	})()
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "update"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+}
+
+func TestRunSelfUpdateManualBadDir(t *testing.T) {
+	defer withExecutablePath(func() (string, error) { return "pre", nil })()
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "update"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "could not determine binary directory") {
+		t.Errorf("expected could not determine binary directory in stderr, got: %s", errOut.String())
+	}
+}
+
+func TestRunSelfUpdateManualCommandFails(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "pre")
+	defer withExecutablePath(func() (string, error) { return exe, nil })()
+	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
+		return os.ErrInvalid
+	})()
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "update"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+}
+
+func TestRunSelfUninstallInvalidArg(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SHELL", "/bin/zsh")
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "uninstall", "--invalid"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+}
+
+func TestRunSelfUninstallHomebrewNoBrew(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SHELL", "/bin/zsh")
+	defer withExecutablePath(func() (string, error) {
+		return "/opt/homebrew/Cellar/pre/1.0/bin/pre", nil
+	})()
+	defer withLookPath(func(string) (string, error) { return "", os.ErrNotExist })()
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "uninstall"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "brew is not on PATH") {
+		t.Errorf("expected brew is not on PATH in stderr, got: %s", errOut.String())
+	}
+}
+
+func TestRunSelfUninstallHomebrewCommandFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SHELL", "/bin/zsh")
+	defer withExecutablePath(func() (string, error) {
+		return "/opt/homebrew/Cellar/pre/1.0/bin/pre", nil
+	})()
+	defer withLookPath(func(name string) (string, error) { return "/usr/bin/" + name, nil })()
+	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
+		return os.ErrInvalid
+	})()
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "uninstall"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+}
+
+func TestRunSelfUninstallNoBinaryPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SHELL", "/bin/zsh")
+	defer withExecutablePath(func() (string, error) { return "", os.ErrNotExist })()
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "uninstall"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "could not locate") {
+		t.Errorf("expected could not locate in stderr, got: %s", errOut.String())
+	}
+}
+
+func TestRunSelfUninstallBinaryRemovalFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SHELL", "/bin/zsh")
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "pre")
+	defer withExecutablePath(func() (string, error) { return exe, nil })()
+	defer withRemoveFile(func(string) error { return os.ErrInvalid })()
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "uninstall"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+}
+
+func TestRunPackagesNoArgs(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"packages"}, &out, &errOut)
+	if code != 0 {
+		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+}
+
+func TestRunPackagesUnknown(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"packages", "badcmd"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "usage:") {
+		t.Errorf("expected usage in stderr, got: %s", errOut.String())
+	}
+}
+
+func TestRunPackagesInstall(t *testing.T) {
+	defer withExecutablePath(func() (string, error) { return "/tmp/pre", nil })()
+	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
+		return nil
+	})()
+	var out, errOut bytes.Buffer
+	code := run([]string{"packages", "install", "npm", "react"}, &out, &errOut)
+	if code != 0 {
+		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+}
+
+func TestRunPackagesUpdate(t *testing.T) {
+	defer withExecutablePath(func() (string, error) { return "/tmp/pre", nil })()
+	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
+		return nil
+	})()
+	var out, errOut bytes.Buffer
+	code := run([]string{"packages", "update", "npm", "react"}, &out, &errOut)
+	if code != 0 {
+		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+}
+
+func TestRunPackagesDowngrade(t *testing.T) {
+	defer withExecutablePath(func() (string, error) { return "/tmp/pre", nil })()
+	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
+		return nil
+	})()
+	var out, errOut bytes.Buffer
+	code := run([]string{"packages", "downgrade", "pip", "urllib3", "1.0.0"}, &out, &errOut)
+	if code != 0 {
+		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+}
+
+func TestRunPackagesUninstall(t *testing.T) {
+	defer withExecutablePath(func() (string, error) { return "/tmp/pre", nil })()
+	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
+		return nil
+	})()
+	var out, errOut bytes.Buffer
+	code := run([]string{"packages", "uninstall", "brew", "ripgrep"}, &out, &errOut)
+	if code != 0 {
+		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+}
