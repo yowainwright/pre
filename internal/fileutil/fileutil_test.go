@@ -114,3 +114,21 @@ func TestAtomicWriteFileCloseError(t *testing.T) {
 		t.Errorf("expected close error, got %v", err)
 	}
 }
+
+func TestAtomicWriteFileBothErrors(t *testing.T) {
+	dir := t.TempDir()
+	f := &mockFile{
+		name:     filepath.Join(dir, "tmp"),
+		syncErr:  errors.New("sync fail"),
+		closeErr: errors.New("close fail"),
+	}
+	defer mockCreateTemp(f)()
+
+	err := AtomicWriteFile(filepath.Join(dir, "out.json"), []byte("data"), 0644)
+	if err == nil {
+		t.Fatal("expected joined error, got nil")
+	}
+	if !errors.Is(err, f.syncErr) || !errors.Is(err, f.closeErr) {
+		t.Errorf("expected both errors joined, got %v", err)
+	}
+}

@@ -93,6 +93,17 @@ func TestKeyNoVersion(t *testing.T) {
 	}
 }
 
+func TestCachePath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	p, err := Path()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p == "" {
+		t.Fatal("expected non-empty cache path")
+	}
+}
+
 func TestMigrateVersionFromKey(t *testing.T) {
 	c := Cache{
 		"npm/react@18.0.0": Entry{Version: "", CheckedAt: time.Now()},
