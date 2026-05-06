@@ -6,7 +6,13 @@ Security proxy for package managers. Sits between your shell and `npm`, `pip`, `
 [![Release](https://img.shields.io/github/v/release/yowainwright/pre)](https://github.com/yowainwright/pre/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Zero config. Zero dependencies. One binary.
+Zero config. Zero dependencies. One binary. macOS · Linux · zsh · bash
+
+## Why
+
+Supply chain attacks don't announce themselves. By the time a malicious or vulnerable package surfaces, it may already be in a lockfile, a CI image, or production. `pre` intercepts every install — before it happens — and checks it against [OSV.dev](https://osv.dev), the same open database behind GitHub's dependency alerts.
+
+No dashboard. No CI step to add. It just runs when you do.
 
 ## Install
 
@@ -29,6 +35,15 @@ pre status   # shows install state, cache, managers, and scan status
 ```
 
 After setup, every `npm install`, `pip install`, `brew install`, etc. goes through `pre` automatically — no extra commands needed.
+
+## What you'll see
+
+| Situation | Output |
+|-----------|--------|
+| Everything cached and clean | Silent — install proceeds |
+| New packages, no issues | `scanning 12 packages... all clean` |
+| Low/medium CVE | Warning printed, install proceeds |
+| High/critical CVE | CVE detail box shown, Y/N prompt |
 
 ## Package Manager
 
@@ -80,15 +95,6 @@ flowchart TD
     L -->|low / medium| M["warn, proceed"]
     L -->|high / critical| N["block + prompt Y/N"]
 ```
-
-### What you'll see
-
-| Situation | Output |
-|-----------|--------|
-| Everything cached and clean | Silent — install proceeds |
-| New packages, no issues | `scanning 12 packages... all clean` |
-| Low/medium CVE | Warning printed, install proceeds |
-| High/critical CVE | CVE detail box shown, Y/N prompt |
 
 ### Lockfile-first scanning
 
@@ -166,6 +172,23 @@ Entries matching a built-in `name` replace it; new names extend the list.
 - Binaries signed with cosign (sigstore keyless) on every release
 - SHA256 checksums for all platforms
 
+## FAQ
+
+**Does this slow down my installs?**
+Rarely. Results are cached for 24h by default, so repeat installs of the same packages add ~0ms. First-time scans hit the OSV API in parallel — typically under a second for most lockfiles.
+
+**Does it work offline?**
+The cache covers most cases. If the OSV API is unreachable and there's no cached result, `pre` warns and proceeds — it won't block your install.
+
+**Is Windows supported?**
+Not yet. `pre` supports macOS and Linux with zsh or bash. Windows/fish support is not planned, but PRs are welcome.
+
+**Can I use a private or self-hosted vulnerability database?**
+Yes — set `api.endpoint` to any OSV-compatible API endpoint.
+
+**How do I skip `pre` for one install?**
+Use `command npm install` (or `command pip install`, etc.) — the `command` builtin bypasses the shell function hook and calls the real binary directly.
+
 ## Update pre
 
 ```sh
@@ -182,44 +205,6 @@ pre self uninstall --purge # also removes config/cache data
 ```
 
 Homebrew installs run `brew uninstall pre`. Manual installs remove the current `pre` binary after removing shell hooks.
-
-## Project layout
-
-```mermaid
-graph TD
-    CMD["cmd/pre\nentry point"] --> PROXY
-
-    subgraph PROXY["internal/proxy"]
-        I["intercept.go\ncore loop"]
-        SC["scan.go\nbackground scans"]
-        ST["setup.go\nshell hooks"]
-        SS["stats.go\nscan scheduling"]
-        R["render.go\nterminal output"]
-    end
-
-    subgraph MGR["internal/manager"]
-        REG["registry.go\nbuilt-in managers"]
-        LF["lockfile.go\nlockfile readers"]
-        MF["manifest.go\nmanifest readers"]
-        PA["parse.go\nspec parsing"]
-        VR["version.go\nversion resolution"]
-    end
-
-    subgraph SEC["internal/security"]
-        OSV["osv.go\nOSV API client"]
-        CV["cvss.go\nseverity scoring"]
-    end
-
-    CACHE["internal/cache\n~/.cache/pre/cache.json"]
-    CONFIG["internal/config\n~/.config/pre/config.json"]
-    DISPLAY["internal/display\nterminal helpers"]
-
-    I --> MGR
-    I --> SEC
-    I --> CACHE
-    I --> DISPLAY
-    CMD --> CONFIG
-```
 
 ## Development
 

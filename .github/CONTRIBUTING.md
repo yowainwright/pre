@@ -37,3 +37,41 @@ make screenshots # TUI SVG screenshots for PRs
 - No comments unless logic is non-obvious
 - No external runtime dependencies without a clear security and maintenance justification
 - All new behavior covered by tests
+
+## Project layout
+
+```mermaid
+graph TD
+    CMD["cmd/pre\nentry point"] --> PROXY
+
+    subgraph PROXY["internal/proxy"]
+        I["intercept.go\ncore loop"]
+        SC["scan.go\nbackground scans"]
+        ST["setup.go\nshell hooks"]
+        SS["stats.go\nscan scheduling"]
+        R["render.go\nterminal output"]
+    end
+
+    subgraph MGR["internal/manager"]
+        REG["registry.go\nbuilt-in managers"]
+        LF["lockfile.go\nlockfile readers"]
+        MF["manifest.go\nmanifest readers"]
+        PA["parse.go\nspec parsing"]
+        VR["version.go\nversion resolution"]
+    end
+
+    subgraph SEC["internal/security"]
+        OSV["osv.go\nOSV API client"]
+        CV["cvss.go\nseverity scoring"]
+    end
+
+    CACHE["internal/cache\n~/.cache/pre/cache.json"]
+    CONFIG["internal/config\n~/.config/pre/config.json"]
+    DISPLAY["internal/display\nterminal helpers"]
+
+    I --> MGR
+    I --> SEC
+    I --> CACHE
+    I --> DISPLAY
+    CMD --> CONFIG
+```
