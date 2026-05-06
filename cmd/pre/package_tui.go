@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,6 +68,12 @@ const (
 	ansiShowCursor = "\033[?25h"
 	ansiReset      = "\033[0m"
 )
+
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func visibleLen(s string) int {
+	return len(ansiEscape.ReplaceAllString(s, ""))
+}
 
 const loadingManageMessage = "loading package inventory..."
 
@@ -1931,7 +1938,7 @@ func fitLine(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if len(s) > width {
+	if visibleLen(s) > width {
 		return truncate(s, width)
 	}
 	return padRight(s, width)
@@ -1951,10 +1958,11 @@ func truncate(s string, max int) string {
 }
 
 func padRight(s string, width int) string {
-	if len(s) >= width {
+	vlen := visibleLen(s)
+	if vlen >= width {
 		return s
 	}
-	return s + strings.Repeat(" ", width-len(s))
+	return s + strings.Repeat(" ", width-vlen)
 }
 
 func runCommandOutput(name string, args []string) ([]byte, error) {

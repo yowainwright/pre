@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
@@ -519,6 +521,16 @@ func TestRunSelfUpdateManualInstall(t *testing.T) {
 	exe := filepath.Join(dir, "pre")
 	defer withExecutablePath(func() (string, error) { return exe, nil })()
 
+	scriptContent := []byte("#!/bin/sh\necho updating\n")
+	sum := sha256.Sum256(scriptContent)
+	fakeChecksums := []byte(hex.EncodeToString(sum[:]) + "  install.sh\n")
+	defer withHttpGetBytes(func(url string) ([]byte, error) {
+		if strings.Contains(url, "checksums") {
+			return fakeChecksums, nil
+		}
+		return scriptContent, nil
+	})()
+
 	var gotName string
 	var gotArgs []string
 	var gotEnv []string
@@ -537,8 +549,8 @@ func TestRunSelfUpdateManualInstall(t *testing.T) {
 	if gotName != "sh" {
 		t.Fatalf("expected sh command, got %q", gotName)
 	}
-	if len(gotArgs) != 2 || gotArgs[0] != "-c" || !strings.Contains(gotArgs[1], installScriptURL) {
-		t.Errorf("expected installer shell command, got %v", gotArgs)
+	if len(gotArgs) != 1 || !strings.HasSuffix(gotArgs[0], ".sh") {
+		t.Errorf("expected verified script path, got %v", gotArgs)
 	}
 	if len(gotEnv) != 1 || gotEnv[0] != "PRE_BIN_DIR="+dir {
 		t.Errorf("expected PRE_BIN_DIR env, got %v", gotEnv)
@@ -890,6 +902,12 @@ func withCommandRunner(fn func(string, []string, []string, io.Writer, io.Writer)
 	return func() { commandRunnerFn = orig }
 }
 
+func withHttpGetBytes(fn func(string) ([]byte, error)) func() {
+	orig := httpGetBytesFn
+	httpGetBytesFn = fn
+	return func() { httpGetBytesFn = orig }
+}
+
 func withCommandOutput(fn func(string, []string) ([]byte, error)) func() {
 	orig := commandOutputFn
 	commandOutputFn = fn
@@ -1044,6 +1062,15 @@ func TestRunSelfUpdateManualCommandFails(t *testing.T) {
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "pre")
 	defer withExecutablePath(func() (string, error) { return exe, nil })()
+	scriptContent := []byte("#!/bin/sh\necho updating\n")
+	sum := sha256.Sum256(scriptContent)
+	fakeChecksums := []byte(hex.EncodeToString(sum[:]) + "  install.sh\n")
+	defer withHttpGetBytes(func(url string) ([]byte, error) {
+		if strings.Contains(url, "checksums") {
+			return fakeChecksums, nil
+		}
+		return scriptContent, nil
+	})()
 	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
 		return os.ErrInvalid
 	})()
