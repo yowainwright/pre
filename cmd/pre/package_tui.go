@@ -1945,16 +1945,39 @@ func fitLine(s string, width int) string {
 }
 
 func truncate(s string, max int) string {
-	if max <= 0 || len(s) <= max {
+	if max <= 0 || visibleLen(s) <= max {
 		return s
 	}
-	if max <= 1 {
-		return s[:max]
-	}
 	if max <= 3 {
-		return s[:max]
+		plain := ansiEscape.ReplaceAllString(s, "")
+		if len(plain) <= max {
+			return plain
+		}
+		return plain[:max]
 	}
-	return s[:max-3] + "..."
+	// Walk s by visible characters so ANSI sequences are not bisected.
+	target := max - 3
+	visible := 0
+	i := 0
+	for i < len(s) {
+		if s[i] == '\033' && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) && s[j] != 'm' {
+				j++
+			}
+			if j < len(s) {
+				j++
+			}
+			i = j
+			continue
+		}
+		if visible >= target {
+			break
+		}
+		visible++
+		i++
+	}
+	return s[:i] + ansiReset + "..."
 }
 
 func padRight(s string, width int) string {

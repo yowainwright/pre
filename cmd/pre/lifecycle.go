@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/yowainwright/pre/internal/cache"
 	"github.com/yowainwright/pre/internal/config"
@@ -131,8 +132,10 @@ func downloadVerifyAndRun(scriptURL, checksumsURL string, env []string, stdout, 
 	return commandRunnerFn("sh", []string{tmp.Name()}, env, stdout, stderr)
 }
 
+var httpClient = &http.Client{Timeout: 60 * time.Second}
+
 func httpGetBytes(url string) ([]byte, error) {
-	resp, err := http.Get(url) // #nosec G107 -- URL is a package-level constant
+	resp, err := httpClient.Get(url) // #nosec G107 -- URL is a package-level constant
 	if err != nil {
 		return nil, err
 	}
