@@ -76,27 +76,7 @@ make demo
 
 Requires Docker. Builds a container with `pre` installed and shell hooks active, then plays through real scans across npm and pip — clean installs, CVE detection, and blocked installs. Colors render fully via the TTY allocated by `docker run -it`.
 
-## How it works
-
-```mermaid
-flowchart TD
-    A["npm install lodash"] --> B["shell hook (~/.zshrc)"]
-    B --> C["pre intercept"]
-    C --> D["lockfile\n(exact versions)"]
-    C --> E["manifest\n(fallback)"]
-    D --> F["package list"]
-    E --> F
-    F --> G{"cache check"}
-    G -->|hit| H["proceed silently"]
-    G -->|miss| I["OSV API (parallel)"]
-    I --> J{"result?"}
-    J -->|clean| K["proceed + cache"]
-    J -->|CVE found| L{"severity?"}
-    L -->|low / medium| M["warn, proceed"]
-    L -->|high / critical| N["block + prompt Y/N"]
-```
-
-### Lockfile-first scanning
+## Lockfile-first scanning
 
 `pre` reads lockfiles for exact pinned versions (including transitive deps) before falling back to manifests:
 
