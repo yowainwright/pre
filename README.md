@@ -6,7 +6,13 @@ Security proxy for package managers. Sits between your shell and `npm`, `pip`, `
 [![Release](https://img.shields.io/github/v/release/yowainwright/pre)](https://github.com/yowainwright/pre/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Zero config. Zero dependencies. One binary.
+Zero config. Zero dependencies. One binary. macOS · Linux · zsh · bash
+
+## Why
+
+Supply chain attacks don't announce themselves. By the time a malicious or vulnerable package surfaces, it may already be in a lockfile, a CI image, or production. `pre` intercepts every install — before it happens — and checks it against [OSV.dev](https://osv.dev), the same open database behind GitHub's dependency alerts.
+
+No dashboard. No CI step to add. It just runs when you do.
 
 ## Install
 
@@ -25,9 +31,42 @@ Every release ships with SHA256 checksums and a cosign signature. The install sc
 ```sh
 pre setup    # adds shell hooks to ~/.zshrc or ~/.bashrc
 pre teardown # removes them
+pre status   # shows install state, cache, managers, and scan status
 ```
 
 After setup, every `npm install`, `pip install`, `brew install`, etc. goes through `pre` automatically — no extra commands needed.
+
+## What you'll see
+
+| Situation | Output |
+|-----------|--------|
+| Everything cached and clean | Silent — install proceeds |
+| New packages, no issues | `scanning 12 packages... all clean` |
+| Low/medium CVE | Warning printed, install proceeds |
+| High/critical CVE | CVE detail box shown, Y/N prompt |
+
+## Package Manager
+
+```sh
+pre manage
+# or
+pre m
+```
+
+The manager opens a full-screen, keyboard-driven terminal UI for installed packages from available managers. It supports themed rows, arrow or `j`/`k` navigation, live `/` search with no enter-to-apply step, `m` manager toggles, `enter`/`o` action dialogs, `x`/`esc` dialog close, and `q` or `ctrl+c` exit. The default theme uses Catppuccin Mocha truecolor values; set `PRE_MANAGE_THEME=contrast` for a brighter theme or `PRE_MANAGE_THEME=mono` for no color. Package actions run back through `pre <manager> ...`, so install and downgrade flows still use the vulnerability scan before the package manager runs.
+
+Non-interactive package commands are available too:
+
+```sh
+pre installed                    # package inventory
+pre manage --package react --manager npm --upgrade
+pre manage --package react --manager npm --downgrade 18.2.0
+pre manage --package ripgrep --uninstall
+pre install npm react
+pre update npm react
+pre downgrade pip urllib3 1.24.1
+pre uninstall brew ripgrep
+```
 
 ## Demo
 
@@ -57,16 +96,7 @@ flowchart TD
     L -->|high / critical| N["block + prompt Y/N"]
 ```
 
-### What you'll see
-
-| Situation | Output |
-|-----------|--------|
-| Everything cached and clean | Silent — install proceeds |
-| New packages, no issues | `scanning 12 packages... all clean` |
-| Low/medium CVE | Warning printed, install proceeds |
-| High/critical CVE | CVE detail box shown, Y/N prompt |
-
-### Lockfile-first scanning
+## Lockfile-first scanning
 
 `pre` reads lockfiles for exact pinned versions (including transitive deps) before falling back to manifests:
 
@@ -84,10 +114,22 @@ Supported managers: `brew`, `npm`, `pnpm`, `bun`, `go`, `pip`, `pip3`, `uv`, `po
 ```sh
 pre setup                     # inject shell hooks
 pre teardown                  # remove shell hooks
-pre status                    # managers, cache size, last system scan
+pre status                    # pre install state, managers, cache size, last system scan
+pre manage                    # package manager TUI
+pre m                         # short alias for pre manage
+pre installed                 # package inventory
+pre manage --package <pkg> --manager <mgr> --upgrade [version]
+pre manage --package <pkg> --manager <mgr> --downgrade <version>
+pre manage --package <pkg> --manager <mgr> --uninstall
+pre install <mgr> <pkg>       # install a package through pre
+pre update <mgr> [pkg]        # update a package, or all where supported
+pre downgrade <mgr> <pkg> <v> # install an older package version
+pre uninstall <mgr> <pkg>     # remove a package
 pre config                    # show current config
 pre config set <key> <value>  # update a config value
 pre scan system               # scan all cached packages now
+pre self update               # update the pre binary
+pre self uninstall [--purge]  # remove pre itself
 ```
 
 ## Configuration
@@ -130,50 +172,39 @@ Entries matching a built-in `name` replace it; new names extend the list.
 - Binaries signed with cosign (sigstore keyless) on every release
 - SHA256 checksums for all platforms
 
-## Uninstall
+## FAQ
+
+**Does this slow down my installs?**
+Rarely. Results are cached for 24h by default, so repeat installs of the same packages add ~0ms. First-time scans hit the OSV API in parallel — typically under a second for most lockfiles.
+
+**Does it work offline?**
+The cache covers most cases. If the OSV API is unreachable and there's no cached result, `pre` warns and proceeds — it won't block your install.
+
+**Is Windows supported?**
+Not yet. `pre` supports macOS and Linux with zsh or bash. Windows/fish support is not planned, but PRs are welcome.
+
+**Can I use a private or self-hosted vulnerability database?**
+Yes — set `api.endpoint` to any OSV-compatible API endpoint.
+
+**How do I skip `pre` for one install?**
+Use `command npm install` (or `command pip install`, etc.) — the `command` builtin bypasses the shell function hook and calls the real binary directly.
+
+## Update pre
 
 ```sh
-pre teardown && rm $(which pre)
-# or: brew uninstall pre
+pre self update
 ```
 
-## Project layout
+Homebrew installs run `brew upgrade pre`. Curl/manual installs rerun the checksum-verifying installer into the current binary directory.
 
-```mermaid
-graph TD
-    CMD["cmd/pre\nentry point"] --> PROXY
+## Uninstall pre
 
-    subgraph PROXY["internal/proxy"]
-        I["intercept.go\ncore loop"]
-        SC["scan.go\nbackground scans"]
-        ST["setup.go\nshell hooks"]
-        SS["stats.go\nscan scheduling"]
-        R["render.go\nterminal output"]
-    end
-
-    subgraph MGR["internal/manager"]
-        REG["registry.go\nbuilt-in managers"]
-        LF["lockfile.go\nlockfile readers"]
-        MF["manifest.go\nmanifest readers"]
-        PA["parse.go\nspec parsing"]
-        VR["version.go\nversion resolution"]
-    end
-
-    subgraph SEC["internal/security"]
-        OSV["osv.go\nOSV API client"]
-        CV["cvss.go\nseverity scoring"]
-    end
-
-    CACHE["internal/cache\n~/.cache/pre/cache.json"]
-    CONFIG["internal/config\n~/.config/pre/config.json"]
-    DISPLAY["internal/display\nterminal helpers"]
-
-    I --> MGR
-    I --> SEC
-    I --> CACHE
-    I --> DISPLAY
-    CMD --> CONFIG
+```sh
+pre self uninstall
+pre self uninstall --purge # also removes config/cache data
 ```
+
+Homebrew installs run `brew uninstall pre`. Manual installs remove the current `pre` binary after removing shell hooks.
 
 ## Development
 
@@ -183,6 +214,10 @@ make test        # unit tests
 make e2e         # end-to-end (requires npm)
 make integration # live API calls (requires network)
 make lint        # format check + vet
+make gosec       # static security checks (requires Go 1.26+)
+make vuln        # govulncheck scan (requires network)
+make security    # govulncheck + gosec
+make screenshots # generate TUI SVG screenshots in dist/screenshots
 make snapshot    # local release dry-run (all 4 binaries, no publish)
 make demo        # run in Docker
 ```

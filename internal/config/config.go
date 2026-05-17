@@ -70,14 +70,18 @@ func Save(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		return err
 	}
 	data, err := marshalIndentFn(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return fileutil.AtomicWriteFile(p, data, 0644)
+	return fileutil.AtomicWriteFile(p, data, 0600)
+}
+
+func Path() (string, error) {
+	return configPath()
 }
 
 func configPath() (string, error) {

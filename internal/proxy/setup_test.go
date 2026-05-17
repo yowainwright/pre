@@ -14,6 +14,9 @@ func TestBuildShellHookContents(t *testing.T) {
 	if !strings.Contains(hook, "# pre security proxy") {
 		t.Error("expected hook to contain '# pre security proxy'")
 	}
+	if !strings.Contains(hook, "# end pre security proxy") {
+		t.Error("expected hook to contain '# end pre security proxy'")
+	}
 	for _, m := range manager.All() {
 		if !strings.Contains(hook, m.Name) {
 			t.Errorf("expected hook to contain manager name %q", m.Name)
@@ -55,20 +58,26 @@ func TestSetupFresh(t *testing.T) {
 	}
 }
 
-func TestSetupAlreadySetUp(t *testing.T) {
+func TestSetupRefreshesExistingHooks(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("SHELL", "/bin/zsh")
 
 	rcPath := filepath.Join(dir, ".zshrc")
-	initial := "# pre security proxy\n"
+	initial := "export FOO=bar\n# pre security proxy\nfunction npm() {}\n"
 	os.WriteFile(rcPath, []byte(initial), 0644)
 
 	Setup()
 
 	content, _ := os.ReadFile(rcPath)
-	if string(content) != initial {
-		t.Error("expected file to be unchanged when already set up")
+	if !strings.Contains(string(content), "export FOO=bar") {
+		t.Error("expected setup to preserve content before existing hook")
+	}
+	if !strings.Contains(string(content), "# end pre security proxy") {
+		t.Error("expected setup to refresh hook block")
+	}
+	if !strings.Contains(string(content), `"$1" == "update"`) {
+		t.Error("expected refreshed hooks to include update commands")
 	}
 }
 
@@ -78,7 +87,7 @@ func TestTeardownRemovesHooks(t *testing.T) {
 	t.Setenv("SHELL", "/bin/zsh")
 
 	rcPath := filepath.Join(dir, ".zshrc")
-	os.WriteFile(rcPath, []byte("export FOO=bar\n# pre security proxy\nfunction bun() {}\n"), 0644)
+	os.WriteFile(rcPath, []byte("export FOO=bar\n"+buildShellHook()+"export BAR=baz\n"), 0644)
 
 	Teardown()
 
@@ -88,6 +97,48 @@ func TestTeardownRemovesHooks(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "export FOO=bar") {
 		t.Error("expected content before marker to be preserved")
+	}
+	if !strings.Contains(string(content), "export BAR=baz") {
+		t.Error("expected content after marker to be preserved")
+	}
+}
+
+func TestTeardownRemovesLegacyHooksWithoutDeletingTrailingContent(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+
+	rcPath := filepath.Join(dir, ".zshrc")
+	os.WriteFile(rcPath, []byte("export FOO=bar\n# pre security proxy\nfunction bun() {}\nexport BAR=baz\n"), 0644)
+
+	Teardown()
+
+	content, _ := os.ReadFile(rcPath)
+	if strings.Contains(string(content), "# pre security proxy") {
+		t.Error("expected hook marker to be removed")
+	}
+	if !strings.Contains(string(content), "export FOO=bar") {
+		t.Error("expected content before marker to be preserved")
+	}
+	if !strings.Contains(string(content), "export BAR=baz") {
+		t.Error("expected content after legacy hook to be preserved")
+	}
+}
+
+func TestShellHookStatus(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+
+	rcPath := filepath.Join(dir, ".zshrc")
+	os.WriteFile(rcPath, []byte(buildShellHook()), 0644)
+
+	path, installed := ShellHookStatus()
+	if path != rcPath {
+		t.Errorf("expected rc path %s, got %s", rcPath, path)
+	}
+	if !installed {
+		t.Error("expected hooks to be installed")
 	}
 }
 

@@ -1,5 +1,6 @@
 # Go
 dist/
+/pre
 coverage.out
 
 # Demo (generated in Docker)

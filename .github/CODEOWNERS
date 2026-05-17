@@ -1,1 +1,16 @@
+# Default owner for all changes.
 * @yowainwright
+
+# Project metadata, CI, and release automation.
+/.github/ @yowainwright
+/.goreleaser.yaml @yowainwright
+/Makefile @yowainwright
+
+# CLI, package lifecycle, and security scan implementation.
+/cmd/ @yowainwright
+/internal/ @yowainwright
+
+# Installer, release helper scripts, and script tests.
+/install.sh @yowainwright
+/scripts/ @yowainwright
+/tests/ @yowainwright

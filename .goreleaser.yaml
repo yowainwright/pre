@@ -25,6 +25,10 @@ archives:
   - formats: [binary]
     name_template: "pre-{{ .Os }}-{{ .Arch }}"
 
+release:
+  extra_files:
+    - glob: ./install.sh
+
 checksum:
   name_template: checksums.txt
   algorithm: sha256

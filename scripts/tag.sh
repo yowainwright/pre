@@ -3,11 +3,85 @@ set -eu
 
 # --- injectable primitives (redefine to test) ---
 
-svu_current()    { svu current; }
-svu_patch()      { svu patch; }
-svu_minor()      { svu minor; }
-svu_major()      { svu major; }
-svu_prerelease() { svu "$1" --pre-release "$2"; }
+cmd_exists() { command -v "$1" >/dev/null 2>&1; }
+
+svu_available() { cmd_exists svu; }
+
+latest_semver_tag() {
+  git tag --list 'v[0-9]*' --sort=-v:refname | sed -n '1p'
+}
+
+fallback_current() {
+  tag="$(latest_semver_tag)"
+  echo "${tag:-v0.0.0}"
+}
+
+fallback_bump() {
+  version="${1#v}"
+  bump="$2"
+  pre="${3:-}"
+  version="${version%%-*}"
+  old_ifs="$IFS"
+  IFS=.
+  set -- $version
+  IFS="$old_ifs"
+
+  major="${1:-0}"
+  minor="${2:-0}"
+  patch="${3:-0}"
+  case "$bump" in
+    patch) patch=$((patch + 1)) ;;
+    minor) minor=$((minor + 1)); patch=0 ;;
+    major) major=$((major + 1)); minor=0; patch=0 ;;
+    *) die "invalid bump: $bump" ;;
+  esac
+
+  next="v${major}.${minor}.${patch}"
+  if [ -n "$pre" ]; then
+    next="${next}-${pre}.1"
+  fi
+  echo "$next"
+}
+
+svu_current() {
+  if svu_available; then
+    svu current
+  else
+    fallback_current
+  fi
+}
+
+svu_patch() {
+  if svu_available; then
+    svu patch
+  else
+    fallback_bump "$(svu_current)" patch
+  fi
+}
+
+svu_minor() {
+  if svu_available; then
+    svu minor
+  else
+    fallback_bump "$(svu_current)" minor
+  fi
+}
+
+svu_major() {
+  if svu_available; then
+    svu major
+  else
+    fallback_bump "$(svu_current)" major
+  fi
+}
+
+svu_prerelease() {
+  if svu_available; then
+    svu "$1" --pre-release "$2"
+  else
+    fallback_bump "$(svu_current)" "$1" "$2"
+  fi
+}
 
 git_is_dirty()   { [ -n "$(git status --porcelain)" ]; }
 git_tag_exists() { git rev-parse "$1" >/dev/null 2>&1; }

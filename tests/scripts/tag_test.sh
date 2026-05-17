@@ -43,6 +43,20 @@ check "check_exists fails when tag exists"  "1" "$(exit_code check_exists "v1.0.
 git_tag_exists() { return 1; }
 check "check_exists passes when tag is new" "0" "$(exit_code check_exists "v1.0.0")"
 
+# --- svu fallback ---
+
+svu_available() { return 1; }
+latest_semver_tag() { echo "v1.2.3"; }
+
+check "svu_current falls back to git tag" "v1.2.3" "$(svu_current)"
+check "svu_patch falls back"             "v1.2.4" "$(svu_patch)"
+check "svu_minor falls back"             "v1.3.0" "$(svu_minor)"
+check "svu_major falls back"             "v2.0.0" "$(svu_major)"
+check "svu_prerelease falls back"        "v1.2.4-alpha.1" "$(svu_prerelease patch alpha)"
+
+latest_semver_tag() { return 0; }
+check "svu_current defaults without tags" "v0.0.0" "$(svu_current)"
+
 # --- prompt_prerelease ---
 
 svu_prerelease() {
