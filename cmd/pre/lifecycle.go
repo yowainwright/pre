@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	installScriptURL   = "https://github.com/yowainwright/pre/releases/latest/download/install.sh"
+	installScriptURL    = "https://github.com/yowainwright/pre/releases/latest/download/install.sh"
 	installChecksumsURL = "https://github.com/yowainwright/pre/releases/latest/download/checksums.txt"
 )
 
@@ -122,10 +122,14 @@ func downloadVerifyAndRun(scriptURL, checksumsURL string, env []string, stdout, 
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := tmp.Write(script); err != nil {
-		tmp.Close()
+		if closeErr := tmp.Close(); closeErr != nil {
+			return fmt.Errorf("writing install script: %w; closing temp file: %v", err, closeErr)
+		}
 		return err
 	}
-	tmp.Close()
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing install script: %w", err)
+	}
 	if err := os.Chmod(tmp.Name(), 0700); err != nil { // #nosec G302 -- executable script requires 0700
 		return err
 	}
