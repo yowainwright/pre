@@ -38,6 +38,7 @@ jobs:
 
       - uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
         with:
+          disable_search: true
           files: coverage.codecov.out
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
