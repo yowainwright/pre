@@ -208,6 +208,13 @@ func (t manageTerminal) resume() {
 	_ = cmd.Run()
 }
 
+func (t manageTerminal) commandInput() io.Reader {
+	if t.input == nil {
+		return nil
+	}
+	return t.input
+}
+
 func handlePackageInventory(stdout, stderr io.Writer) int {
 	inv := collectPackageInventory(manager.All())
 	renderPackageInventory(stdout, inv)
@@ -317,12 +324,14 @@ func enableManageRawMode(input io.Reader, stderr io.Writer) manageTerminal {
 	if !ok || !isTerminalFile(file) {
 		return manageTerminal{}
 	}
+	term := manageTerminal{input: file}
 	out, err := terminalState(file)
 	if err != nil {
 		fmt.Fprintln(stderr, "pre manage: raw terminal unavailable; continuing without raw mode")
-		return manageTerminal{}
+		return term
 	}
-	term := manageTerminal{saved: strings.TrimSpace(string(out)), raw: true, input: file}
+	term.saved = strings.TrimSpace(string(out))
+	term.raw = true
 	term.resume()
 	return term
 }
@@ -956,7 +965,7 @@ func (ui *manageUI) runAction(req packageActionReq, term manageTerminal, stdout,
 	term.suspend()
 	fmt.Fprint(stdout, ansiShowCursor+ansiReset+ansiClear)
 	fmt.Fprintf(stdout, "running: pre %s %s\n\n", req.Manager.Name, strings.Join(args, " "))
-	err = executePackageAction(req, stdout, stderr)
+	err = executePackageActionWithInput(req, term.commandInput(), stdout, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "pre manage: %v\n", err)
 		ui.message = err.Error()
@@ -1267,11 +1276,15 @@ func packageActionUsage(action packageAction) string {
 }
 
 func executePackageAction(req packageActionReq, stdout, stderr io.Writer) error {
+	return executePackageActionWithInput(req, nil, stdout, stderr)
+}
+
+func executePackageActionWithInput(req packageActionReq, stdin io.Reader, stdout, stderr io.Writer) error {
 	args, err := buildPackageManagerArgs(req)
 	if err != nil {
 		return err
 	}
-	return runPreManagerCommand(req.Manager, args, stdout, stderr)
+	return runPreManagerCommandWithInput(req.Manager, args, stdin, stdout, stderr)
 }
 
 func buildPackageManagerArgs(req packageActionReq) ([]string, error) {
@@ -1381,19 +1394,19 @@ func buildPipArgs(req packageActionReq, name string) ([]string, error) {
 func buildUVArgs(req packageActionReq, name string) ([]string, error) {
 	switch req.Action {
 	case actionInstall:
-		return []string{"add", packageWithVersion(req.Manager, req.Package, req.Version)}, nil
+		return []string{"pip", "install", packageWithVersion(req.Manager, req.Package, req.Version)}, nil
 	case actionUpdate:
 		if name == "" {
 			return nil, errors.New("uv updates require a package name")
 		}
 		if req.Version != "" {
-			return []string{"add", name + "==" + req.Version}, nil
+			return []string{"pip", "install", "--upgrade", name + "==" + req.Version}, nil
 		}
-		return []string{"add", name}, nil
+		return []string{"pip", "install", "--upgrade", name}, nil
 	case actionUninstall:
-		return []string{"remove", name}, nil
+		return []string{"pip", "uninstall", name}, nil
 	case actionDowngrade:
-		return []string{"add", name + "==" + req.Version}, nil
+		return []string{"pip", "install", name + "==" + req.Version}, nil
 	}
 	return nil, unsupportedPackageAction(req)
 }
@@ -1479,11 +1492,18 @@ func packageWithVersion(mgr *manager.Manager, spec, version string) string {
 }
 
 func runPreManagerCommand(mgr *manager.Manager, args []string, stdout, stderr io.Writer) error {
+	return runPreManagerCommandWithInput(mgr, args, nil, stdout, stderr)
+}
+
+func runPreManagerCommandWithInput(mgr *manager.Manager, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	self, err := executablePathFn()
 	if err != nil || self == "" {
 		self = "pre"
 	}
 	preArgs := append([]string{mgr.Name}, args...)
+	if stdin != nil {
+		return commandRunnerWithInputFn(self, preArgs, nil, stdin, stdout, stderr)
+	}
 	return commandRunnerFn(self, preArgs, nil, stdout, stderr)
 }
 

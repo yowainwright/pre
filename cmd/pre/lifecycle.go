@@ -22,11 +22,12 @@ const (
 )
 
 var (
-	executablePathFn = os.Executable
-	lookPathFn       = exec.LookPath
-	commandRunnerFn  = runExternalCommand
-	removeFileFn     = os.Remove
-	removeAllFn      = os.RemoveAll
+	executablePathFn         = os.Executable
+	lookPathFn               = exec.LookPath
+	commandRunnerFn          = runExternalCommand
+	commandRunnerWithInputFn = runExternalCommandWithInput
+	removeFileFn             = os.Remove
+	removeAllFn              = os.RemoveAll
 )
 
 func handleSelf(args []string, cfg *config.Config, stdout, stderr io.Writer) int {
@@ -300,8 +301,15 @@ func removeInstallDir(label, dir string, stdout, stderr io.Writer) bool {
 }
 
 func runExternalCommand(name string, args []string, env []string, stdout, stderr io.Writer) error {
+	return runExternalCommandWithInput(name, args, env, os.Stdin, stdout, stderr)
+}
+
+func runExternalCommandWithInput(name string, args []string, env []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	cmd := exec.Command(name, args...) // #nosec G204,G702 -- lifecycle commands use fixed executables and argument builders.
-	cmd.Stdin = os.Stdin
+	if stdin == nil {
+		stdin = os.Stdin
+	}
+	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if len(env) > 0 {

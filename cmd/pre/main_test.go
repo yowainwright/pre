@@ -908,6 +908,12 @@ func withCommandRunner(fn func(string, []string, []string, io.Writer, io.Writer)
 	return func() { commandRunnerFn = orig }
 }
 
+func withCommandRunnerWithInput(fn func(string, []string, []string, io.Reader, io.Writer, io.Writer) error) func() {
+	orig := commandRunnerWithInputFn
+	commandRunnerWithInputFn = fn
+	return func() { commandRunnerWithInputFn = orig }
+}
+
 func withCommandOutput(fn func(string, []string) ([]byte, error)) func() {
 	orig := commandOutputFn
 	commandOutputFn = fn

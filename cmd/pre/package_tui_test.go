@@ -173,6 +173,43 @@ func TestManageUIRunActionFromVersionInput(t *testing.T) {
 	}
 }
 
+func TestManageUIRunActionUsesTerminalInput(t *testing.T) {
+	defer withExecutablePath(func() (string, error) { return "/tmp/pre", nil })()
+	defer withLookPath(func(string) (string, error) { return "", os.ErrNotExist })()
+	defer withCommandOutput(func(string, []string) ([]byte, error) { return nil, os.ErrNotExist })()
+	defer withManageActionPause(func() {})()
+
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = input.Close() }()
+
+	var gotInput io.Reader
+	var gotArgs []string
+	defer withCommandRunnerWithInput(func(name string, args []string, env []string, stdin io.Reader, stdout, stderr io.Writer) error {
+		gotInput = stdin
+		gotArgs = append([]string(nil), args...)
+		return nil
+	})()
+	defer withCommandRunner(func(string, []string, []string, io.Writer, io.Writer) error {
+		t.Fatal("expected input-aware command runner")
+		return nil
+	})()
+
+	ui := newManageUI(packageInventory{Packages: []installedPackage{
+		{Manager: "npm", Ecosystem: "npm", Name: "react", Version: "18.2.0"},
+	}})
+	ui.runSelectedAction(actionUpdate, "", manageTerminal{input: input}, io.Discard, io.Discard)
+
+	if gotInput != input {
+		t.Fatalf("expected child stdin to use terminal input, got %#v", gotInput)
+	}
+	if strings.Join(gotArgs, " ") != "npm install react@latest" {
+		t.Fatalf("expected pre npm install react@latest, got %v", gotArgs)
+	}
+}
+
 func TestManageUIRunSelectedActionErrors(t *testing.T) {
 	ui := newManageUI(packageInventory{Packages: []installedPackage{
 		{Manager: "missing", Ecosystem: "unknown", Name: "thing", Version: "1.0.0"},
@@ -209,7 +246,8 @@ func TestBuildPackageManagerArgs(t *testing.T) {
 		{name: "go uninstall", req: packageActionReq{Action: actionUninstall, Manager: mustManager(t, "go"), Package: "golang.org/x/text"}, want: []string{"get", "golang.org/x/text@none"}},
 		{name: "pip update package", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "pip"), Package: "urllib3", Version: "1.26.0"}, want: []string{"install", "--upgrade", "urllib3==1.26.0"}},
 		{name: "pip update all error", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "pip")}, wantErr: "pip updates require a package name"},
-		{name: "uv downgrade", req: packageActionReq{Action: actionDowngrade, Manager: mustManager(t, "uv"), Package: "urllib3", Version: "1.26.0"}, want: []string{"add", "urllib3==1.26.0"}},
+		{name: "uv downgrade", req: packageActionReq{Action: actionDowngrade, Manager: mustManager(t, "uv"), Package: "urllib3", Version: "1.26.0"}, want: []string{"pip", "install", "urllib3==1.26.0"}},
+		{name: "uv uninstall", req: packageActionReq{Action: actionUninstall, Manager: mustManager(t, "uv"), Package: "urllib3"}, want: []string{"pip", "uninstall", "urllib3"}},
 		{name: "uv update all error", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "uv")}, wantErr: "uv updates require a package name"},
 		{name: "poetry update all", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "poetry")}, want: []string{"update"}},
 		{name: "poetry downgrade", req: packageActionReq{Action: actionDowngrade, Manager: mustManager(t, "poetry"), Package: "django", Version: "4.2.0"}, want: []string{"add", "django@4.2.0"}},
@@ -753,12 +791,12 @@ func TestBuildGoUVPoetryArgs(t *testing.T) {
 		{
 			name: "uv install",
 			req:  packageActionReq{Action: actionInstall, Manager: mustManager(t, "uv"), Package: "requests"},
-			want: []string{"add", "requests"},
+			want: []string{"pip", "install", "requests"},
 		},
 		{
 			name: "uv update with version",
 			req:  packageActionReq{Action: actionUpdate, Manager: mustManager(t, "uv"), Package: "requests", Version: "2.28.0"},
-			want: []string{"add", "requests==2.28.0"},
+			want: []string{"pip", "install", "--upgrade", "requests==2.28.0"},
 		},
 		{
 			name: "poetry install",
@@ -1172,7 +1210,7 @@ func TestBuildUVArgsAllCases(t *testing.T) {
 	}
 
 	got2, err2 := buildUVArgs(packageActionReq{Action: actionDowngrade, Manager: mgr, Package: "requests", Version: "2.27.0"}, "requests")
-	if err2 != nil || !reflect.DeepEqual(got2, []string{"add", "requests==2.27.0"}) {
+	if err2 != nil || !reflect.DeepEqual(got2, []string{"pip", "install", "requests==2.27.0"}) {
 		t.Errorf("expected downgrade args, got err=%v got=%v", err2, got2)
 	}
 
@@ -1379,12 +1417,12 @@ func TestBuildPipArgsUpdateNoVersion(t *testing.T) {
 func TestBuildUVArgsUpdateNoVersion(t *testing.T) {
 	mgr := mustManager(t, "uv")
 	got, err := buildUVArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: "requests"}, "requests")
-	if err != nil || !reflect.DeepEqual(got, []string{"add", "requests"}) {
+	if err != nil || !reflect.DeepEqual(got, []string{"pip", "install", "--upgrade", "requests"}) {
 		t.Errorf("expected update without version, got err=%v got=%v", err, got)
 	}
 
 	got2, err2 := buildUVArgs(packageActionReq{Action: actionUninstall, Manager: mgr, Package: "requests"}, "requests")
-	if err2 != nil || !reflect.DeepEqual(got2, []string{"remove", "requests"}) {
+	if err2 != nil || !reflect.DeepEqual(got2, []string{"pip", "uninstall", "requests"}) {
 		t.Errorf("expected remove args, got err=%v got=%v", err2, got2)
 	}
 }
