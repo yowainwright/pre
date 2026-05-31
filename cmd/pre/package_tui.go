@@ -17,6 +17,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yowainwright/pre/internal/manager"
 )
@@ -1931,30 +1932,112 @@ func fitLine(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if len(s) > width {
+	visible := visibleWidth(s)
+	if visible > width {
 		return truncate(s, width)
 	}
-	return padRight(s, width)
+	if visible == width {
+		return s
+	}
+	return padRightVisible(s, width-visible)
 }
 
 func truncate(s string, max int) string {
-	if max <= 0 || len(s) <= max {
+	if max <= 0 || visibleWidth(s) <= max {
 		return s
 	}
-	if max <= 1 {
-		return s[:max]
+	limit := max
+	suffix := ""
+	if max > 3 {
+		limit = max - 3
+		suffix = "..."
 	}
-	if max <= 3 {
-		return s[:max]
+	truncated, sawANSI := takeVisible(s, limit)
+	if sawANSI {
+		return truncated + suffix + ansiReset
 	}
-	return s[:max-3] + "..."
+	return truncated + suffix
 }
 
-func padRight(s string, width int) string {
-	if len(s) >= width {
+func padRightVisible(s string, padding int) string {
+	if padding <= 0 {
 		return s
 	}
-	return s + strings.Repeat(" ", width-len(s))
+	spaces := strings.Repeat(" ", padding)
+	if strings.HasSuffix(s, ansiReset) {
+		return strings.TrimSuffix(s, ansiReset) + spaces + ansiReset
+	}
+	return s + spaces
+}
+
+func visibleWidth(s string) int {
+	width := 0
+	for i := 0; i < len(s); {
+		if end, ok := ansiSequenceEnd(s, i); ok {
+			i = end
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(s[i:])
+		if size == 0 {
+			break
+		}
+		width++
+		i += size
+	}
+	return width
+}
+
+func takeVisible(s string, limit int) (string, bool) {
+	if limit <= 0 {
+		return "", strings.Contains(s, "\x1b")
+	}
+	var b strings.Builder
+	visible := 0
+	sawANSI := false
+	for i := 0; i < len(s) && visible < limit; {
+		if end, ok := ansiSequenceEnd(s, i); ok {
+			b.WriteString(s[i:end])
+			i = end
+			sawANSI = true
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(s[i:])
+		if size == 0 {
+			break
+		}
+		b.WriteString(s[i : i+size])
+		visible++
+		i += size
+	}
+	return b.String(), sawANSI
+}
+
+func ansiSequenceEnd(s string, i int) (int, bool) {
+	if i+1 >= len(s) || s[i] != '\x1b' {
+		return i, false
+	}
+	switch s[i+1] {
+	case '[':
+		for j := i + 2; j < len(s); j++ {
+			if s[j] >= 0x40 && s[j] <= 0x7e {
+				return j + 1, true
+			}
+		}
+	case ']':
+		for j := i + 2; j < len(s); j++ {
+			if s[j] == '\a' {
+				return j + 1, true
+			}
+			if s[j] == '\x1b' && j+1 < len(s) && s[j+1] == '\\' {
+				return j + 2, true
+			}
+		}
+	default:
+		if s[i+1] >= 0x40 && s[i+1] <= 0x5f {
+			return i + 2, true
+		}
+	}
+	return i, false
 }
 
 func runCommandOutput(name string, args []string) ([]byte, error) {

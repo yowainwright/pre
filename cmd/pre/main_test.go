@@ -520,13 +520,18 @@ func TestRunSelfUpdateManualInstall(t *testing.T) {
 	exe := filepath.Join(dir, "pre")
 	defer withExecutablePath(func() (string, error) { return exe, nil })()
 
-	var gotName string
-	var gotArgs []string
-	var gotEnv []string
+	type commandCall struct {
+		name string
+		args []string
+		env  []string
+	}
+	var calls []commandCall
 	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
-		gotName = name
-		gotArgs = args
-		gotEnv = env
+		calls = append(calls, commandCall{
+			name: name,
+			args: append([]string(nil), args...),
+			env:  append([]string(nil), env...),
+		})
 		return nil
 	})()
 
@@ -535,14 +540,26 @@ func TestRunSelfUpdateManualInstall(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if gotName != "sh" {
-		t.Fatalf("expected sh command, got %q", gotName)
+	if len(calls) != 2 {
+		t.Fatalf("expected curl and sh commands, got %#v", calls)
 	}
-	if len(gotArgs) != 2 || gotArgs[0] != "-c" || !strings.Contains(gotArgs[1], installScriptURL) {
-		t.Errorf("expected installer shell command, got %v", gotArgs)
+	if calls[0].name != "curl" {
+		t.Fatalf("expected curl command, got %q", calls[0].name)
 	}
-	if len(gotEnv) != 1 || gotEnv[0] != "PRE_BIN_DIR="+dir {
-		t.Errorf("expected PRE_BIN_DIR env, got %v", gotEnv)
+	if len(calls[0].args) != 4 || calls[0].args[0] != "-fsSL" || calls[0].args[1] != installScriptURL || calls[0].args[2] != "-o" || calls[0].args[3] == "" {
+		t.Errorf("expected installer download command, got %v", calls[0].args)
+	}
+	if len(calls[0].env) != 0 {
+		t.Errorf("expected no curl env override, got %v", calls[0].env)
+	}
+	if calls[1].name != "sh" {
+		t.Fatalf("expected sh command, got %q", calls[1].name)
+	}
+	if len(calls[1].args) != 1 || calls[1].args[0] != calls[0].args[3] {
+		t.Errorf("expected sh to run downloaded installer, got %v", calls[1].args)
+	}
+	if len(calls[1].env) != 1 || calls[1].env[0] != "PRE_BIN_DIR="+dir {
+		t.Errorf("expected PRE_BIN_DIR env, got %v", calls[1].env)
 	}
 }
 
@@ -1045,13 +1062,46 @@ func TestRunSelfUpdateManualCommandFails(t *testing.T) {
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "pre")
 	defer withExecutablePath(func() (string, error) { return exe, nil })()
+	var calls int
 	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
-		return os.ErrInvalid
+		calls++
+		if name == "sh" {
+			return os.ErrInvalid
+		}
+		return nil
 	})()
 	var out, errOut bytes.Buffer
 	code := run([]string{"self", "update"}, &out, &errOut)
 	if code != 1 {
 		t.Errorf("expected exit 1, got %d", code)
+	}
+	if calls != 2 {
+		t.Errorf("expected curl and sh commands, got %d", calls)
+	}
+}
+
+func TestRunSelfUpdateManualDownloadFails(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "pre")
+	defer withExecutablePath(func() (string, error) { return exe, nil })()
+	var calls int
+	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
+		calls++
+		if name == "curl" {
+			return os.ErrInvalid
+		}
+		return nil
+	})()
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "update"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if calls != 1 {
+		t.Errorf("expected only the failed curl command, got %d calls", calls)
+	}
+	if !strings.Contains(errOut.String(), "download installer") {
+		t.Errorf("expected download failure in stderr, got: %s", errOut.String())
 	}
 }
 

@@ -992,6 +992,14 @@ func TestFitLineAndTruncate(t *testing.T) {
 	if got := truncate("abcdef", 4); got != "a..." {
 		t.Errorf("expected ellipsis truncate, got %q", got)
 	}
+
+	styled := themed(manageDefaultTheme().selected, "hello")
+	if got := fitLine(styled, 10); visibleWidth(got) != 10 || !strings.HasSuffix(got, ansiReset) {
+		t.Errorf("expected ANSI line padded to visible width 10 with reset, got %q width %d", got, visibleWidth(got))
+	}
+	if got := fitLine(themed(manageDefaultTheme().selected, "hello world"), 5); visibleWidth(got) != 5 || !strings.HasSuffix(got, ansiReset) || !strings.Contains(got, "he...") {
+		t.Errorf("expected ANSI line truncated visibly with reset, got %q width %d", got, visibleWidth(got))
+	}
 }
 
 func TestManageColumnWidths(t *testing.T) {

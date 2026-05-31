@@ -89,7 +89,24 @@ func handleSelfUpdate(args []string, cfg *config.Config, stdout, stderr io.Write
 	}
 
 	fmt.Fprintf(stdout, "pre: updating manual install in %s\n", binDir)
-	if err := commandRunnerFn("sh", []string{"-c", "curl -fsSL " + installScriptURL + " | sh"}, []string{"PRE_BIN_DIR=" + binDir}, stdout, stderr); err != nil {
+	installer, err := os.CreateTemp("", "pre-install-*.sh")
+	if err != nil {
+		fmt.Fprintf(stderr, "pre update: create installer temp file: %v\n", err)
+		return 1
+	}
+	installerPath := installer.Name()
+	if err := installer.Close(); err != nil {
+		_ = removeFileFn(installerPath)
+		fmt.Fprintf(stderr, "pre update: close installer temp file: %v\n", err)
+		return 1
+	}
+	defer func() { _ = removeFileFn(installerPath) }()
+
+	if err := commandRunnerFn("curl", []string{"-fsSL", installScriptURL, "-o", installerPath}, nil, stdout, stderr); err != nil {
+		fmt.Fprintf(stderr, "pre update: download installer: %v\n", err)
+		return 1
+	}
+	if err := commandRunnerFn("sh", []string{installerPath}, []string{"PRE_BIN_DIR=" + binDir}, stdout, stderr); err != nil {
 		fmt.Fprintf(stderr, "pre update: %v\n", err)
 		return 1
 	}
