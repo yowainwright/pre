@@ -1392,6 +1392,8 @@ func buildPipArgs(req packageActionReq, name string) ([]string, error) {
 }
 
 func buildUVArgs(req packageActionReq, name string) ([]string, error) {
+	// uv inventory comes from `uv pip list`, so actions target that same active
+	// environment instead of editing project dependencies with `uv add/remove`.
 	switch req.Action {
 	case actionInstall:
 		return []string{"pip", "install", packageWithVersion(req.Manager, req.Package, req.Version)}, nil
