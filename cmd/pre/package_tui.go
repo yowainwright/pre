@@ -1406,6 +1406,7 @@ func buildUVArgs(req packageActionReq, name string) ([]string, error) {
 		}
 		return []string{"pip", "install", "--upgrade", name}, nil
 	case actionUninstall:
+		// uv pip uninstall does not support pip's -y/--yes flag.
 		return []string{"pip", "uninstall", name}, nil
 	case actionDowngrade:
 		return []string{"pip", "install", name + "==" + req.Version}, nil

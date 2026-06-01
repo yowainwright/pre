@@ -38,7 +38,7 @@ pre manage
 pre m
 ```
 
-The manager opens a full-screen, keyboard-driven terminal UI for installed packages from available managers. It supports themed rows, arrow or `j`/`k` navigation, live `/` search with no enter-to-apply step, `m` manager toggles, `enter`/`o` action dialogs, `x`/`esc` dialog close, and `q` or `ctrl+c` exit. The default theme uses Catppuccin Mocha truecolor values; set `PRE_MANAGE_THEME=contrast` for a brighter theme or `PRE_MANAGE_THEME=mono` for no color. Package actions run back through `pre <manager> ...`, so install and downgrade flows still use the vulnerability scan before the package manager runs.
+The manager opens a full-screen, keyboard-driven terminal UI for installed packages from available managers. It supports themed rows, arrow or `j`/`k` navigation, live `/` search with no enter-to-apply step, `m` manager toggles, `enter`/`o` action dialogs, `x`/`esc` dialog close, and `q` or `ctrl+c` exit. The default theme uses Catppuccin Mocha truecolor values; set `PRE_MANAGE_THEME=contrast` for a brighter theme or `PRE_MANAGE_THEME=mono` for no color. Package actions run back through `pre <manager> ...`, so install and downgrade flows still use the vulnerability scan before the package manager runs. `uv` package actions use `uv pip ...` to match the `uv pip list` inventory source, so they update the active environment rather than `pyproject.toml` or `uv.lock`.
 
 Non-interactive package commands are available too:
 
