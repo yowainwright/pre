@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -902,6 +903,12 @@ func withCommandRunner(fn func(string, []string, []string, io.Writer, io.Writer)
 	return func() { commandRunnerFn = orig }
 }
 
+func withCommandRunnerWithInput(fn func(string, []string, []string, io.Reader, io.Writer, io.Writer) error) func() {
+	orig := commandRunnerWithInputFn
+	commandRunnerWithInputFn = fn
+	return func() { commandRunnerWithInputFn = orig }
+}
+
 func withHttpGetBytes(fn func(string) ([]byte, error)) func() {
 	orig := httpGetBytesFn
 	httpGetBytesFn = fn
@@ -1081,6 +1088,31 @@ func TestRunSelfUpdateManualCommandFails(t *testing.T) {
 	}
 }
 
+func TestRunSelfUpdateManualDownloadFails(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "pre")
+	defer withExecutablePath(func() (string, error) { return exe, nil })()
+	defer withHttpGetBytes(func(url string) ([]byte, error) {
+		return nil, os.ErrInvalid
+	})()
+	var calls int
+	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
+		calls++
+		return nil
+	})()
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "update"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if calls != 0 {
+		t.Errorf("expected no commands run when download fails, got %d", calls)
+	}
+	if !strings.Contains(errOut.String(), "downloading install.sh") {
+		t.Errorf("expected download failure in stderr, got: %s", errOut.String())
+	}
+}
+
 func TestRunSelfUninstallInvalidArg(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("SHELL", "/bin/zsh")
@@ -1217,5 +1249,100 @@ func TestRunPackagesUninstall(t *testing.T) {
 	code := run([]string{"packages", "uninstall", "brew", "ripgrep"}, &out, &errOut)
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+}
+
+func TestRunSelfInstalledHomebrew(t *testing.T) {
+	defer withExecutablePath(func() (string, error) {
+		return "/opt/homebrew/Cellar/pre/1.2.3/bin/pre", nil
+	})()
+
+	var out bytes.Buffer
+	code := run([]string{"self", "installed"}, &out, &bytes.Buffer{})
+	if code != 0 {
+		t.Errorf("expected exit 0, got %d", code)
+	}
+	if !strings.Contains(out.String(), "Homebrew") {
+		t.Errorf("expected Homebrew source label in output, got: %s", out.String())
+	}
+}
+
+func TestRenderInstallInfoNoBinary(t *testing.T) {
+	defer withExecutablePath(func() (string, error) { return "", errors.New("no exe") })()
+
+	var out bytes.Buffer
+	code := run([]string{"self", "installed"}, &out, &bytes.Buffer{})
+	if code != 0 {
+		t.Errorf("expected exit 0, got %d", code)
+	}
+	if !strings.Contains(out.String(), "unknown") {
+		t.Errorf("expected 'unknown' when no binary path, got: %s", out.String())
+	}
+}
+
+func TestRenderInstallInfoSystemScanEnabled(t *testing.T) {
+	var out bytes.Buffer
+	renderInstallInfo(&out, installInfo{
+		Version:    "dev",
+		BinaryPath: "/usr/local/bin/pre",
+		Source:     installSourceManual,
+		SystemScan: true,
+	})
+	if !strings.Contains(out.String(), "enabled") {
+		t.Errorf("expected 'enabled' for SystemScan=true, got: %s", out.String())
+	}
+}
+
+func TestRemoveInstallDirEmpty(t *testing.T) {
+	out := removeInstallDir("label", "", &bytes.Buffer{}, &bytes.Buffer{})
+	if !out {
+		t.Fatal("expected empty dir to return true (no-op)")
+	}
+	out2 := removeInstallDir("label", ".", &bytes.Buffer{}, &bytes.Buffer{})
+	if !out2 {
+		t.Fatal("expected '.' dir to return true (no-op)")
+	}
+}
+
+func TestFileExistsEmpty(t *testing.T) {
+	if fileExists("") {
+		t.Fatal("expected fileExists('') to return false")
+	}
+}
+
+func TestRemoveInstallDirError(t *testing.T) {
+	orig := removeAllFn
+	removeAllFn = func(string) error { return errors.New("rm fail") }
+	defer func() { removeAllFn = orig }()
+
+	var errOut bytes.Buffer
+	ok := removeInstallDir("cache", "/some/dir", &bytes.Buffer{}, &errOut)
+	if ok {
+		t.Fatal("expected false when removeAll fails")
+	}
+	if !strings.Contains(errOut.String(), "rm fail") {
+		t.Errorf("expected rm fail in stderr, got: %s", errOut.String())
+	}
+}
+
+func TestRunExternalCommand(t *testing.T) {
+	var out bytes.Buffer
+	err := runExternalCommand("echo", []string{"hello"}, nil, &out, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out.String(), "hello") {
+		t.Errorf("expected hello in output, got: %s", out.String())
+	}
+}
+
+func TestRunExternalCommandWithEnv(t *testing.T) {
+	var out bytes.Buffer
+	err := runExternalCommand("sh", []string{"-c", "echo $TESTVAR"}, []string{"TESTVAR=world"}, &out, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out.String(), "world") {
+		t.Errorf("expected world in output, got: %s", out.String())
 	}
 }

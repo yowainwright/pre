@@ -11,13 +11,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yowainwright/pre/internal/manager"
 )
@@ -68,12 +68,6 @@ const (
 	ansiShowCursor = "\033[?25h"
 	ansiReset      = "\033[0m"
 )
-
-var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-
-func visibleLen(s string) int {
-	return len(ansiEscape.ReplaceAllString(s, ""))
-}
 
 const loadingManageMessage = "loading package inventory..."
 
@@ -214,6 +208,13 @@ func (t manageTerminal) resume() {
 	_ = cmd.Run()
 }
 
+func (t manageTerminal) commandInput() io.Reader {
+	if t.input == nil {
+		return nil
+	}
+	return t.input
+}
+
 func handlePackageInventory(stdout, stderr io.Writer) int {
 	inv := collectPackageInventory(manager.All())
 	renderPackageInventory(stdout, inv)
@@ -323,12 +324,14 @@ func enableManageRawMode(input io.Reader, stderr io.Writer) manageTerminal {
 	if !ok || !isTerminalFile(file) {
 		return manageTerminal{}
 	}
+	term := manageTerminal{input: file}
 	out, err := terminalState(file)
 	if err != nil {
 		fmt.Fprintln(stderr, "pre manage: raw terminal unavailable; continuing without raw mode")
-		return manageTerminal{}
+		return term
 	}
-	term := manageTerminal{saved: strings.TrimSpace(string(out)), raw: true, input: file}
+	term.saved = strings.TrimSpace(string(out))
+	term.raw = true
 	term.resume()
 	return term
 }
@@ -962,7 +965,7 @@ func (ui *manageUI) runAction(req packageActionReq, term manageTerminal, stdout,
 	term.suspend()
 	fmt.Fprint(stdout, ansiShowCursor+ansiReset+ansiClear)
 	fmt.Fprintf(stdout, "running: pre %s %s\n\n", req.Manager.Name, strings.Join(args, " "))
-	err = executePackageAction(req, stdout, stderr)
+	err = executePackageActionWithInput(req, term.commandInput(), stdout, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "pre manage: %v\n", err)
 		ui.message = err.Error()
@@ -1273,11 +1276,15 @@ func packageActionUsage(action packageAction) string {
 }
 
 func executePackageAction(req packageActionReq, stdout, stderr io.Writer) error {
+	return executePackageActionWithInput(req, nil, stdout, stderr)
+}
+
+func executePackageActionWithInput(req packageActionReq, stdin io.Reader, stdout, stderr io.Writer) error {
 	args, err := buildPackageManagerArgs(req)
 	if err != nil {
 		return err
 	}
-	return runPreManagerCommand(req.Manager, args, stdout, stderr)
+	return runPreManagerCommandWithInput(req.Manager, args, stdin, stdout, stderr)
 }
 
 func buildPackageManagerArgs(req packageActionReq) ([]string, error) {
@@ -1385,21 +1392,24 @@ func buildPipArgs(req packageActionReq, name string) ([]string, error) {
 }
 
 func buildUVArgs(req packageActionReq, name string) ([]string, error) {
+	// uv inventory comes from `uv pip list`, so actions target that same active
+	// environment instead of editing project dependencies with `uv add/remove`.
 	switch req.Action {
 	case actionInstall:
-		return []string{"add", packageWithVersion(req.Manager, req.Package, req.Version)}, nil
+		return []string{"pip", "install", packageWithVersion(req.Manager, req.Package, req.Version)}, nil
 	case actionUpdate:
 		if name == "" {
 			return nil, errors.New("uv updates require a package name")
 		}
 		if req.Version != "" {
-			return []string{"add", name + "==" + req.Version}, nil
+			return []string{"pip", "install", "--upgrade", name + "==" + req.Version}, nil
 		}
-		return []string{"add", name}, nil
+		return []string{"pip", "install", "--upgrade", name}, nil
 	case actionUninstall:
-		return []string{"remove", name}, nil
+		// uv pip uninstall does not support pip's -y/--yes flag.
+		return []string{"pip", "uninstall", name}, nil
 	case actionDowngrade:
-		return []string{"add", name + "==" + req.Version}, nil
+		return []string{"pip", "install", name + "==" + req.Version}, nil
 	}
 	return nil, unsupportedPackageAction(req)
 }
@@ -1485,11 +1495,18 @@ func packageWithVersion(mgr *manager.Manager, spec, version string) string {
 }
 
 func runPreManagerCommand(mgr *manager.Manager, args []string, stdout, stderr io.Writer) error {
+	return runPreManagerCommandWithInput(mgr, args, nil, stdout, stderr)
+}
+
+func runPreManagerCommandWithInput(mgr *manager.Manager, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	self, err := executablePathFn()
 	if err != nil || self == "" {
 		self = "pre"
 	}
 	preArgs := append([]string{mgr.Name}, args...)
+	if stdin != nil {
+		return commandRunnerWithInputFn(self, preArgs, nil, stdin, stdout, stderr)
+	}
 	return commandRunnerFn(self, preArgs, nil, stdout, stderr)
 }
 
@@ -1938,54 +1955,112 @@ func fitLine(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if visibleLen(s) > width {
+	visible := visibleWidth(s)
+	if visible > width {
 		return truncate(s, width)
 	}
-	return padRight(s, width)
+	if visible == width {
+		return s
+	}
+	return padRightVisible(s, width-visible)
 }
 
 func truncate(s string, max int) string {
-	if max <= 0 || visibleLen(s) <= max {
+	if max <= 0 || visibleWidth(s) <= max {
 		return s
 	}
-	if max <= 3 {
-		plain := ansiEscape.ReplaceAllString(s, "")
-		if len(plain) <= max {
-			return plain
-		}
-		return plain[:max]
+	limit := max
+	suffix := ""
+	if max > 3 {
+		limit = max - 3
+		suffix = "..."
 	}
-	// Walk s by visible characters so ANSI sequences are not bisected.
-	target := max - 3
-	visible := 0
-	i := 0
-	for i < len(s) {
-		if s[i] == '\033' && i+1 < len(s) && s[i+1] == '[' {
-			j := i + 2
-			for j < len(s) && s[j] != 'm' {
-				j++
-			}
-			if j < len(s) {
-				j++
-			}
-			i = j
-			continue
-		}
-		if visible >= target {
-			break
-		}
-		visible++
-		i++
+	truncated, sawANSI := takeVisible(s, limit)
+	if sawANSI {
+		return truncated + suffix + ansiReset
 	}
-	return s[:i] + ansiReset + "..."
+	return truncated + suffix
 }
 
-func padRight(s string, width int) string {
-	vlen := visibleLen(s)
-	if vlen >= width {
+func padRightVisible(s string, padding int) string {
+	if padding <= 0 {
 		return s
 	}
-	return s + strings.Repeat(" ", width-vlen)
+	spaces := strings.Repeat(" ", padding)
+	if strings.HasSuffix(s, ansiReset) {
+		return strings.TrimSuffix(s, ansiReset) + spaces + ansiReset
+	}
+	return s + spaces
+}
+
+func visibleWidth(s string) int {
+	width := 0
+	for i := 0; i < len(s); {
+		if end, ok := ansiSequenceEnd(s, i); ok {
+			i = end
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(s[i:])
+		if size == 0 {
+			break
+		}
+		width++
+		i += size
+	}
+	return width
+}
+
+func takeVisible(s string, limit int) (string, bool) {
+	if limit <= 0 {
+		return "", strings.Contains(s, "\x1b")
+	}
+	var b strings.Builder
+	visible := 0
+	sawANSI := false
+	for i := 0; i < len(s) && visible < limit; {
+		if end, ok := ansiSequenceEnd(s, i); ok {
+			b.WriteString(s[i:end])
+			i = end
+			sawANSI = true
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(s[i:])
+		if size == 0 {
+			break
+		}
+		b.WriteString(s[i : i+size])
+		visible++
+		i += size
+	}
+	return b.String(), sawANSI
+}
+
+func ansiSequenceEnd(s string, i int) (int, bool) {
+	if i+1 >= len(s) || s[i] != '\x1b' {
+		return i, false
+	}
+	switch s[i+1] {
+	case '[':
+		for j := i + 2; j < len(s); j++ {
+			if s[j] >= 0x40 && s[j] <= 0x7e {
+				return j + 1, true
+			}
+		}
+	case ']':
+		for j := i + 2; j < len(s); j++ {
+			if s[j] == '\a' {
+				return j + 1, true
+			}
+			if s[j] == '\x1b' && j+1 < len(s) && s[j+1] == '\\' {
+				return j + 2, true
+			}
+		}
+	default:
+		if s[i+1] >= 0x40 && s[i+1] <= 0x5f {
+			return i + 2, true
+		}
+	}
+	return i, false
 }
 
 func runCommandOutput(name string, args []string) ([]byte, error) {

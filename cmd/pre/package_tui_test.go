@@ -173,6 +173,43 @@ func TestManageUIRunActionFromVersionInput(t *testing.T) {
 	}
 }
 
+func TestManageUIRunActionUsesTerminalInput(t *testing.T) {
+	defer withExecutablePath(func() (string, error) { return "/tmp/pre", nil })()
+	defer withLookPath(func(string) (string, error) { return "", os.ErrNotExist })()
+	defer withCommandOutput(func(string, []string) ([]byte, error) { return nil, os.ErrNotExist })()
+	defer withManageActionPause(func() {})()
+
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = input.Close() }()
+
+	var gotInput io.Reader
+	var gotArgs []string
+	defer withCommandRunnerWithInput(func(name string, args []string, env []string, stdin io.Reader, stdout, stderr io.Writer) error {
+		gotInput = stdin
+		gotArgs = append([]string(nil), args...)
+		return nil
+	})()
+	defer withCommandRunner(func(string, []string, []string, io.Writer, io.Writer) error {
+		t.Fatal("expected input-aware command runner")
+		return nil
+	})()
+
+	ui := newManageUI(packageInventory{Packages: []installedPackage{
+		{Manager: "npm", Ecosystem: "npm", Name: "react", Version: "18.2.0"},
+	}})
+	ui.runSelectedAction(actionUpdate, "", manageTerminal{input: input}, io.Discard, io.Discard)
+
+	if gotInput != input {
+		t.Fatalf("expected child stdin to use terminal input, got %#v", gotInput)
+	}
+	if strings.Join(gotArgs, " ") != "npm install react@latest" {
+		t.Fatalf("expected pre npm install react@latest, got %v", gotArgs)
+	}
+}
+
 func TestManageUIRunSelectedActionErrors(t *testing.T) {
 	ui := newManageUI(packageInventory{Packages: []installedPackage{
 		{Manager: "missing", Ecosystem: "unknown", Name: "thing", Version: "1.0.0"},
@@ -209,7 +246,8 @@ func TestBuildPackageManagerArgs(t *testing.T) {
 		{name: "go uninstall", req: packageActionReq{Action: actionUninstall, Manager: mustManager(t, "go"), Package: "golang.org/x/text"}, want: []string{"get", "golang.org/x/text@none"}},
 		{name: "pip update package", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "pip"), Package: "urllib3", Version: "1.26.0"}, want: []string{"install", "--upgrade", "urllib3==1.26.0"}},
 		{name: "pip update all error", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "pip")}, wantErr: "pip updates require a package name"},
-		{name: "uv downgrade", req: packageActionReq{Action: actionDowngrade, Manager: mustManager(t, "uv"), Package: "urllib3", Version: "1.26.0"}, want: []string{"add", "urllib3==1.26.0"}},
+		{name: "uv downgrade", req: packageActionReq{Action: actionDowngrade, Manager: mustManager(t, "uv"), Package: "urllib3", Version: "1.26.0"}, want: []string{"pip", "install", "urllib3==1.26.0"}},
+		{name: "uv uninstall", req: packageActionReq{Action: actionUninstall, Manager: mustManager(t, "uv"), Package: "urllib3"}, want: []string{"pip", "uninstall", "urllib3"}},
 		{name: "uv update all error", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "uv")}, wantErr: "uv updates require a package name"},
 		{name: "poetry update all", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "poetry")}, want: []string{"update"}},
 		{name: "poetry downgrade", req: packageActionReq{Action: actionDowngrade, Manager: mustManager(t, "poetry"), Package: "django", Version: "4.2.0"}, want: []string{"add", "django@4.2.0"}},
@@ -753,12 +791,12 @@ func TestBuildGoUVPoetryArgs(t *testing.T) {
 		{
 			name: "uv install",
 			req:  packageActionReq{Action: actionInstall, Manager: mustManager(t, "uv"), Package: "requests"},
-			want: []string{"add", "requests"},
+			want: []string{"pip", "install", "requests"},
 		},
 		{
 			name: "uv update with version",
 			req:  packageActionReq{Action: actionUpdate, Manager: mustManager(t, "uv"), Package: "requests", Version: "2.28.0"},
-			want: []string{"add", "requests==2.28.0"},
+			want: []string{"pip", "install", "--upgrade", "requests==2.28.0"},
 		},
 		{
 			name: "poetry install",
@@ -871,5 +909,794 @@ func TestRunManageInstallSubcmd(t *testing.T) {
 	code := run([]string{"manage", "install", "npm", "react"}, &out, &errOut)
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+}
+
+func TestHandleListKeyActionKeys(t *testing.T) {
+	defer withExecutablePath(func() (string, error) { return "/tmp/pre", nil })()
+	defer withManageActionPause(func() {})()
+	defer withCommandOutput(func(string, []string) ([]byte, error) { return nil, os.ErrNotExist })()
+	defer withCommandRunner(func(string, []string, []string, io.Writer, io.Writer) error { return nil })()
+
+	inv := packageInventory{Packages: []installedPackage{
+		{Manager: "npm", Ecosystem: "npm", Name: "react", Version: "18.2.0"},
+	}}
+
+	ui := newManageUI(inv)
+	handleListKey('u', &ui, manageTerminal{}, io.Discard, io.Discard)
+	if ui.mode != modeList {
+		t.Fatalf("expected list mode after u, got %v", ui.mode)
+	}
+
+	ui = newManageUI(inv)
+	handleListKey('d', &ui, manageTerminal{}, io.Discard, io.Discard)
+	if ui.pendingAction != actionDowngrade || ui.mode != modeInput {
+		t.Fatalf("expected downgrade input, got action=%v mode=%v", ui.pendingAction, ui.mode)
+	}
+
+	ui = newManageUI(inv)
+	handleListKey('r', &ui, manageTerminal{}, io.Discard, io.Discard)
+	if ui.mode != modeList {
+		t.Fatalf("expected list mode after r, got %v", ui.mode)
+	}
+
+	ui = newManageUI(inv)
+	handleListKey('i', &ui, manageTerminal{}, io.Discard, io.Discard)
+	if ui.mode != modeInput {
+		t.Fatalf("expected input mode after i, got %v", ui.mode)
+	}
+}
+
+func TestHandleManageKeyCtrlC(t *testing.T) {
+	ui := newManageUI(testPackageInventory())
+	if !handleManageKey(keyCtrlC, &ui, manageTerminal{}, io.Discard, io.Discard) {
+		t.Fatal("expected ctrl-c to quit")
+	}
+}
+
+func TestRunActionBuildError(t *testing.T) {
+	readonly := &manager.Manager{Name: "readonly", Ecosystem: "npm", InstallCmds: []string{"install"}}
+	req := packageActionReq{Action: actionUninstall, Manager: readonly, Package: "react"}
+	ui := manageUI{}
+	ui.runAction(req, manageTerminal{}, io.Discard, io.Discard)
+	if ui.message == "" {
+		t.Fatal("expected error message from unsupported action")
+	}
+	if ui.mode != modeList {
+		t.Fatalf("expected list mode after build error, got %v", ui.mode)
+	}
+}
+
+func TestEnsureSelectionVisibleNegative(t *testing.T) {
+	ui := newManageUI(packageInventory{Packages: []installedPackage{
+		{Manager: "npm", Name: "a"},
+		{Manager: "npm", Name: "b"},
+		{Manager: "npm", Name: "c"},
+	}})
+	ui.selected = -1
+	ui.ensureSelectionVisible(2)
+	if ui.selected != 0 {
+		t.Fatalf("expected selected clamped to 0, got %d", ui.selected)
+	}
+
+	ui.offset = 5
+	ui.selected = 1
+	ui.ensureSelectionVisible(2)
+	if ui.offset > ui.selected {
+		t.Fatalf("expected offset <= selected, got offset=%d selected=%d", ui.offset, ui.selected)
+	}
+}
+
+func TestBeginVersionInputNoPackage(t *testing.T) {
+	ui := manageUI{}
+	ui.beginVersionInput(actionDowngrade)
+	if ui.mode == modeInput {
+		t.Fatal("expected no input mode when no package selected")
+	}
+}
+
+func TestCurrentPackageEdges(t *testing.T) {
+	ui := manageUI{}
+	if _, ok := ui.currentPackage(); ok {
+		t.Fatal("expected no current package in empty ui")
+	}
+
+	ui2 := newManageUI(testPackageInventory())
+	ui2.selected = -1
+	if _, ok := ui2.currentPackage(); ok {
+		t.Fatal("expected no current package when selected < 0")
+	}
+}
+
+func TestFitLineAndTruncate(t *testing.T) {
+	if got := fitLine("hi", 0); got != "" {
+		t.Errorf("expected empty for width=0, got %q", got)
+	}
+	if got := fitLine("hello world", 5); got != "he..." {
+		t.Errorf("expected truncation, got %q", got)
+	}
+	if got := fitLine("hi", 10); len(got) != 10 {
+		t.Errorf("expected padding to width 10, got len %d", len(got))
+	}
+	if got := truncate("abc", 0); got != "abc" {
+		t.Errorf("expected original string for max=0, got %q", got)
+	}
+	if got := truncate("abc", 2); got != "ab" {
+		t.Errorf("expected truncate to 2, got %q", got)
+	}
+	if got := truncate("abc", 3); got != "abc" {
+		t.Errorf("expected no truncate at max=3, got %q", got)
+	}
+	if got := truncate("abcdef", 4); got != "a..." {
+		t.Errorf("expected ellipsis truncate, got %q", got)
+	}
+
+	styled := themed(manageDefaultTheme().selected, "hello")
+	if got := fitLine(styled, 10); visibleWidth(got) != 10 || !strings.HasSuffix(got, ansiReset) {
+		t.Errorf("expected ANSI line padded to visible width 10 with reset, got %q width %d", got, visibleWidth(got))
+	}
+	if got := fitLine(themed(manageDefaultTheme().selected, "hello world"), 5); visibleWidth(got) != 5 || !strings.HasSuffix(got, ansiReset) || !strings.Contains(got, "he...") {
+		t.Errorf("expected ANSI line truncated visibly with reset, got %q width %d", got, visibleWidth(got))
+	}
+}
+
+func TestManageColumnWidths(t *testing.T) {
+	pkgW, verW := manageColumnWidths(100)
+	if verW != 18 {
+		t.Errorf("expected versionWidth=18 for wide terminal, got %d", verW)
+	}
+	if pkgW < 12 {
+		t.Errorf("expected packageWidth>=12 for wide terminal, got %d", pkgW)
+	}
+	pkgW2, verW2 := manageColumnWidths(60)
+	if verW2 != 12 {
+		t.Errorf("expected versionWidth=12 for narrow terminal, got %d", verW2)
+	}
+	if pkgW2 < 12 {
+		t.Errorf("expected packageWidth>=12 for narrow terminal, got %d", pkgW2)
+	}
+}
+
+func TestManageFooterLine(t *testing.T) {
+	inv := testPackageInventory()
+	ui := newManageUI(inv)
+	ui.filtered = inv.Packages
+	ui.message = "test msg"
+
+	line := manageFooterLine(ui, 5, 80)
+	if !strings.Contains(line, "test msg") {
+		t.Errorf("expected message in footer, got %q", line)
+	}
+
+	ui2 := newManageUI(inv)
+	ui2.filtered = make([]installedPackage, 20)
+	ui2.offset = 10
+	line2 := manageFooterLine(ui2, 5, 80)
+	if !strings.Contains(line2, "↑ more") {
+		t.Errorf("expected scroll indicator in footer, got %q", line2)
+	}
+	if !strings.Contains(line2, "↓ more") {
+		t.Errorf("expected down indicator in footer, got %q", line2)
+	}
+}
+
+func TestRenderPackageInventoryEmpty(t *testing.T) {
+	var out bytes.Buffer
+	renderPackageInventory(&out, packageInventory{})
+	if !strings.Contains(out.String(), "none found") {
+		t.Errorf("expected 'none found', got %q", out.String())
+	}
+}
+
+func TestRenderPackageInventoryWithErrors(t *testing.T) {
+	var out bytes.Buffer
+	inv := packageInventory{
+		Packages: []installedPackage{{Manager: "npm", Name: "react", Version: "18.0.0"}},
+		Errors:   []string{"npm: failed"},
+	}
+	renderPackageInventory(&out, inv)
+	if !strings.Contains(out.String(), "react") {
+		t.Errorf("expected package in output, got %q", out.String())
+	}
+	if !strings.Contains(out.String(), "warning: npm: failed") {
+		t.Errorf("expected warning in output, got %q", out.String())
+	}
+}
+
+func TestParseManageFlagsExtendedCases(t *testing.T) {
+	req, err := parseManageFlags([]string{"--install", "1.0.0", "--upgrade"})
+	if err == nil || !strings.Contains(err.Error(), "choose only one") {
+		t.Errorf("expected conflict error, got err=%v req=%+v", err, req)
+	}
+
+	req2, err2 := parseManageFlags([]string{"--upgrade", "2.0.0", "--downgrade"})
+	if err2 == nil || !strings.Contains(err2.Error(), "choose only one") {
+		t.Errorf("expected conflict error on upgrade+downgrade, got err=%v req=%+v", err2, req2)
+	}
+
+	req3, err3 := parseManageFlags([]string{"--downgrade", "1.0.0"})
+	if err3 != nil {
+		t.Fatalf("unexpected error: %v", err3)
+	}
+	if req3.version != "1.0.0" {
+		t.Errorf("expected version 1.0.0, got %q", req3.version)
+	}
+
+	req4, err4 := parseManageFlags([]string{"--uninstall", "--install"})
+	if err4 == nil || !strings.Contains(err4.Error(), "choose only one") {
+		t.Errorf("expected conflict on uninstall+install, got err=%v req=%+v", err4, req4)
+	}
+
+	req5, err5 := parseManageFlags([]string{"--install"})
+	if req5.action != actionInstall || err5 != nil {
+		t.Errorf("expected install action, got err=%v req=%+v", err5, req5)
+	}
+
+	_, err6 := parseManageFlags([]string{"--unknown-flag"})
+	if err6 == nil {
+		t.Error("expected error for unknown flag")
+	}
+}
+
+func TestResolveManageManagerUnknown(t *testing.T) {
+	_, err := resolveManageManager(manageFlagRequest{managerName: "notreal"})
+	if err == nil || !strings.Contains(err.Error(), "unknown manager") {
+		t.Errorf("expected unknown manager error, got %v", err)
+	}
+}
+
+func TestResolveManageManagerInstallNoManager(t *testing.T) {
+	_, err := resolveManageManager(manageFlagRequest{action: actionInstall})
+	if err == nil || !strings.Contains(err.Error(), "--manager is required") {
+		t.Errorf("expected --manager required error, got %v", err)
+	}
+}
+
+func TestHandlePackageActionError(t *testing.T) {
+	var errOut bytes.Buffer
+	code := handlePackageAction(actionInstall, []string{}, &bytes.Buffer{}, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1 on missing args, got %d", code)
+	}
+}
+
+func TestHandlePackageActionExecuteError(t *testing.T) {
+	orig := commandRunnerFn
+	commandRunnerFn = func(string, []string, []string, io.Writer, io.Writer) error {
+		return errors.New("exec failed")
+	}
+	defer func() { commandRunnerFn = orig }()
+
+	var errOut bytes.Buffer
+	code := handlePackageAction(actionInstall, []string{"npm", "react"}, &bytes.Buffer{}, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1 on exec error, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "exec failed") {
+		t.Errorf("expected error message, got %q", errOut.String())
+	}
+}
+
+func TestBuildPipArgsAllCases(t *testing.T) {
+	mgr := mustManager(t, "pip")
+
+	got, err := buildPipArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: ""}, "")
+	if err == nil || !strings.Contains(err.Error(), "require a package name") {
+		t.Errorf("expected require package error, got err=%v got=%v", err, got)
+	}
+
+	got2, err2 := buildPipArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: "requests", Version: "2.28.0"}, "requests")
+	if err2 != nil || !reflect.DeepEqual(got2, []string{"install", "--upgrade", "requests==2.28.0"}) {
+		t.Errorf("expected versioned upgrade, got err=%v got=%v", err2, got2)
+	}
+
+	got3, err3 := buildPipArgs(packageActionReq{Action: actionDowngrade, Manager: mgr, Package: "requests", Version: "2.27.0"}, "requests")
+	if err3 != nil || !reflect.DeepEqual(got3, []string{"install", "requests==2.27.0"}) {
+		t.Errorf("expected downgrade args, got err=%v got=%v", err3, got3)
+	}
+
+	got4, err4 := buildPipArgs(packageActionReq{Action: "invalid", Manager: mgr}, "")
+	if err4 == nil {
+		t.Errorf("expected unsupported action error, got %v", got4)
+	}
+}
+
+func TestBuildUVArgsAllCases(t *testing.T) {
+	mgr := mustManager(t, "uv")
+
+	got, err := buildUVArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: ""}, "")
+	if err == nil || !strings.Contains(err.Error(), "require a package name") {
+		t.Errorf("expected require package error, got err=%v got=%v", err, got)
+	}
+
+	got2, err2 := buildUVArgs(packageActionReq{Action: actionDowngrade, Manager: mgr, Package: "requests", Version: "2.27.0"}, "requests")
+	if err2 != nil || !reflect.DeepEqual(got2, []string{"pip", "install", "requests==2.27.0"}) {
+		t.Errorf("expected downgrade args, got err=%v got=%v", err2, got2)
+	}
+
+	got3, err3 := buildUVArgs(packageActionReq{Action: "invalid", Manager: mgr}, "")
+	if err3 == nil {
+		t.Errorf("expected unsupported action error, got %v", got3)
+	}
+}
+
+func TestBuildPoetryArgsAllCases(t *testing.T) {
+	mgr := mustManager(t, "poetry")
+
+	got, err := buildPoetryArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: ""}, "")
+	if err != nil || !reflect.DeepEqual(got, []string{"update"}) {
+		t.Errorf("expected global update, got err=%v got=%v", err, got)
+	}
+
+	got2, err2 := buildPoetryArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: "django", Version: "4.2.0"}, "django")
+	if err2 != nil || !reflect.DeepEqual(got2, []string{"add", "django@4.2.0"}) {
+		t.Errorf("expected versioned update, got err=%v got=%v", err2, got2)
+	}
+
+	got3, err3 := buildPoetryArgs(packageActionReq{Action: actionUninstall, Manager: mgr, Package: "django"}, "django")
+	if err3 != nil || !reflect.DeepEqual(got3, []string{"remove", "django"}) {
+		t.Errorf("expected uninstall args, got err=%v got=%v", err3, got3)
+	}
+
+	got4, err4 := buildPoetryArgs(packageActionReq{Action: "invalid", Manager: mgr}, "")
+	if err4 == nil {
+		t.Errorf("expected unsupported action error, got %v", got4)
+	}
+}
+
+func TestBuildBrewArgsAllCases(t *testing.T) {
+	mgr := mustManager(t, "brew")
+
+	got, err := buildBrewArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: ""}, "")
+	if err != nil || !reflect.DeepEqual(got, []string{"upgrade"}) {
+		t.Errorf("expected global upgrade, got err=%v got=%v", err, got)
+	}
+
+	got2, err2 := buildBrewArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: "git", Version: "2.40.0"}, "git")
+	if err2 != nil || !reflect.DeepEqual(got2, []string{"install", "git@2.40.0"}) {
+		t.Errorf("expected versioned upgrade, got err=%v got=%v", err2, got2)
+	}
+
+	got3, err3 := buildBrewArgs(packageActionReq{Action: "invalid", Manager: mgr}, "")
+	if err3 == nil {
+		t.Errorf("expected unsupported action error, got %v", got3)
+	}
+}
+
+func TestBuildNPMArgsAllCases(t *testing.T) {
+	mgr := mustManager(t, "npm")
+
+	got, err := buildNPMArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: ""}, "", "install", "uninstall")
+	if err != nil || !reflect.DeepEqual(got, []string{"update"}) {
+		t.Errorf("expected global update, got err=%v got=%v", err, got)
+	}
+
+	got2, err2 := buildNPMArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: "react", Version: "18.0.0"}, "react", "install", "uninstall")
+	if err2 != nil || !reflect.DeepEqual(got2, []string{"install", "react@18.0.0"}) {
+		t.Errorf("expected versioned update, got err=%v got=%v", err2, got2)
+	}
+
+	got3, err3 := buildNPMArgs(packageActionReq{Action: "invalid", Manager: mgr}, "", "install", "uninstall")
+	if err3 == nil {
+		t.Errorf("expected unsupported action error, got %v", got3)
+	}
+}
+
+func TestManagerSupportsCommand(t *testing.T) {
+	if managerSupportsCommand(nil, "install") {
+		t.Error("expected false for nil manager")
+	}
+	mgr := &manager.Manager{InstallCmds: []string{"add", "install"}}
+	if !managerSupportsCommand(mgr, "add") {
+		t.Error("expected true for 'add' cmd")
+	}
+	if managerSupportsCommand(mgr, "remove") {
+		t.Error("expected false for unsupported cmd")
+	}
+}
+
+func TestActionDialogLinesNoPackage(t *testing.T) {
+	ui := manageUI{}
+	lines := actionDialogLines(ui, 80)
+	if lines != nil {
+		t.Errorf("expected nil when no current package, got %v", lines)
+	}
+}
+
+func TestActionDialogLinesWithPackage(t *testing.T) {
+	ui := newManageUI(testPackageInventory())
+	ui.selected = 0
+	lines := actionDialogLines(ui, 80)
+	if len(lines) != 4 {
+		t.Errorf("expected 4 dialog lines, got %d", len(lines))
+	}
+}
+
+func TestManagerDialogLinesEmpty(t *testing.T) {
+	ui := manageUI{}
+	lines := managerDialogLines(ui, 80)
+	found := false
+	for _, l := range lines {
+		if strings.Contains(l, "none found") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'none found' in dialog lines, got %v", lines)
+	}
+}
+
+func TestManagerSummaryAllCases(t *testing.T) {
+	ui := manageUI{}
+	if got := ui.managerSummary(); got != "none" {
+		t.Errorf("expected 'none' for empty ui, got %q", got)
+	}
+
+	ui2 := newManageUI(testPackageInventory())
+	for k := range ui2.managerEnabled {
+		ui2.managerEnabled[k] = false
+	}
+	if got := ui2.managerSummary(); got != "none" {
+		t.Errorf("expected 'none' when all disabled, got %q", got)
+	}
+
+	for k := range ui2.managerEnabled {
+		ui2.managerEnabled[k] = true
+	}
+	if got := ui2.managerSummary(); got != "all" {
+		t.Errorf("expected 'all' when all enabled, got %q", got)
+	}
+
+	ui3 := manageUI{
+		managerOptions: []string{"npm", "brew", "go", "pip", "uv"},
+		managerEnabled: map[string]bool{"npm": true, "brew": true, "go": true, "pip": true, "uv": false},
+	}
+	got := ui3.managerSummary()
+	if !strings.Contains(got, "/") {
+		t.Errorf("expected N/M summary for many enabled, got %q", got)
+	}
+}
+
+func TestExecutePackageActionError(t *testing.T) {
+	mgr := mustManager(t, "npm")
+	orig := commandRunnerFn
+	commandRunnerFn = func(string, []string, []string, io.Writer, io.Writer) error {
+		return errors.New("command failed")
+	}
+	defer func() { commandRunnerFn = orig }()
+
+	err := executePackageAction(packageActionReq{Action: actionInstall, Manager: mgr, Package: "react"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "command failed") {
+		t.Errorf("expected command failed error, got %v", err)
+	}
+}
+
+func TestDebugManageTiming(t *testing.T) {
+	t.Setenv("PRE_MANAGE_DEBUG", "1")
+	debugManageTiming("npm", []string{"list"}, time.Now().Add(-time.Millisecond*5), nil)
+	debugManageTiming("npm", []string{"list"}, time.Now().Add(-time.Millisecond*5), errors.New("fail"))
+}
+
+func TestBuildGoArgsAllCases(t *testing.T) {
+	mgr := mustManager(t, "go")
+
+	got, err := buildGoArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: ""}, "")
+	if err != nil || !reflect.DeepEqual(got, []string{"get", "-u", "./..."}) {
+		t.Errorf("expected global update, got err=%v got=%v", err, got)
+	}
+
+	got2, err2 := buildGoArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: "golang.org/x/text"}, "golang.org/x/text")
+	if err2 != nil || !reflect.DeepEqual(got2, []string{"get", "golang.org/x/text@latest"}) {
+		t.Errorf("expected latest update, got err=%v got=%v", err2, got2)
+	}
+
+	got3, err3 := buildGoArgs(packageActionReq{Action: actionUninstall, Manager: mgr, Package: "golang.org/x/text"}, "golang.org/x/text")
+	if err3 != nil || !reflect.DeepEqual(got3, []string{"get", "golang.org/x/text@none"}) {
+		t.Errorf("expected uninstall args, got err=%v got=%v", err3, got3)
+	}
+
+	_, err4 := buildGoArgs(packageActionReq{Action: "invalid", Manager: mgr}, "")
+	if err4 == nil {
+		t.Error("expected unsupported action error")
+	}
+}
+
+func TestBuildPipArgsUpdateNoVersion(t *testing.T) {
+	mgr := mustManager(t, "pip")
+	got, err := buildPipArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: "requests"}, "requests")
+	if err != nil || !reflect.DeepEqual(got, []string{"install", "--upgrade", "requests"}) {
+		t.Errorf("expected upgrade without version, got err=%v got=%v", err, got)
+	}
+
+	got2, err2 := buildPipArgs(packageActionReq{Action: actionUninstall, Manager: mgr, Package: "requests"}, "requests")
+	if err2 != nil || !reflect.DeepEqual(got2, []string{"uninstall", "-y", "requests"}) {
+		t.Errorf("expected uninstall args, got err=%v got=%v", err2, got2)
+	}
+}
+
+func TestBuildUVArgsUpdateNoVersion(t *testing.T) {
+	mgr := mustManager(t, "uv")
+	got, err := buildUVArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: "requests"}, "requests")
+	if err != nil || !reflect.DeepEqual(got, []string{"pip", "install", "--upgrade", "requests"}) {
+		t.Errorf("expected update without version, got err=%v got=%v", err, got)
+	}
+
+	got2, err2 := buildUVArgs(packageActionReq{Action: actionUninstall, Manager: mgr, Package: "requests"}, "requests")
+	if err2 != nil || !reflect.DeepEqual(got2, []string{"pip", "uninstall", "requests"}) {
+		t.Errorf("expected remove args, got err=%v got=%v", err2, got2)
+	}
+}
+
+func TestTruncateEdgeCases(t *testing.T) {
+	if got := truncate("ab", 1); got != "a" {
+		t.Errorf("expected single char for max=1, got %q", got)
+	}
+	if got := truncate("abc", 2); got != "ab" {
+		t.Errorf("expected 2 chars for max=2, got %q", got)
+	}
+}
+
+func TestPackageWithVersionEdgeCases(t *testing.T) {
+	mgr := mustManager(t, "npm")
+	if got := packageWithVersion(mgr, "", "1.0.0"); got != "" {
+		t.Errorf("expected empty for empty spec, got %q", got)
+	}
+	if got := packageWithVersion(mgr, "react", ""); got != "react" {
+		t.Errorf("expected spec unchanged when no version, got %q", got)
+	}
+}
+
+func TestExecutePackageActionBuildError(t *testing.T) {
+	mgr := mustManager(t, "npm")
+	err := executePackageAction(packageActionReq{Action: "invalid", Manager: mgr, Package: "react"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "does not support") {
+		t.Errorf("expected unsupported action error, got %v", err)
+	}
+}
+
+func TestApplyFilterOffsetClamping(t *testing.T) {
+	ui := newManageUI(testPackageInventory())
+	ui.search = "react"
+	ui.applyFilter()
+	ui.selected = 0
+	ui.offset = 5
+	ui.search = ""
+	ui.applyFilter()
+	if ui.offset > ui.selected {
+		t.Errorf("expected offset <= selected after filter, got offset=%d selected=%d", ui.offset, ui.selected)
+	}
+}
+
+func TestHandleInputKeyBackspaceEmpty(t *testing.T) {
+	ui := newManageUI(testPackageInventory())
+	ui.beginInput(inputInstallManager, "manager")
+	ui.inputValue = ""
+	handleInputKey(keyBackspace, &ui, manageTerminal{}, io.Discard, io.Discard)
+	if ui.inputValue != "" {
+		t.Errorf("expected empty input after backspace on empty, got %q", ui.inputValue)
+	}
+	handleInputKey(1, &ui, manageTerminal{}, io.Discard, io.Discard)
+	if ui.inputValue != "" {
+		t.Errorf("expected no change for control char, got %q", ui.inputValue)
+	}
+}
+
+func TestHandleSearchKeyBackspaceAndInput(t *testing.T) {
+	ui := newManageUI(testPackageInventory())
+	ui.mode = modeSearch
+	ui.search = ""
+	handleSearchKey(keyBackspace, &ui)
+	if ui.search != "" {
+		t.Errorf("expected empty search after backspace on empty")
+	}
+	handleSearchKey('r', &ui)
+	if ui.search != "r" {
+		t.Errorf("expected search='r', got %q", ui.search)
+	}
+	handleSearchKey(1, &ui)
+	if ui.search != "r" {
+		t.Errorf("expected search unchanged for control char, got %q", ui.search)
+	}
+}
+
+func TestHandleManagerKeyEnableAll(t *testing.T) {
+	ui := newManageUI(testPackageInventory())
+	ui.mode = modeManagers
+	for k := range ui.managerEnabled {
+		ui.managerEnabled[k] = false
+	}
+	handleManagerKey('a', &ui)
+	for k, v := range ui.managerEnabled {
+		if !v {
+			t.Errorf("expected manager %s enabled after 'a', got false", k)
+		}
+	}
+}
+
+func TestHandleManageKeyInputMode(t *testing.T) {
+	ui := newManageUI(testPackageInventory())
+	ui.mode = modeInput
+	ui.inputValue = ""
+	handleManageKey('a', &ui, manageTerminal{}, io.Discard, io.Discard)
+	if ui.inputValue != "a" {
+		t.Errorf("expected 'a' typed in input mode, got %q", ui.inputValue)
+	}
+}
+
+func TestReadEscapeKeyArrows(t *testing.T) {
+	upSeq := bytes.NewReader([]byte{'[', 'A'})
+	key := readEscapeKey(upSeq)
+	if key != keyUp {
+		t.Errorf("expected keyUp, got %d", key)
+	}
+
+	downSeq := bytes.NewReader([]byte{'[', 'B'})
+	key2 := readEscapeKey(downSeq)
+	if key2 != keyDown {
+		t.Errorf("expected keyDown, got %d", key2)
+	}
+
+	notBracket := bytes.NewReader([]byte{'O'})
+	key3 := readEscapeKey(notBracket)
+	if key3 != keyEsc {
+		t.Errorf("expected keyEsc for non-bracket, got %d", key3)
+	}
+
+	unknownSeq := bytes.NewReader([]byte{'[', 'Z'})
+	key4 := readEscapeKey(unknownSeq)
+	if key4 != keyEsc {
+		t.Errorf("expected keyEsc for unknown sequence, got %d", key4)
+	}
+}
+
+func TestEnsureSelectionVisibleScrollDown(t *testing.T) {
+	pkgs := make([]installedPackage, 10)
+	for i := range pkgs {
+		pkgs[i] = installedPackage{Manager: "npm", Name: "pkg"}
+	}
+	ui := newManageUI(packageInventory{Packages: pkgs})
+	ui.selected = 9
+	ui.offset = 0
+	ui.ensureSelectionVisible(5)
+	if ui.offset+5 <= ui.selected {
+		t.Errorf("expected selected to be visible, offset=%d selected=%d", ui.offset, ui.selected)
+	}
+}
+
+func TestToggleSelectedManagerEmpty(t *testing.T) {
+	ui := manageUI{}
+	ui.toggleSelectedManager()
+}
+
+func TestSubmitInputVersionEmpty(t *testing.T) {
+	ui := newManageUI(testPackageInventory())
+	ui.inputKind = inputVersion
+	ui.inputValue = ""
+	ui.submitInput(manageTerminal{}, io.Discard, io.Discard)
+	if ui.message != "version is required" {
+		t.Errorf("expected 'version is required', got %q", ui.message)
+	}
+}
+
+func TestCurrentManageTheme(t *testing.T) {
+	t.Setenv("PRE_MANAGE_THEME", "mono")
+	theme := currentManageTheme()
+	if theme.title != "" {
+		t.Errorf("expected empty mono theme, got %+v", theme)
+	}
+
+	t.Setenv("PRE_MANAGE_THEME", "contrast")
+	theme2 := currentManageTheme()
+	if theme2.title == "" {
+		t.Errorf("expected non-empty contrast theme")
+	}
+
+	t.Setenv("PRE_MANAGE_THEME", "unknown-theme")
+	theme3 := currentManageTheme()
+	if theme3.title == "" {
+		t.Errorf("expected default theme for unknown value")
+	}
+}
+
+func TestHandleSearchKeyNavigation(t *testing.T) {
+	ui := newManageUI(testPackageInventory())
+	ui.mode = modeSearch
+	ui.selected = 1
+	handleSearchKey(keyUp, &ui)
+	if ui.selected != 0 {
+		t.Errorf("expected selected=0 after keyUp in search, got %d", ui.selected)
+	}
+	handleSearchKey(keyDown, &ui)
+	if ui.selected != 1 {
+		t.Errorf("expected selected=1 after keyDown in search, got %d", ui.selected)
+	}
+}
+
+func TestHandleManagerKeyEnter(t *testing.T) {
+	ui := newManageUI(testPackageInventory())
+	ui.mode = modeManagers
+	first := ui.managerOptions[0]
+	before := ui.managerEnabled[first]
+	handleManagerKey(keyEnter, &ui)
+	if ui.managerEnabled[first] == before {
+		t.Errorf("expected manager toggle on keyEnter")
+	}
+}
+
+func TestHandleDialogKeyEsc(t *testing.T) {
+	ui := newManageUI(testPackageInventory())
+	ui.mode = modeDialog
+	handleDialogKey(keyEsc, &ui, manageTerminal{}, io.Discard, io.Discard)
+	if ui.mode != modeList {
+		t.Errorf("expected modeList after keyEsc in dialog, got %v", ui.mode)
+	}
+}
+
+func TestHandleInputKeyEnter(t *testing.T) {
+	ui := newManageUI(testPackageInventory())
+	ui.mode = modeInput
+	ui.inputKind = inputInstallManager
+	ui.inputValue = ""
+	handleInputKey(keyEnter, &ui, manageTerminal{}, io.Discard, io.Discard)
+	if ui.message != "manager is required" {
+		t.Errorf("expected manager required message, got %q", ui.message)
+	}
+}
+
+func TestEnsureSelectionVisibleSmallPageSize(t *testing.T) {
+	ui := newManageUI(packageInventory{Packages: []installedPackage{
+		{Manager: "npm", Name: "a"},
+	}})
+	ui.selected = 0
+	ui.ensureSelectionVisible(5)
+	if ui.offset != 0 {
+		t.Errorf("expected offset=0 when page > list size, got %d", ui.offset)
+	}
+}
+
+func TestResolveManageManagerNotFound(t *testing.T) {
+	defer withLookPath(func(string) (string, error) { return "", os.ErrNotExist })()
+	_, err := resolveManageManager(manageFlagRequest{action: actionUpdate, packageName: "missing-pkg"})
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected not found error, got %v", err)
+	}
+}
+
+func TestPackageWithVersionEmptyName(t *testing.T) {
+	mgr := mustManager(t, "npm")
+	result := packageWithVersion(mgr, "   ", "1.0.0")
+	if result != "" {
+		t.Errorf("expected empty for whitespace-only spec, got %q", result)
+	}
+}
+
+func TestBuildGenericPackageArgsUnsupportedUpdate(t *testing.T) {
+	mgr := &manager.Manager{Name: "custom", InstallCmds: []string{"add"}}
+	_, err := buildGenericPackageArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: "thing"})
+	if err == nil || !strings.Contains(err.Error(), "does not support") {
+		t.Errorf("expected unsupported error, got %v", err)
+	}
+}
+
+func TestManagerDialogLinesScrolling(t *testing.T) {
+	managers := []string{"npm", "brew", "go", "pip", "uv", "poetry", "pnpm", "bun", "cargo"}
+	enabled := make(map[string]bool)
+	for _, m := range managers {
+		enabled[m] = true
+	}
+	ui := manageUI{
+		managerOptions:  managers,
+		managerEnabled:  enabled,
+		managerSelected: 8,
+	}
+	lines := managerDialogLines(ui, 80)
+	found := false
+	for _, l := range lines {
+		if strings.Contains(l, "↑ more") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected ↑ more scroll indicator for large list, got %v", lines)
 	}
 }

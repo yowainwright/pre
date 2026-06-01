@@ -53,3 +53,67 @@ func TestScreenshotANSIToSVGPreservesColors(t *testing.T) {
 		t.Fatalf("expected invalid truecolor to fail, got %q %v", color, ok)
 	}
 }
+
+func TestManagerIndexNotFound(t *testing.T) {
+	if got := managerIndex([]string{"brew", "npm"}, "missing"); got != 0 {
+		t.Errorf("expected 0 for missing manager, got %d", got)
+	}
+}
+
+func TestPackageIndexNotFound(t *testing.T) {
+	pkgs := []installedPackage{{Name: "react"}, {Name: "vite"}}
+	if got := packageIndex(pkgs, "missing"); got != 0 {
+		t.Errorf("expected 0 for missing package, got %d", got)
+	}
+}
+
+func TestApplyANSIStyleBranches(t *testing.T) {
+	base := svgStyle{fg: "#cdd6f4"}
+
+	reset := applyANSIStyle(svgStyle{fg: "#ff0000", bold: true}, "")
+	if reset.fg != "#cdd6f4" || reset.bold {
+		t.Errorf("expected reset on empty seq, got %+v", reset)
+	}
+
+	bold := applyANSIStyle(base, "1")
+	if !bold.bold {
+		t.Errorf("expected bold=true, got %+v", bold)
+	}
+	unbold := applyANSIStyle(bold, "22")
+	if unbold.bold {
+		t.Errorf("expected bold=false after 22, got %+v", unbold)
+	}
+
+	defaultFG := applyANSIStyle(svgStyle{fg: "#ff0000"}, "39")
+	if defaultFG.fg != "#cdd6f4" {
+		t.Errorf("expected default fg after 39, got %q", defaultFG.fg)
+	}
+
+	withBG := applyANSIStyle(svgStyle{bg: "#ff0000"}, "49")
+	if withBG.bg != "" {
+		t.Errorf("expected cleared bg after 49, got %q", withBG.bg)
+	}
+
+	fgTrue := applyANSIStyle(base, "38;2;10;20;30")
+	if fgTrue.fg != "#0a141e" {
+		t.Errorf("expected truecolor fg, got %q", fgTrue.fg)
+	}
+
+	bgTrue := applyANSIStyle(base, "48;2;10;20;30")
+	if bgTrue.bg != "#0a141e" {
+		t.Errorf("expected truecolor bg, got %q", bgTrue.bg)
+	}
+
+	unchanged := applyANSIStyle(base, "notanumber")
+	if unchanged != base {
+		t.Errorf("expected invalid code to leave style unchanged, got %+v", unchanged)
+	}
+}
+
+func TestHandleScreenshotsMkdirError(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := handleScreenshots([]string{"/dev/null/cannot"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1 on mkdir error, got %d", code)
+	}
+}

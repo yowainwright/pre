@@ -223,3 +223,70 @@ func TestSetupWriteError(t *testing.T) {
 
 	Setup()
 }
+
+func TestSetupDeclinesSystemScan(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+	defer withStdinInput("n\n")()
+
+	Setup()
+
+	rcPath := filepath.Join(dir, ".zshrc")
+	content, err := os.ReadFile(rcPath)
+	if err != nil {
+		t.Fatalf("expected rc file: %v", err)
+	}
+	if !strings.Contains(string(content), shellHookStart) {
+		t.Error("expected hooks to be written even when scan declined")
+	}
+}
+
+func TestShellHookStatusNotInstalled(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+
+	rcPath := filepath.Join(dir, ".zshrc")
+	os.WriteFile(rcPath, []byte("export FOO=bar\n"), 0644)
+
+	_, installed := ShellHookStatus()
+	if installed {
+		t.Error("expected hooks not to be installed")
+	}
+}
+
+func TestNextLineNoNewline(t *testing.T) {
+	line, n := nextLine("hello")
+	if line != "hello" || n != 5 {
+		t.Errorf("expected (hello, 5), got (%q, %d)", line, n)
+	}
+}
+
+func TestRemoveLegacyShellHookBlockMultiLineFunction(t *testing.T) {
+	content := "# pre security proxy\nfunction npm() {\n  command pre npm \"$@\"\n}\nexport BAR=baz\n"
+	result := removeLegacyShellHookBlock(content, 0)
+	if strings.Contains(result, "function npm") {
+		t.Errorf("expected function to be removed, got %q", result)
+	}
+	if !strings.Contains(result, "export BAR=baz") {
+		t.Errorf("expected trailing content preserved, got %q", result)
+	}
+}
+
+func TestRemoveLegacyShellHookBlockNoTrailing(t *testing.T) {
+	content := "# pre security proxy\nfunction npm() { command pre npm \"$@\"; }\n"
+	result := removeLegacyShellHookBlock(content, 0)
+	if strings.Contains(result, "function npm") {
+		t.Errorf("expected function removed when no trailing content, got %q", result)
+	}
+}
+
+func TestManagerAllInHook(t *testing.T) {
+	hook := buildShellHook()
+	for _, mgr := range manager.All() {
+		if !strings.Contains(hook, "function "+mgr.Name+"()") {
+			t.Errorf("expected hook for manager %s", mgr.Name)
+		}
+	}
+}

@@ -174,3 +174,14 @@ func TestSaveCreatesDirectory(t *testing.T) {
 		t.Errorf("expected config file to exist at %s: %v", p, err)
 	}
 }
+
+func TestConfigPath(t *testing.T) {
+	defer withConfigDir(t.TempDir())()
+	p, err := Path()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p == "" {
+		t.Fatal("expected non-empty config path")
+	}
+}
