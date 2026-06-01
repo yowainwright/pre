@@ -35,15 +35,15 @@ check_deps_missing_optional_counts() (
   warned=0
   cmd_exists() {
     case "$1" in
-      svu|cosign) return 1 ;;
-      *)          return 0 ;;
+      goreleaser|svu|cosign) return 1 ;;
+      *)                     return 0 ;;
     esac
   }
   check_deps >/dev/null
   printf "%s/%s/%s" "$passed" "$warned" "$failed"
 )
 
-check "check_deps treats svu optional" "6/2/0" "$(check_deps_missing_optional_counts)"
+check "check_deps treats release tools optional" "5/3/0" "$(check_deps_missing_optional_counts)"
 
 # gh_authed
 check "gh_authed passes with true"  "0" "$(exit_code gh_authed "true")"

@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -520,18 +522,23 @@ func TestRunSelfUpdateManualInstall(t *testing.T) {
 	exe := filepath.Join(dir, "pre")
 	defer withExecutablePath(func() (string, error) { return exe, nil })()
 
-	type commandCall struct {
-		name string
-		args []string
-		env  []string
-	}
-	var calls []commandCall
+	scriptContent := []byte("#!/bin/sh\necho updating\n")
+	sum := sha256.Sum256(scriptContent)
+	fakeChecksums := []byte(hex.EncodeToString(sum[:]) + "  install.sh\n")
+	defer withHttpGetBytes(func(url string) ([]byte, error) {
+		if strings.Contains(url, "checksums") {
+			return fakeChecksums, nil
+		}
+		return scriptContent, nil
+	})()
+
+	var gotName string
+	var gotArgs []string
+	var gotEnv []string
 	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
-		calls = append(calls, commandCall{
-			name: name,
-			args: append([]string(nil), args...),
-			env:  append([]string(nil), env...),
-		})
+		gotName = name
+		gotArgs = args
+		gotEnv = env
 		return nil
 	})()
 
@@ -540,26 +547,14 @@ func TestRunSelfUpdateManualInstall(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if len(calls) != 2 {
-		t.Fatalf("expected curl and sh commands, got %#v", calls)
+	if gotName != "sh" {
+		t.Fatalf("expected sh command, got %q", gotName)
 	}
-	if calls[0].name != "curl" {
-		t.Fatalf("expected curl command, got %q", calls[0].name)
+	if len(gotArgs) != 1 || !strings.HasSuffix(gotArgs[0], ".sh") {
+		t.Errorf("expected verified script path, got %v", gotArgs)
 	}
-	if len(calls[0].args) != 4 || calls[0].args[0] != "-fsSL" || calls[0].args[1] != installScriptURL || calls[0].args[2] != "-o" || calls[0].args[3] == "" {
-		t.Errorf("expected installer download command, got %v", calls[0].args)
-	}
-	if len(calls[0].env) != 0 {
-		t.Errorf("expected no curl env override, got %v", calls[0].env)
-	}
-	if calls[1].name != "sh" {
-		t.Fatalf("expected sh command, got %q", calls[1].name)
-	}
-	if len(calls[1].args) != 1 || calls[1].args[0] != calls[0].args[3] {
-		t.Errorf("expected sh to run downloaded installer, got %v", calls[1].args)
-	}
-	if len(calls[1].env) != 1 || calls[1].env[0] != "PRE_BIN_DIR="+dir {
-		t.Errorf("expected PRE_BIN_DIR env, got %v", calls[1].env)
+	if len(gotEnv) != 1 || gotEnv[0] != "PRE_BIN_DIR="+dir {
+		t.Errorf("expected PRE_BIN_DIR env, got %v", gotEnv)
 	}
 }
 
@@ -914,6 +909,12 @@ func withCommandRunnerWithInput(fn func(string, []string, []string, io.Reader, i
 	return func() { commandRunnerWithInputFn = orig }
 }
 
+func withHttpGetBytes(fn func(string) ([]byte, error)) func() {
+	orig := httpGetBytesFn
+	httpGetBytesFn = fn
+	return func() { httpGetBytesFn = orig }
+}
+
 func withCommandOutput(fn func(string, []string) ([]byte, error)) func() {
 	orig := commandOutputFn
 	commandOutputFn = fn
@@ -1068,21 +1069,22 @@ func TestRunSelfUpdateManualCommandFails(t *testing.T) {
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "pre")
 	defer withExecutablePath(func() (string, error) { return exe, nil })()
-	var calls int
-	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
-		calls++
-		if name == "sh" {
-			return os.ErrInvalid
+	scriptContent := []byte("#!/bin/sh\necho updating\n")
+	sum := sha256.Sum256(scriptContent)
+	fakeChecksums := []byte(hex.EncodeToString(sum[:]) + "  install.sh\n")
+	defer withHttpGetBytes(func(url string) ([]byte, error) {
+		if strings.Contains(url, "checksums") {
+			return fakeChecksums, nil
 		}
-		return nil
+		return scriptContent, nil
+	})()
+	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
+		return os.ErrInvalid
 	})()
 	var out, errOut bytes.Buffer
 	code := run([]string{"self", "update"}, &out, &errOut)
 	if code != 1 {
 		t.Errorf("expected exit 1, got %d", code)
-	}
-	if calls != 2 {
-		t.Errorf("expected curl and sh commands, got %d", calls)
 	}
 }
 
@@ -1090,12 +1092,12 @@ func TestRunSelfUpdateManualDownloadFails(t *testing.T) {
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "pre")
 	defer withExecutablePath(func() (string, error) { return exe, nil })()
+	defer withHttpGetBytes(func(url string) ([]byte, error) {
+		return nil, os.ErrInvalid
+	})()
 	var calls int
 	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
 		calls++
-		if name == "curl" {
-			return os.ErrInvalid
-		}
 		return nil
 	})()
 	var out, errOut bytes.Buffer
@@ -1103,10 +1105,10 @@ func TestRunSelfUpdateManualDownloadFails(t *testing.T) {
 	if code != 1 {
 		t.Errorf("expected exit 1, got %d", code)
 	}
-	if calls != 1 {
-		t.Errorf("expected only the failed curl command, got %d calls", calls)
+	if calls != 0 {
+		t.Errorf("expected no commands run when download fails, got %d", calls)
 	}
-	if !strings.Contains(errOut.String(), "download installer") {
+	if !strings.Contains(errOut.String(), "downloading install.sh") {
 		t.Errorf("expected download failure in stderr, got: %s", errOut.String())
 	}
 }

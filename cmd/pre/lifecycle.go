@@ -1,20 +1,27 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/yowainwright/pre/internal/cache"
 	"github.com/yowainwright/pre/internal/config"
 	"github.com/yowainwright/pre/internal/proxy"
 )
 
-const installScriptURL = "https://github.com/yowainwright/pre/releases/latest/download/install.sh"
+const (
+	installScriptURL    = "https://github.com/yowainwright/pre/releases/latest/download/install.sh"
+	installChecksumsURL = "https://github.com/yowainwright/pre/releases/latest/download/checksums.txt"
+)
 
 const (
 	installSourceManual   = "manual"
@@ -28,6 +35,7 @@ var (
 	commandRunnerWithInputFn = runExternalCommandWithInput
 	removeFileFn             = os.Remove
 	removeAllFn              = os.RemoveAll
+	httpGetBytesFn           = httpGetBytes
 )
 
 func handleSelf(args []string, cfg *config.Config, stdout, stderr io.Writer) int {
@@ -90,28 +98,69 @@ func handleSelfUpdate(args []string, cfg *config.Config, stdout, stderr io.Write
 	}
 
 	fmt.Fprintf(stdout, "pre: updating manual install in %s\n", binDir)
-	installer, err := os.CreateTemp("", "pre-install-*.sh")
-	if err != nil {
-		fmt.Fprintf(stderr, "pre update: create installer temp file: %v\n", err)
-		return 1
-	}
-	installerPath := installer.Name()
-	if err := installer.Close(); err != nil {
-		_ = removeFileFn(installerPath)
-		fmt.Fprintf(stderr, "pre update: close installer temp file: %v\n", err)
-		return 1
-	}
-	defer func() { _ = removeFileFn(installerPath) }()
-
-	if err := commandRunnerFn("curl", []string{"-fsSL", installScriptURL, "-o", installerPath}, nil, stdout, stderr); err != nil {
-		fmt.Fprintf(stderr, "pre update: download installer: %v\n", err)
-		return 1
-	}
-	if err := commandRunnerFn("sh", []string{installerPath}, []string{"PRE_BIN_DIR=" + binDir}, stdout, stderr); err != nil {
+	if err := downloadVerifyAndRun(installScriptURL, installChecksumsURL, []string{"PRE_BIN_DIR=" + binDir}, stdout, stderr); err != nil {
 		fmt.Fprintf(stderr, "pre update: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+func downloadVerifyAndRun(scriptURL, checksumsURL string, env []string, stdout, stderr io.Writer) error {
+	script, err := httpGetBytesFn(scriptURL)
+	if err != nil {
+		return fmt.Errorf("downloading install.sh: %w", err)
+	}
+	checksums, err := httpGetBytesFn(checksumsURL)
+	if err != nil {
+		return fmt.Errorf("downloading checksums.txt: %w", err)
+	}
+	if err := verifyInstallScript(script, checksums); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp("", "pre-install-*.sh")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(script); err != nil {
+		if closeErr := tmp.Close(); closeErr != nil {
+			return fmt.Errorf("writing install script: %w; closing temp file: %v", err, closeErr)
+		}
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing install script: %w", err)
+	}
+	if err := os.Chmod(tmp.Name(), 0700); err != nil { // #nosec G302 -- executable script requires 0700
+		return err
+	}
+	return commandRunnerFn("sh", []string{tmp.Name()}, env, stdout, stderr)
+}
+
+var httpClient = &http.Client{Timeout: 60 * time.Second}
+
+func httpGetBytes(url string) ([]byte, error) {
+	resp, err := httpClient.Get(url) // #nosec G107 -- URL is a package-level constant
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
+	}
+	return io.ReadAll(resp.Body)
+}
+
+func verifyInstallScript(script, checksums []byte) error {
+	sum := sha256.Sum256(script)
+	got := hex.EncodeToString(sum[:])
+	for _, line := range strings.Split(string(checksums), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == "install.sh" && fields[0] == got {
+			return nil
+		}
+	}
+	return errors.New("install.sh SHA256 checksum does not match checksums.txt")
 }
 
 func handleSelfUninstall(args []string, cfg *config.Config, stdout, stderr io.Writer) int {
