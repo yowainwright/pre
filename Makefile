@@ -63,7 +63,6 @@ demo: docker-build
 
 secrets:
 	gh secret set HOMEBREW_TAP_TOKEN --body "$$HOMEBREW_TAP_TOKEN"
-	gh secret set CODECOV_TOKEN      --body "$$CODECOV_TOKEN"
 
 setup:
 	sh scripts/setup.sh

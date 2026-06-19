@@ -21,6 +21,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	cfg := config.Load()
 	security.Endpoint = cfg.API.Endpoint
 	cache.SetTTL(cfg.Cache.TTL)
+	cache.SetSource(cfg.API.Endpoint)
 
 	mgrs := make([]manager.Manager, len(cfg.Managers))
 	for i, m := range cfg.Managers {
@@ -141,7 +142,7 @@ func handleConfig(args []string, cfg *config.Config, stdout, stderr io.Writer) i
 	case "endpoint":
 		cfg.API.Endpoint = val
 	case "ttl":
-		if _, err := time.ParseDuration(val); err != nil {
+		if err := validateNonNegativeDuration(val); err != nil {
 			fmt.Fprintf(stderr, "pre config: invalid duration for %s: %q\n", args[1], val)
 			return 1
 		}
@@ -154,7 +155,7 @@ func handleConfig(args []string, cfg *config.Config, stdout, stderr io.Writer) i
 		}
 		cfg.SystemScan = enabled
 	case "systemTTL":
-		if _, err := time.ParseDuration(val); err != nil {
+		if err := validateNonNegativeDuration(val); err != nil {
 			fmt.Fprintf(stderr, "pre config: invalid duration for %s: %q\n", args[1], val)
 			return 1
 		}
@@ -169,6 +170,17 @@ func handleConfig(args []string, cfg *config.Config, stdout, stderr io.Writer) i
 	}
 	fmt.Fprintf(stdout, "%s = %s\n", args[1], val)
 	return 0
+}
+
+func validateNonNegativeDuration(s string) error {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return err
+	}
+	if d < 0 {
+		return fmt.Errorf("duration must be non-negative")
+	}
+	return nil
 }
 
 func normalizeConfigKey(key string) string {
@@ -199,6 +211,14 @@ func handleStatus(cfg *config.Config, stdout io.Writer) {
 	sys := proxy.LoadSystemStats()
 	if sys.Total == 0 {
 		fmt.Fprintf(stdout, "system scan: not configured (run 'pre setup')\n")
+	} else if sys.Errors > 0 {
+		if sys.LastUpdated.IsZero() {
+			fmt.Fprintf(stdout, "system scan: %d total · %d crit · %d warn · %d errors · no successful run\n",
+				sys.Total, sys.Crit, sys.Warn, sys.Errors)
+		} else {
+			fmt.Fprintf(stdout, "system scan: %d total · %d crit · %d warn · %d errors · last successful %s\n",
+				sys.Total, sys.Crit, sys.Warn, sys.Errors, sys.LastUpdated.Format("2006-01-02 15:04"))
+		}
 	} else {
 		fmt.Fprintf(stdout, "system scan: %d total · %d crit · %d warn · last run %s\n",
 			sys.Total, sys.Crit, sys.Warn, sys.LastUpdated.Format("2006-01-02 15:04"))

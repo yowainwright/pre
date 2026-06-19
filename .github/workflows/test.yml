@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -27,21 +28,19 @@ jobs:
         run: make lint
 
       - name: Unit tests
-        run: go test -coverprofile=coverage.out ./...
+        run: go test -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
 
       - name: Security scans
         run: make security
 
-      - name: Prepare Codecov coverage profile
-        run: |
-          awk 'NR == 1 || $1 ~ /internal\/(manager|security)\// || $1 ~ /internal\/proxy\/(intercept|render|scan|stats)\.go:/' coverage.out > coverage.codecov.out
-
       - uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
         with:
           disable_search: true
-          files: coverage.codecov.out
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
+          files: coverage.out
+          flags: unit
+          name: unit
+          use_oidc: true
 
   integration:
     runs-on: ubuntu-latest

@@ -17,7 +17,7 @@ func SetSystemScanTTL(s string) {
 	if s == "" {
 		return
 	}
-	if d, err := time.ParseDuration(s); err == nil {
+	if d, err := time.ParseDuration(s); err == nil && d >= 0 {
 		configuredSystemScanTTL = d
 	}
 }
@@ -27,15 +27,27 @@ func systemScanTTL() time.Duration {
 }
 
 type SystemStats struct {
-	Crit        int       `json:"crit"`
-	Warn        int       `json:"warn"`
-	Total       int       `json:"total"`
-	LastUpdated time.Time `json:"lastUpdated"`
+	Crit          int       `json:"crit"`
+	Warn          int       `json:"warn"`
+	Errors        int       `json:"errors,omitempty"`
+	Total         int       `json:"total"`
+	LastUpdated   time.Time `json:"lastUpdated"`
+	LastAttempted time.Time `json:"lastAttempted,omitempty"`
 }
 
 func shouldRunSystemScan() bool {
 	s := loadSystemStatsFn()
-	return s.LastUpdated.IsZero() || time.Since(s.LastUpdated) > systemScanTTL()
+	ttl := systemScanTTL()
+	if ttl <= 0 {
+		return true
+	}
+
+	now := time.Now()
+	lastRun := s.LastUpdated
+	if s.LastAttempted.After(lastRun) {
+		lastRun = s.LastAttempted
+	}
+	return lastRun.IsZero() || lastRun.After(now) || now.Sub(lastRun) > ttl
 }
 
 var (
@@ -71,7 +83,13 @@ func loadSystemStats() SystemStats {
 }
 
 func saveSystemStats(s SystemStats) {
-	s.LastUpdated = time.Now()
+	now := time.Now()
+	s.LastAttempted = now
+	if s.Errors == 0 {
+		s.LastUpdated = now
+	} else if s.LastUpdated.IsZero() {
+		s.LastUpdated = loadSystemStats().LastUpdated
+	}
 	path, err := systemStatsPath()
 	if err != nil {
 		return
