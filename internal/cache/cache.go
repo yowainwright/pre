@@ -125,7 +125,9 @@ func Hit(c Cache, key string) bool {
 		return false
 	}
 	ttl := TTL()
-	if ttl <= 0 || e.CheckedAt.IsZero() || e.Source != Source() {
+	currentSource := Source()
+	sourceMismatch := currentSource != "" && e.Source != currentSource
+	if ttl <= 0 || e.CheckedAt.IsZero() || sourceMismatch {
 		return false
 	}
 	age := time.Since(e.CheckedAt)

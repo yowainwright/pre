@@ -205,6 +205,20 @@ func TestHitSourceMismatch(t *testing.T) {
 	}
 }
 
+func TestHitBlankSourceMissWhenSourceConfigured(t *testing.T) {
+	defer resetConfiguredSource()()
+	SetSource("https://api.example.test")
+
+	key := Key("npm", "react", "18.0.0")
+	c := Cache{
+		key: Entry{Version: "18.0.0", CheckedAt: time.Now()},
+	}
+
+	if Hit(c, key) {
+		t.Error("expected source-less legacy entry to miss when source is configured")
+	}
+}
+
 func TestSetStoresSource(t *testing.T) {
 	defer resetConfiguredSource()()
 	SetSource("https://api.example.test")

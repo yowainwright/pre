@@ -217,8 +217,8 @@ func TestRunBackgroundScanSecurityError(t *testing.T) {
 	mgr := &manager.Manager{Name: "npm", Ecosystem: "npm"}
 	RunBackgroundScan(mgr)
 
-	if savedStats.Errors != 1 || savedStats.Warn != 1 {
-		t.Errorf("expected one warning error, got Warn=%d Errors=%d", savedStats.Warn, savedStats.Errors)
+	if savedStats.Errors != 1 || savedStats.Warn != 0 {
+		t.Errorf("expected Errors=1 Warn=0, got Warn=%d Errors=%d", savedStats.Warn, savedStats.Errors)
 	}
 	if savedStats.Total != 1 {
 		t.Errorf("expected Total=1, got %d", savedStats.Total)

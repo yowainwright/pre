@@ -79,7 +79,6 @@ func RunBackgroundScan(mgr *manager.Manager) {
 		case len(r.vulns) > 0:
 			warn++
 		case r.err != nil:
-			warn++
 			errs++
 		}
 		if len(r.vulns) == 0 && r.version != "" && r.err == nil && r.cacheable && !r.cached {
