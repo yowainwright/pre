@@ -83,13 +83,12 @@ func loadSystemStats() SystemStats {
 }
 
 func saveSystemStats(s SystemStats) {
-	prior := loadSystemStats()
 	now := time.Now()
 	s.LastAttempted = now
 	if s.Errors == 0 {
 		s.LastUpdated = now
 	} else if s.LastUpdated.IsZero() {
-		s.LastUpdated = prior.LastUpdated
+		s.LastUpdated = loadSystemStatsFn().LastUpdated
 	}
 	path, err := systemStatsPath()
 	if err != nil {

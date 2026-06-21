@@ -228,6 +228,30 @@ func TestSaveSystemStatsWithErrorsDoesNotAdvanceLastUpdated(t *testing.T) {
 	}
 }
 
+func TestSaveSystemStatsWithErrorsUsesLoadSystemStatsFn(t *testing.T) {
+	dir := t.TempDir()
+	defer withStatsCacheDir(dir)()
+
+	priorUpdated := time.Now().Add(-time.Hour).Round(0)
+	called := false
+	orig := loadSystemStatsFn
+	loadSystemStatsFn = func() SystemStats {
+		called = true
+		return SystemStats{LastUpdated: priorUpdated}
+	}
+	defer func() { loadSystemStatsFn = orig }()
+
+	saveSystemStats(SystemStats{Errors: 1, Total: 1})
+
+	if !called {
+		t.Fatal("expected saveSystemStats to load prior stats through loadSystemStatsFn")
+	}
+	saved := loadSystemStats()
+	if !saved.LastUpdated.Equal(priorUpdated) {
+		t.Errorf("expected injected LastUpdated to be preserved, got %s want %s", saved.LastUpdated, priorUpdated)
+	}
+}
+
 func TestLoadSystemStatsMissing(t *testing.T) {
 	dir := t.TempDir()
 	defer withStatsCacheDir(dir)()
