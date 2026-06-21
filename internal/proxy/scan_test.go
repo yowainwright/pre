@@ -195,6 +195,31 @@ func TestRunSystemScanSecurityError(t *testing.T) {
 	if savedStats.Crit != 0 || savedStats.Warn != 0 {
 		t.Errorf("expected no vulns when check errors, Crit=%d Warn=%d", savedStats.Crit, savedStats.Warn)
 	}
+	if savedStats.Errors != 1 {
+		t.Errorf("expected Errors=1, got %d", savedStats.Errors)
+	}
+	if savedStats.Total != 1 {
+		t.Errorf("expected Total=1, got %d", savedStats.Total)
+	}
+}
+
+func TestRunBackgroundScanSecurityError(t *testing.T) {
+	var savedStats SystemStats
+	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
+	defer withLoadCache(emptyCache)()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return nil, errors.New("check failed")
+	})()
+	defer withReadManifest(func(*manager.Manager) []string {
+		return []string{"lodash@4.17.21"}
+	})()
+
+	mgr := &manager.Manager{Name: "npm", Ecosystem: "npm"}
+	RunBackgroundScan(mgr)
+
+	if savedStats.Errors != 1 || savedStats.Warn != 0 {
+		t.Errorf("expected Errors=1 Warn=0, got Warn=%d Errors=%d", savedStats.Warn, savedStats.Errors)
+	}
 	if savedStats.Total != 1 {
 		t.Errorf("expected Total=1, got %d", savedStats.Total)
 	}

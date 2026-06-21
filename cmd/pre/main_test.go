@@ -159,7 +159,9 @@ func TestRunConfigRejectsInvalidDuration(t *testing.T) {
 
 	tests := [][]string{
 		{"config", "set", "cache.ttl", "soon"},
+		{"config", "set", "cache.ttl", "-1h"},
 		{"config", "set", "systemTTL", "weekly"},
+		{"config", "set", "systemTTL", "-1h"},
 	}
 	for _, args := range tests {
 		var out, errOut bytes.Buffer

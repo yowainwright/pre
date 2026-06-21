@@ -104,7 +104,6 @@ check_env() {
   echo "--- env secrets"
   if cmd_exists op && op_authed; then
     op_ref_resolves "HOMEBREW_TAP_TOKEN" "$env_file" && ok "HOMEBREW_TAP_TOKEN resolves" || fail "HOMEBREW_TAP_TOKEN resolves" "check op:// ref in $env_file"
-    op_ref_resolves "CODECOV_TOKEN"      "$env_file" && ok "CODECOV_TOKEN resolves"      || fail "CODECOV_TOKEN resolves"      "check op:// ref in $env_file"
   else
     warn "env secrets" "skipped — op not authenticated"
   fi
@@ -115,7 +114,6 @@ check_secrets() {
   echo "--- github secrets"
   if cmd_exists gh && gh_authed; then
     gh_secret_exists "HOMEBREW_TAP_TOKEN" "$repo" && ok "HOMEBREW_TAP_TOKEN set" || warn "HOMEBREW_TAP_TOKEN set" "run: op run --env-file .env.example -- make secrets"
-    gh_secret_exists "CODECOV_TOKEN"      "$repo" && ok "CODECOV_TOKEN set"      || warn "CODECOV_TOKEN set"      "run: op run --env-file .env.example -- make secrets"
   else
     warn "github secrets" "skipped — gh not authenticated"
   fi

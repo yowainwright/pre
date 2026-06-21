@@ -44,6 +44,16 @@ func TestSetSystemScanTTLInvalid(t *testing.T) {
 	}
 }
 
+func TestSetSystemScanTTLNegative(t *testing.T) {
+	orig := configuredSystemScanTTL
+	defer func() { configuredSystemScanTTL = orig }()
+
+	SetSystemScanTTL("-1h")
+	if configuredSystemScanTTL != orig {
+		t.Error("negative duration should not change TTL")
+	}
+}
+
 func TestShouldRunSystemScanNeverRun(t *testing.T) {
 	dir := t.TempDir()
 	defer withStatsCacheDir(dir)()
@@ -95,6 +105,89 @@ func TestShouldRunSystemScanExpired(t *testing.T) {
 	}
 }
 
+func TestShouldRunSystemScanRecentFailedAttempt(t *testing.T) {
+	dir := t.TempDir()
+	defer withStatsCacheDir(dir)()
+	orig := loadSystemStatsFn
+	loadSystemStatsFn = loadSystemStats
+	defer func() { loadSystemStatsFn = orig }()
+
+	saveSystemStats(SystemStats{Errors: 1, Total: 1})
+
+	origTTL := configuredSystemScanTTL
+	configuredSystemScanTTL = 24 * time.Hour
+	defer func() { configuredSystemScanTTL = origTTL }()
+
+	if shouldRunSystemScan() {
+		t.Error("expected false after a recent failed scan attempt")
+	}
+}
+
+func TestShouldRunSystemScanRecentAttemptWithExpiredSuccess(t *testing.T) {
+	now := time.Now()
+	orig := loadSystemStatsFn
+	loadSystemStatsFn = func() SystemStats {
+		return SystemStats{
+			LastUpdated:   now.Add(-48 * time.Hour),
+			LastAttempted: now,
+		}
+	}
+	defer func() { loadSystemStatsFn = orig }()
+
+	origTTL := configuredSystemScanTTL
+	configuredSystemScanTTL = 24 * time.Hour
+	defer func() { configuredSystemScanTTL = origTTL }()
+
+	if shouldRunSystemScan() {
+		t.Error("expected false when failed attempt is recent even if last success is expired")
+	}
+}
+
+func TestShouldRunSystemScanExpiredFailedAttempt(t *testing.T) {
+	now := time.Now()
+	orig := loadSystemStatsFn
+	loadSystemStatsFn = func() SystemStats {
+		return SystemStats{LastAttempted: now.Add(-2 * time.Hour)}
+	}
+	defer func() { loadSystemStatsFn = orig }()
+
+	origTTL := configuredSystemScanTTL
+	configuredSystemScanTTL = time.Hour
+	defer func() { configuredSystemScanTTL = origTTL }()
+
+	if !shouldRunSystemScan() {
+		t.Error("expected true when failed attempt TTL has expired")
+	}
+}
+
+func TestShouldRunSystemScanFutureLastUpdated(t *testing.T) {
+	orig := loadSystemStatsFn
+	loadSystemStatsFn = func() SystemStats {
+		return SystemStats{LastUpdated: time.Now().Add(time.Hour)}
+	}
+	defer func() { loadSystemStatsFn = orig }()
+
+	if !shouldRunSystemScan() {
+		t.Error("expected true when last updated is in the future")
+	}
+}
+
+func TestShouldRunSystemScanZeroTTL(t *testing.T) {
+	origLoad := loadSystemStatsFn
+	loadSystemStatsFn = func() SystemStats {
+		return SystemStats{LastUpdated: time.Now()}
+	}
+	defer func() { loadSystemStatsFn = origLoad }()
+
+	origTTL := configuredSystemScanTTL
+	configuredSystemScanTTL = 0
+	defer func() { configuredSystemScanTTL = origTTL }()
+
+	if !shouldRunSystemScan() {
+		t.Error("expected true when system scan TTL is zero")
+	}
+}
+
 func TestSaveAndLoadSystemStats(t *testing.T) {
 	dir := t.TempDir()
 	defer withStatsCacheDir(dir)()
@@ -107,6 +200,55 @@ func TestSaveAndLoadSystemStats(t *testing.T) {
 	}
 	if s.LastUpdated.IsZero() {
 		t.Error("expected LastUpdated to be set")
+	}
+	if s.LastAttempted.IsZero() {
+		t.Error("expected LastAttempted to be set")
+	}
+}
+
+func TestSaveSystemStatsWithErrorsDoesNotAdvanceLastUpdated(t *testing.T) {
+	dir := t.TempDir()
+	defer withStatsCacheDir(dir)()
+
+	saveSystemStats(SystemStats{Total: 1})
+	first := loadSystemStats()
+	if first.LastUpdated.IsZero() {
+		t.Fatal("expected initial successful timestamp")
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	saveSystemStats(SystemStats{Errors: 1, Total: 1})
+	failed := loadSystemStats()
+
+	if !failed.LastUpdated.Equal(first.LastUpdated) {
+		t.Errorf("expected failed scan to preserve LastUpdated, got %s want %s", failed.LastUpdated, first.LastUpdated)
+	}
+	if !failed.LastAttempted.After(first.LastAttempted) {
+		t.Error("expected failed scan to update LastAttempted")
+	}
+}
+
+func TestSaveSystemStatsWithErrorsUsesLoadSystemStatsFn(t *testing.T) {
+	dir := t.TempDir()
+	defer withStatsCacheDir(dir)()
+
+	priorUpdated := time.Now().Add(-time.Hour).Round(0)
+	called := false
+	orig := loadSystemStatsFn
+	loadSystemStatsFn = func() SystemStats {
+		called = true
+		return SystemStats{LastUpdated: priorUpdated}
+	}
+	defer func() { loadSystemStatsFn = orig }()
+
+	saveSystemStats(SystemStats{Errors: 1, Total: 1})
+
+	if !called {
+		t.Fatal("expected saveSystemStats to load prior stats through loadSystemStatsFn")
+	}
+	saved := loadSystemStats()
+	if !saved.LastUpdated.Equal(priorUpdated) {
+		t.Errorf("expected injected LastUpdated to be preserved, got %s want %s", saved.LastUpdated, priorUpdated)
 	}
 }
 

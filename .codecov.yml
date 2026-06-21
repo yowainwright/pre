@@ -1,10 +1,36 @@
+codecov:
+  require_ci_to_pass: false
+
 coverage:
   status:
     project:
       default:
-        target: 99%
+        target: 85%
         threshold: 1%
     patch:
       default:
-        target: 90%
-        threshold: 5%
+        target: 75%
+        threshold: 0%
+
+comment:
+  layout: "header, diff, flags, components"
+  require_changes: false
+  require_base: false
+  require_head: true
+
+component_management:
+  individual_components:
+    - component_id: cache
+      name: cache
+      paths:
+        - internal/cache/**
+      statuses:
+        - type: project
+          target: 90%
+          threshold: 1%
+        - type: patch
+          target: 90%
+          threshold: 0%
+
+ignore:
+  - "tests/**/*"

@@ -19,6 +19,11 @@ func resetConfiguredTTL() func() {
 	return func() { configuredTTL = orig }
 }
 
+func resetConfiguredSource() func() {
+	orig := configuredSource
+	return func() { configuredSource = orig }
+}
+
 func TestTTLDefault(t *testing.T) {
 	t.Setenv("PRE_CACHE_TTL", "")
 	if TTL() != defaultTTL {
@@ -57,6 +62,14 @@ func TestSetTTLInvalid(t *testing.T) {
 	}
 }
 
+func TestSetTTLNegative(t *testing.T) {
+	defer resetConfiguredTTL()()
+	SetTTL("-1h")
+	if configuredTTL != defaultTTL {
+		t.Error("expected configuredTTL unchanged on negative input")
+	}
+}
+
 func TestSetTTLEmpty(t *testing.T) {
 	defer resetConfiguredTTL()()
 	SetTTL("")
@@ -78,6 +91,14 @@ func TestTTLZero(t *testing.T) {
 	t.Setenv("PRE_CACHE_TTL", "0s")
 	if TTL() != 0 {
 		t.Errorf("expected 0, got %v", TTL())
+	}
+}
+
+func TestSource(t *testing.T) {
+	defer resetConfiguredSource()()
+	SetSource(" https://api.example.test ")
+	if Source() != "https://api.example.test" {
+		t.Errorf("expected trimmed source, got %q", Source())
 	}
 }
 
@@ -146,12 +167,66 @@ func TestHitExpired(t *testing.T) {
 	}
 }
 
+func TestHitFutureTimestamp(t *testing.T) {
+	c := make(Cache)
+	c[Key("npm", "react", "18.0.0")] = Entry{Version: "18.0.0", CheckedAt: time.Now().Add(time.Hour)}
+	if Hit(c, Key("npm", "react", "18.0.0")) {
+		t.Error("expected miss on future timestamp")
+	}
+}
+
 func TestHitZeroTTL(t *testing.T) {
 	t.Setenv("PRE_CACHE_TTL", "0s")
 	c := make(Cache)
 	Set(c, Key("npm", "react", "18.0.0"))
 	if Hit(c, Key("npm", "react", "18.0.0")) {
 		t.Error("expected miss when TTL is zero")
+	}
+}
+
+func TestHitNegativeTTL(t *testing.T) {
+	t.Setenv("PRE_CACHE_TTL", "-1h")
+	c := make(Cache)
+	Set(c, Key("npm", "react", "18.0.0"))
+	if Hit(c, Key("npm", "react", "18.0.0")) {
+		t.Error("expected miss when TTL is negative")
+	}
+}
+
+func TestHitSourceMismatch(t *testing.T) {
+	defer resetConfiguredSource()()
+	SetSource("https://api.one.example")
+	c := make(Cache)
+	Set(c, Key("npm", "react", "18.0.0"))
+
+	SetSource("https://api.two.example")
+	if Hit(c, Key("npm", "react", "18.0.0")) {
+		t.Error("expected miss when source changes")
+	}
+}
+
+func TestHitBlankSourceMissWhenSourceConfigured(t *testing.T) {
+	defer resetConfiguredSource()()
+	SetSource("https://api.example.test")
+
+	key := Key("npm", "react", "18.0.0")
+	c := Cache{
+		key: Entry{Version: "18.0.0", CheckedAt: time.Now()},
+	}
+
+	if Hit(c, key) {
+		t.Error("expected source-less legacy entry to miss when source is configured")
+	}
+}
+
+func TestSetStoresSource(t *testing.T) {
+	defer resetConfiguredSource()()
+	SetSource("https://api.example.test")
+	c := make(Cache)
+	key := Key("npm", "react", "18.0.0")
+	Set(c, key)
+	if c[key].Source != "https://api.example.test" {
+		t.Errorf("expected source stored on entry, got %q", c[key].Source)
 	}
 }
 

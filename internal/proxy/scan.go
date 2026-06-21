@@ -70,14 +70,16 @@ func RunBackgroundScan(mgr *manager.Manager) {
 	}
 	c := loadCacheFn()
 	fresh := make(cache.Cache)
-	var crit, warn int
+	var crit, warn, errs int
 	for _, pkg := range packages {
 		r := scanPackageWithPolicy(mgr, pkg, c, false)
 		switch {
 		case hasCriticalVulns(r):
 			crit++
-		case len(r.vulns) > 0 || r.err != nil:
+		case len(r.vulns) > 0:
 			warn++
+		case r.err != nil:
+			errs++
 		}
 		if len(r.vulns) == 0 && r.version != "" && r.err == nil && r.cacheable && !r.cached {
 			cache.Set(fresh, cache.Key(mgr.Ecosystem, r.name, r.version))
@@ -90,7 +92,7 @@ func RunBackgroundScan(mgr *manager.Manager) {
 			}
 		})
 	}
-	saveSystemStatsFn(SystemStats{Crit: crit, Warn: warn, Total: len(packages)})
+	saveSystemStatsFn(SystemStats{Crit: crit, Warn: warn, Errors: errs, Total: len(packages)})
 }
 
 func RunSystemScan() {
@@ -104,7 +106,7 @@ func RunSystemScan() {
 
 	c := loadCacheFn()
 	total := 0
-	var crit, warn int
+	var crit, warn, errs int
 	deleteKeys := make(map[string]struct{})
 	refreshKeys := make(cache.Cache)
 	for key, entry := range c {
@@ -125,6 +127,7 @@ func RunSystemScan() {
 		}
 		vulns, err := securityCheckFn(mgr.Ecosystem, name, version)
 		if err != nil {
+			errs++
 			continue
 		}
 		r := scanResult{name: name, version: version, vulns: vulns}
@@ -153,7 +156,7 @@ func RunSystemScan() {
 			cache.Set(current, key)
 		}
 	})
-	saveSystemStatsFn(SystemStats{Crit: crit, Warn: warn, Total: total})
+	saveSystemStatsFn(SystemStats{Crit: crit, Warn: warn, Errors: errs, Total: total})
 }
 
 func scanAll(mgr *manager.Manager, packages []string, c cache.Cache) []scanResult {

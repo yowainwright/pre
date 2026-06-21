@@ -21,19 +21,25 @@ var (
 )
 
 var configuredTTL = defaultTTL
+var configuredSource string
 
 func SetTTL(s string) {
 	if s == "" {
 		return
 	}
-	if d, err := time.ParseDuration(s); err == nil {
+	if d, err := time.ParseDuration(s); err == nil && d >= 0 {
 		configuredTTL = d
 	}
+}
+
+func SetSource(s string) {
+	configuredSource = strings.TrimSpace(s)
 }
 
 type Entry struct {
 	Version   string    `json:"version"`
 	CheckedAt time.Time `json:"checkedAt"`
+	Source    string    `json:"source,omitempty"`
 }
 
 type Cache map[string]Entry
@@ -109,17 +115,28 @@ func TTL() time.Duration {
 	return configuredTTL
 }
 
+func Source() string {
+	return configuredSource
+}
+
 func Hit(c Cache, key string) bool {
 	e, ok := c[key]
 	if !ok {
 		return false
 	}
-	return time.Since(e.CheckedAt) < TTL()
+	ttl := TTL()
+	currentSource := Source()
+	sourceMismatch := currentSource != "" && e.Source != currentSource
+	if ttl <= 0 || e.CheckedAt.IsZero() || sourceMismatch {
+		return false
+	}
+	age := time.Since(e.CheckedAt)
+	return age >= 0 && age < ttl
 }
 
 func Set(c Cache, key string) {
 	_, _, version := ParseKey(key)
-	c[key] = Entry{Version: version, CheckedAt: time.Now()}
+	c[key] = Entry{Version: version, CheckedAt: time.Now(), Source: Source()}
 }
 
 func Key(ecosystem, name, version string) string {
