@@ -69,6 +69,24 @@ func TestCheckSeverityFromDatabaseSpecific(t *testing.T) {
 	}
 }
 
+func TestCheckSeverityFromDatabaseSpecificNormalizes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, `{"vulns":[{"id":"CVE-2021-1234","summary":"test","database_specific":{"severity":" high "}}]}`)
+	}))
+	defer srv.Close()
+	origEndpoint := Endpoint
+	Endpoint = srv.URL
+	defer func() { Endpoint = origEndpoint }()
+
+	vulns, err := Check("npm", "lodash", "4.17.11")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if vulns[0].Severity != "HIGH" {
+		t.Errorf("expected HIGH severity, got %q", vulns[0].Severity)
+	}
+}
+
 func TestCheckSeverityFromCVSSVector(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, `{"vulns":[{"id":"CVE-2021-5678","summary":"test","severity":[{"type":"CVSS_V3","score":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}]}]}`)

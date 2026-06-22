@@ -10,15 +10,16 @@ func TestReadPackageJSON(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(dir+"/package.json", []byte(`{
 		"dependencies": {"lodash": "^4.17.21", "react": "^18.0.0"},
-		"devDependencies": {"typescript": "^5.0.0"}
+		"devDependencies": {"typescript": "^5.0.0"},
+		"optionalDependencies": {"fsevents": "^2.3.3"}
 	}`), 0644)
 
 	names := readPackageJSON(dir)
 	sort.Strings(names)
-	if len(names) != 3 {
-		t.Fatalf("expected 3 packages, got %d: %v", len(names), names)
+	if len(names) != 4 {
+		t.Fatalf("expected 4 packages, got %d: %v", len(names), names)
 	}
-	if names[0] != "lodash@^4.17.21" || names[1] != "react@^18.0.0" || names[2] != "typescript@^5.0.0" {
+	if names[0] != "fsevents@^2.3.3" || names[1] != "lodash@^4.17.21" || names[2] != "react@^18.0.0" || names[3] != "typescript@^5.0.0" {
 		t.Errorf("unexpected packages: %v", names)
 	}
 }

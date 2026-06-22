@@ -88,7 +88,7 @@ func extractSeverity(dbSeverity string, cvssEntries []struct {
 	Score string `json:"score"`
 }) (string, float64) {
 	if dbSeverity != "" {
-		return dbSeverity, 0
+		return normalizeSeverity(dbSeverity), 0
 	}
 	for _, s := range cvssEntries {
 		if rating, score := severityFromVector(s.Score); rating != "" {
@@ -96,4 +96,19 @@ func extractSeverity(dbSeverity string, cvssEntries []struct {
 		}
 	}
 	return "", 0
+}
+
+func normalizeSeverity(severity string) string {
+	switch strings.ToUpper(strings.TrimSpace(severity)) {
+	case "CRITICAL":
+		return "CRITICAL"
+	case "HIGH":
+		return "HIGH"
+	case "MEDIUM", "MODERATE":
+		return "MEDIUM"
+	case "LOW":
+		return "LOW"
+	default:
+		return ""
+	}
 }

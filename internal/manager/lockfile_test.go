@@ -61,6 +61,31 @@ func TestReadPackageLockJSONPreservesMultipleVersions(t *testing.T) {
 	}
 }
 
+func TestReadPackageLockJSONV1Dependencies(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/package-lock.json", []byte(`{
+		"lockfileVersion": 1,
+		"dependencies": {
+			"lodash": {"version": "4.17.21"},
+			"pkg-a": {
+				"version": "1.0.0",
+				"dependencies": {
+					"lodash": {"version": "4.17.20"}
+				}
+			}
+		}
+	}`), 0644)
+
+	pkgs := readPackageLockJSON(dir)
+	m := toSet(pkgs)
+	if !m["lodash@4.17.21"] || !m["pkg-a@1.0.0"] || !m["lodash@4.17.20"] {
+		t.Errorf("expected v1 dependencies and nested dependencies, got %v", pkgs)
+	}
+	if len(pkgs) != 3 {
+		t.Errorf("expected 3 packages, got %d: %v", len(pkgs), pkgs)
+	}
+}
+
 func TestReadPackageLockJSONBadJSON(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(dir+"/package-lock.json", []byte("not json"), 0644)

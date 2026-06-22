@@ -41,6 +41,8 @@ var (
 
 const systemScanLockStaleAfter = 30 * time.Minute
 
+var errMissingVersion = errors.New("version unavailable; skipped vulnerability check")
+
 func SetSystemScanEnabled(v bool) {
 	systemScanEnabled = v
 }
@@ -207,6 +209,12 @@ func scanAllWithPolicy(mgr *manager.Manager, packages []string, c cache.Cache, a
 				mu.Unlock()
 				return
 			}
+			if version == "" {
+				mu.Lock()
+				results[w.idx] = scanResult{name: w.name, label: label, err: errMissingVersion}
+				mu.Unlock()
+				return
+			}
 
 			vulns, err := securityCheckFn(mgr.Ecosystem, w.name, version)
 			mu.Lock()
@@ -236,6 +244,9 @@ func scanPackageWithPolicy(mgr *manager.Manager, spec string, c cache.Cache, all
 	key := cache.Key(mgr.Ecosystem, name, version)
 	if cacheable && cache.Hit(c, key) {
 		return scanResult{name: name, version: version, label: label, cached: true, cacheable: true}
+	}
+	if version == "" {
+		return scanResult{name: name, label: label, err: errMissingVersion}
 	}
 
 	vulns, err := securityCheckFn(mgr.Ecosystem, name, version)
@@ -292,14 +303,14 @@ func resolveScanVersion(mgr *manager.Manager, name, version string, allowMissing
 	switch {
 	case version == "":
 		if !allowMissingVersionResolution {
-			return "", label, false, false, nil
+			return "", label, false, false, errMissingVersion
 		}
 		resolved, err := resolveVersionFn(mgr, name)
 		if err != nil {
 			return "", label, false, false, err
 		}
 		if resolved == "" {
-			return "", name, true, false, nil
+			return "", name, true, false, errMissingVersion
 		}
 		return resolved, name + "@" + resolved, true, isExactVersion(mgr.Ecosystem, resolved), nil
 	case shouldResolveVersion(mgr.Ecosystem, version):
@@ -312,7 +323,7 @@ func resolveScanVersion(mgr *manager.Manager, name, version string, allowMissing
 			return "", label, false, false, err
 		}
 		if resolved == "" {
-			return "", name, true, false, nil
+			return "", name, true, false, errMissingVersion
 		}
 		return resolved, name + "@" + resolved, true, isExactVersion(mgr.Ecosystem, resolved), nil
 	case isExactVersion(mgr.Ecosystem, version):
@@ -323,11 +334,11 @@ func resolveScanVersion(mgr *manager.Manager, name, version string, allowMissing
 			return "", label, false, false, err
 		}
 		if resolved == "" {
-			return "", label, true, false, nil
+			return "", label, true, false, errMissingVersion
 		}
 		return resolved, name + "@" + resolved, true, isExactVersion(mgr.Ecosystem, resolved), nil
 	default:
-		return "", label, false, false, nil
+		return "", label, false, false, errMissingVersion
 	}
 }
 

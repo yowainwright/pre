@@ -24,6 +24,11 @@ func ReadLockfile(mgr *Manager, dir string) []string {
 
 // npm: package-lock.json → bun.lock → pnpm-lock.yaml
 
+type packageLockDependency struct {
+	Version      string                           `json:"version"`
+	Dependencies map[string]packageLockDependency `json:"dependencies"`
+}
+
 func readNPMLockfile(dir string) []string {
 	if pkgs := readPackageLockJSON(dir); len(pkgs) > 0 {
 		return pkgs
@@ -43,28 +48,48 @@ func readPackageLockJSON(dir string) []string {
 		Packages map[string]struct {
 			Version string `json:"version"`
 		} `json:"packages"`
+		Dependencies map[string]packageLockDependency `json:"dependencies"`
 	}
 	if err := json.Unmarshal(data, &lockfile); err != nil {
 		return nil
 	}
-	seen := make(map[string]bool, len(lockfile.Packages))
+	seen := make(map[string]bool, len(lockfile.Packages)+len(lockfile.Dependencies))
 	var result []string
-	for path, pkg := range lockfile.Packages {
-		if path == "" || pkg.Version == "" {
-			continue
+	if len(lockfile.Packages) > 0 {
+		for path, pkg := range lockfile.Packages {
+			if path == "" || pkg.Version == "" {
+				continue
+			}
+			name := strings.TrimPrefix(path, "node_modules/")
+			if idx := strings.LastIndex(name, "node_modules/"); idx != -1 {
+				name = name[idx+len("node_modules/"):]
+			}
+			spec := name + "@" + pkg.Version
+			if seen[spec] {
+				continue
+			}
+			seen[spec] = true
+			result = append(result, spec)
 		}
-		name := strings.TrimPrefix(path, "node_modules/")
-		if idx := strings.LastIndex(name, "node_modules/"); idx != -1 {
-			name = name[idx+len("node_modules/"):]
+		if len(result) > 0 {
+			return result
 		}
-		spec := name + "@" + pkg.Version
-		if seen[spec] {
-			continue
-		}
-		seen[spec] = true
-		result = append(result, spec)
 	}
+	appendPackageLockDependencies(&result, seen, lockfile.Dependencies)
 	return result
+}
+
+func appendPackageLockDependencies(result *[]string, seen map[string]bool, deps map[string]packageLockDependency) {
+	for name, dep := range deps {
+		if dep.Version != "" {
+			spec := name + "@" + dep.Version
+			if !seen[spec] {
+				seen[spec] = true
+				*result = append(*result, spec)
+			}
+		}
+		appendPackageLockDependencies(result, seen, dep.Dependencies)
+	}
 }
 
 func readBunLock(dir string) []string {
