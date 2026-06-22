@@ -24,6 +24,16 @@ func TestBuildShellHookContents(t *testing.T) {
 	}
 }
 
+func TestBuildShellHookIncludesDisableBypass(t *testing.T) {
+	hook := buildShellHook()
+	if !strings.Contains(hook, "PRE_DISABLE") {
+		t.Error("expected hook to include PRE_DISABLE bypass")
+	}
+	if !strings.Contains(hook, `command npm "$@"`) {
+		t.Error("expected hook bypass to call the original package manager")
+	}
+}
+
 func TestDetectRCFileZsh(t *testing.T) {
 	t.Setenv("SHELL", "/bin/zsh")
 	t.Setenv("HOME", t.TempDir())

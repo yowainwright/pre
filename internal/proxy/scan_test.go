@@ -69,6 +69,22 @@ func TestRunBackgroundScanEmpty(t *testing.T) {
 	RunBackgroundScan(mgr)
 }
 
+func TestRunBackgroundScanDisabledSkipsWork(t *testing.T) {
+	t.Setenv(envDisable, "1")
+
+	readCalled := false
+	defer withReadManifest(func(*manager.Manager) []string {
+		readCalled = true
+		return []string{"react@18.0.0"}
+	})()
+
+	RunBackgroundScan(npmMgr())
+
+	if readCalled {
+		t.Error("expected disabled background scan to skip manifest reading")
+	}
+}
+
 func TestRunBackgroundScan(t *testing.T) {
 	var savedStats SystemStats
 	savedCache := make(cache.Cache)
@@ -93,6 +109,32 @@ func TestRunBackgroundScan(t *testing.T) {
 	}
 	if !cache.Hit(savedCache, cache.Key("npm", "lodash", "4.17.21")) {
 		t.Error("expected background scan to persist cache")
+	}
+}
+
+func TestRunBackgroundScanPackageLimitSkipsWork(t *testing.T) {
+	t.Setenv(envMaxPackages, "1")
+
+	loadCalled := false
+	securityCalled := false
+	statsSaved := false
+	defer withLoadCache(func() cache.Cache {
+		loadCalled = true
+		return emptyCache()
+	})()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		securityCalled = true
+		return nil, nil
+	})()
+	defer withSaveSystemStats(func(SystemStats) { statsSaved = true })()
+	defer withReadManifest(func(*manager.Manager) []string {
+		return []string{"react@18.0.0", "lodash@4.17.21"}
+	})()
+
+	RunBackgroundScan(npmMgr())
+
+	if loadCalled || securityCalled || statsSaved {
+		t.Error("expected package limit to skip background scan work")
 	}
 }
 
@@ -151,6 +193,47 @@ func TestRunSystemScan(t *testing.T) {
 
 	if savedStats.Total != 1 {
 		t.Errorf("expected Total=1, got %d", savedStats.Total)
+	}
+}
+
+func TestRunSystemScanDisabledSkipsWork(t *testing.T) {
+	t.Setenv(envDisable, "1")
+
+	lockCalled := false
+	defer withSystemScanLock(func() (func(), bool) {
+		lockCalled = true
+		return nil, true
+	})()
+
+	RunSystemScan()
+
+	if lockCalled {
+		t.Error("expected disabled system scan to skip lock acquisition")
+	}
+}
+
+func TestRunSystemScanPackageLimitSkipsWork(t *testing.T) {
+	t.Setenv(envMaxPackages, "1")
+
+	securityCalled := false
+	statsSaved := false
+	defer withUpdateCache(noopUpdate)()
+	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		securityCalled = true
+		return nil, nil
+	})()
+	defer withSaveSystemStats(func(SystemStats) { statsSaved = true })()
+
+	c := make(cache.Cache)
+	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
+	cache.Set(c, cache.Key("npm", "lodash", "4.17.21"))
+	defer withLoadCache(func() cache.Cache { return c })()
+
+	RunSystemScan()
+
+	if securityCalled || statsSaved {
+		t.Error("expected package limit to skip system scan work")
 	}
 }
 

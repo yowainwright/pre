@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"errors"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -92,7 +94,55 @@ func emptyCache() cache.Cache      { return make(cache.Cache) }
 func noopSave(cache.Cache)         {}
 func noopUpdate(func(cache.Cache)) {}
 
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stdout: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close stdout writer: %v", err)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	return string(out)
+}
+
 // Intercept flow tests
+
+func TestInterceptDisabledBypassesScan(t *testing.T) {
+	t.Setenv(envDisable, "1")
+
+	execCalled := false
+	loadCalled := false
+	securityCalled := false
+	defer withExecFn(func(name string, args []string) { execCalled = true })()
+	defer withLoadCache(func() cache.Cache {
+		loadCalled = true
+		return emptyCache()
+	})()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		securityCalled = true
+		return nil, nil
+	})()
+
+	Intercept(npmMgr(), []string{"install", "react"})
+
+	if !execCalled {
+		t.Error("expected disabled intercept to run the package manager")
+	}
+	if loadCalled || securityCalled {
+		t.Error("expected disabled intercept to bypass cache loading and security checks")
+	}
+}
 
 func TestInterceptNonInstallSubcommand(t *testing.T) {
 	called := false
@@ -389,6 +439,78 @@ func TestInterceptQuietWhenClean(t *testing.T) {
 	Intercept(npmMgr(), []string{"install", "react"})
 	if !execCalled {
 		t.Error("expected ExecFn called after quiet clean scan")
+	}
+}
+
+func TestInterceptQuietSuppressesCleanScanOutput(t *testing.T) {
+	t.Setenv(envQuiet, "1")
+
+	defer withExecFn(noopExec)()
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		return "18.0.0", nil
+	})()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+
+	out := captureStdout(t, func() {
+		Intercept(npmMgr(), []string{"install", "react"})
+	})
+
+	if strings.Contains(out, "scanning") || strings.Contains(out, "all clean") {
+		t.Errorf("expected quiet clean scan output to be suppressed, got %q", out)
+	}
+}
+
+func TestInterceptQuietStillShowsVulnerabilities(t *testing.T) {
+	t.Setenv(envQuiet, "1")
+
+	defer withExecFn(noopExec)()
+	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		return []security.Vulnerability{{ID: "CVE-2026-0001", Summary: "test vuln", Severity: "LOW"}}, nil
+	})()
+	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
+		return "18.0.0", nil
+	})()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+
+	out := captureStdout(t, func() {
+		Intercept(npmMgr(), []string{"install", "react"})
+	})
+
+	if !strings.Contains(out, "CVE-2026-0001") {
+		t.Errorf("expected quiet mode to keep vulnerability output, got %q", out)
+	}
+}
+
+func TestInterceptPackageLimitBypassesScan(t *testing.T) {
+	t.Setenv(envMaxPackages, "1")
+
+	execCalled := false
+	loadCalled := false
+	securityCalled := false
+	defer withExecFn(func(name string, args []string) { execCalled = true })()
+	defer withLoadCache(func() cache.Cache {
+		loadCalled = true
+		return emptyCache()
+	})()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		securityCalled = true
+		return nil, nil
+	})()
+
+	Intercept(npmMgr(), []string{"install", "react", "lodash"})
+
+	if !execCalled {
+		t.Error("expected package-limit bypass to run the package manager")
+	}
+	if loadCalled || securityCalled {
+		t.Error("expected package-limit bypass to skip cache loading and security checks")
 	}
 }
 
@@ -710,6 +832,34 @@ func TestInterceptSpawnsBackgroundScan(t *testing.T) {
 
 	if backgroundMgr != "npm" {
 		t.Errorf("expected background scan for npm, got %q", backgroundMgr)
+	}
+}
+
+func TestInterceptNoBackgroundSkipsDetachedScans(t *testing.T) {
+	t.Setenv(envNoBackground, "1")
+
+	origEnabled := systemScanEnabled
+	systemScanEnabled = true
+	defer func() { systemScanEnabled = origEnabled }()
+
+	backgroundSpawned := false
+	systemSpawned := false
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) { backgroundSpawned = true })()
+	defer withSpawnSystemScan(func() { systemSpawned = true })()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		return "18.0.0", nil
+	})()
+
+	Intercept(npmMgr(), []string{"install", "react"})
+
+	if backgroundSpawned || systemSpawned {
+		t.Error("expected PRE_NO_BACKGROUND to skip detached scans")
 	}
 }
 

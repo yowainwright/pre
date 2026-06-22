@@ -30,6 +30,26 @@ pre status   # shows install state, cache, managers, and scan status
 
 After setup, every `npm install`, `pip install`, `brew install`, etc. goes through `pre` automatically — no extra commands needed.
 
+## Emergency controls
+
+If anything goes wrong, bypass `pre` without editing shell files:
+
+```sh
+PRE_DISABLE=1 npm install react      # one command
+export PRE_DISABLE=1                 # current shell session
+pre teardown                         # remove shell hooks
+pre self uninstall                   # remove the binary
+```
+
+Runtime switches:
+
+| Env var | What it does |
+|---------|--------------|
+| `PRE_DISABLE=1` | Bypasses all `pre` scans and runs the package manager directly |
+| `PRE_QUIET=1` | Hides scan progress and clean summaries; vulnerabilities and errors still print |
+| `PRE_NO_BACKGROUND=1` | Disables detached background scans after installs |
+| `PRE_MAX_PACKAGES=N` | Skips scanning when a manifest/lockfile expands beyond `N` packages |
+
 ## Package Manager
 
 ```sh
@@ -144,6 +164,8 @@ pre self uninstall [--purge]  # remove pre itself
 pre config set cache.ttl 12h
 pre config set systemScan true
 PRE_CACHE_TTL=0s npm install   # bypass cache for one install
+PRE_QUIET=1 npm install        # hide clean scan output
+PRE_DISABLE=1 npm install      # emergency bypass
 ```
 
 **Custom manager** (add to `managers` array in config):

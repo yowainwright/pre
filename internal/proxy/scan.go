@@ -40,6 +40,7 @@ var (
 )
 
 const systemScanLockStaleAfter = 30 * time.Minute
+const scanConcurrency = 10
 
 var errMissingVersion = errors.New("version unavailable; skipped vulnerability check")
 
@@ -66,8 +67,14 @@ func spawnSystemScan() {
 }
 
 func RunBackgroundScan(mgr *manager.Manager) {
+	if disableEnabled() {
+		return
+	}
 	packages := readManifestFn(mgr)
 	if len(packages) == 0 {
+		return
+	}
+	if _, exceeded := packageLimitExceeded(len(packages)); exceeded {
 		return
 	}
 	c := loadCacheFn()
@@ -98,6 +105,9 @@ func RunBackgroundScan(mgr *manager.Manager) {
 }
 
 func RunSystemScan() {
+	if disableEnabled() {
+		return
+	}
 	release, ok := acquireSystemScanLock()
 	if !ok {
 		return
@@ -107,6 +117,9 @@ func RunSystemScan() {
 	}
 
 	c := loadCacheFn()
+	if _, exceeded := packageLimitExceeded(len(c)); exceeded {
+		return
+	}
 	total := 0
 	var crit, warn, errs int
 	deleteKeys := make(map[string]struct{})
@@ -185,40 +198,27 @@ func scanAllWithPolicy(mgr *manager.Manager, packages []string, c cache.Cache, a
 		pending = append(pending, work{idx: i, name: name, version: version})
 	}
 
-	sem := make(chan struct{}, 10)
-	var mu sync.Mutex
+	jobs := make(chan work)
 	var wg sync.WaitGroup
 
-	for _, w := range pending {
-		wg.Add(1)
-		go func(w work) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			version, label, resolved, cacheable, err := resolveScanVersion(mgr, w.name, w.version, allowMissingVersionResolution)
-			if err != nil {
-				mu.Lock()
-				results[w.idx] = scanResult{name: w.name, label: label, err: err}
-				mu.Unlock()
-				return
-			}
-			if cacheable && cache.Hit(c, cache.Key(mgr.Ecosystem, w.name, version)) {
-				mu.Lock()
-				results[w.idx] = scanResult{name: w.name, version: version, label: label, cached: true, cacheable: true}
-				mu.Unlock()
-				return
-			}
-
-			vulns, err := securityCheckFn(mgr.Ecosystem, w.name, version)
-			mu.Lock()
-			results[w.idx] = scanResult{
-				name: w.name, version: version, label: label,
-				vulns: vulns, err: err, updated: resolved, cacheable: cacheable,
-			}
-			mu.Unlock()
-		}(w)
+	workers := scanConcurrency
+	if len(pending) < workers {
+		workers = len(pending)
 	}
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for w := range jobs {
+				results[w.idx] = scanPendingPackage(mgr, w.name, w.version, c, allowMissingVersionResolution, false)
+			}
+		}()
+	}
+
+	for _, w := range pending {
+		jobs <- w
+	}
+	close(jobs)
 
 	wg.Wait()
 	return results
@@ -230,6 +230,10 @@ func scanPackage(mgr *manager.Manager, spec string, c cache.Cache) scanResult {
 
 func scanPackageWithPolicy(mgr *manager.Manager, spec string, c cache.Cache, allowMissingVersionResolution bool) scanResult {
 	name, version := manager.ParseSpec(mgr.Ecosystem, spec)
+	return scanPendingPackage(mgr, name, version, c, allowMissingVersionResolution, true)
+}
+
+func scanPendingPackage(mgr *manager.Manager, name, version string, c cache.Cache, allowMissingVersionResolution bool, updateCache bool) scanResult {
 	version, label, resolved, cacheable, err := resolveScanVersion(mgr, name, version, allowMissingVersionResolution)
 	if err != nil {
 		return scanResult{name: name, label: label, err: err}
@@ -245,7 +249,7 @@ func scanPackageWithPolicy(mgr *manager.Manager, spec string, c cache.Cache, all
 		return scanResult{name: name, version: version, label: label, err: err}
 	}
 
-	if len(vulns) == 0 && cacheable {
+	if updateCache && len(vulns) == 0 && cacheable {
 		cache.Set(c, key)
 	}
 

@@ -71,8 +71,8 @@ func buildShellHook() string {
 		condition := strings.Join(conditions, ` || `)
 
 		fmt.Fprintf(&sb,
-			"function %s() {\n  if [[ %s ]]; then\n    command pre %s \"$@\"\n  else\n    command %s \"$@\"\n  fi\n}\n",
-			m.Name, condition, m.Name, m.Name,
+			"function %s() {\n  case \"${PRE_DISABLE:-}\" in\n    1|true|TRUE|True|yes|YES|Yes|on|ON|On)\n      command %s \"$@\"\n      return\n      ;;\n  esac\n  if [[ %s ]]; then\n    command pre %s \"$@\"\n  else\n    command %s \"$@\"\n  fi\n}\n",
+			m.Name, m.Name, condition, m.Name, m.Name,
 		)
 	}
 

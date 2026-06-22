@@ -27,6 +27,11 @@ var (
 )
 
 func Intercept(mgr *manager.Manager, args []string) {
+	if disableEnabled() {
+		ExecFn(mgr.Name, args)
+		return
+	}
+
 	isPassthrough := len(args) == 0 || !slices.Contains(mgr.InstallCmds, args[0])
 	if isPassthrough {
 		ExecFn(mgr.Name, args)
@@ -43,11 +48,18 @@ func Intercept(mgr *manager.Manager, args []string) {
 		ExecFn(mgr.Name, args)
 		return
 	}
+	if limit, exceeded := packageLimitExceeded(len(packages)); exceeded {
+		if !quietEnabled() {
+			fmt.Print(display.Dim(fmt.Sprintf("pre: skipping scan for %d packages (PRE_MAX_PACKAGES=%d)\n", len(packages), limit)))
+		}
+		ExecFn(mgr.Name, args)
+		return
+	}
 
 	c := loadCacheFn()
 
 	uncachedCount := countUncached(mgr, packages, c)
-	if uncachedCount > 0 {
+	if uncachedCount > 0 && !quietEnabled() {
 		fmt.Print(display.Dim(fmt.Sprintf("scanning %d package(s)...\n", uncachedCount)))
 	}
 
@@ -67,7 +79,11 @@ func Intercept(mgr *manager.Manager, args []string) {
 		})
 	}
 
-	switch outputLevel(results) {
+	level := outputLevel(results)
+	if quietEnabled() && level == outputQuiet {
+		level = outputSilent
+	}
+	switch level {
 	case outputSilent:
 	case outputQuiet:
 		fmt.Print(renderQuiet(len(results)))
@@ -90,9 +106,11 @@ func Intercept(mgr *manager.Manager, args []string) {
 	}
 
 	ExecFn(mgr.Name, args)
-	spawnBackgroundScanFn(mgr.Name)
-	if systemScanEnabled && shouldRunSystemScan() {
-		spawnSystemScanFn()
+	if !backgroundDisabled() {
+		spawnBackgroundScanFn(mgr.Name)
+		if systemScanEnabled && shouldRunSystemScan() {
+			spawnSystemScanFn()
+		}
 	}
 }
 
