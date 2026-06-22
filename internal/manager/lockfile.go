@@ -24,6 +24,8 @@ func ReadLockfile(mgr *Manager, dir string) []string {
 
 // npm: package-lock.json → bun.lock → pnpm-lock.yaml
 
+const maxPackageLockDependencyDepth = 50
+
 type packageLockDependency struct {
 	Version      string                           `json:"version"`
 	Dependencies map[string]packageLockDependency `json:"dependencies"`
@@ -75,11 +77,14 @@ func readPackageLockJSON(dir string) []string {
 			return result
 		}
 	}
-	appendPackageLockDependencies(&result, seen, lockfile.Dependencies)
+	appendPackageLockDependencies(&result, seen, lockfile.Dependencies, 0)
 	return result
 }
 
-func appendPackageLockDependencies(result *[]string, seen map[string]bool, deps map[string]packageLockDependency) {
+func appendPackageLockDependencies(result *[]string, seen map[string]bool, deps map[string]packageLockDependency, depth int) {
+	if depth >= maxPackageLockDependencyDepth {
+		return
+	}
 	for name, dep := range deps {
 		if dep.Version != "" {
 			spec := name + "@" + dep.Version
@@ -88,7 +93,7 @@ func appendPackageLockDependencies(result *[]string, seen map[string]bool, deps 
 				*result = append(*result, spec)
 			}
 		}
-		appendPackageLockDependencies(result, seen, dep.Dependencies)
+		appendPackageLockDependencies(result, seen, dep.Dependencies, depth+1)
 	}
 }
 

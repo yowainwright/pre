@@ -209,12 +209,6 @@ func scanAllWithPolicy(mgr *manager.Manager, packages []string, c cache.Cache, a
 				mu.Unlock()
 				return
 			}
-			if version == "" {
-				mu.Lock()
-				results[w.idx] = scanResult{name: w.name, label: label, err: errMissingVersion}
-				mu.Unlock()
-				return
-			}
 
 			vulns, err := securityCheckFn(mgr.Ecosystem, w.name, version)
 			mu.Lock()
@@ -244,9 +238,6 @@ func scanPackageWithPolicy(mgr *manager.Manager, spec string, c cache.Cache, all
 	key := cache.Key(mgr.Ecosystem, name, version)
 	if cacheable && cache.Hit(c, key) {
 		return scanResult{name: name, version: version, label: label, cached: true, cacheable: true}
-	}
-	if version == "" {
-		return scanResult{name: name, label: label, err: errMissingVersion}
 	}
 
 	vulns, err := securityCheckFn(mgr.Ecosystem, name, version)

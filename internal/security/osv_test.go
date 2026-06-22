@@ -87,6 +87,26 @@ func TestCheckSeverityFromDatabaseSpecificNormalizes(t *testing.T) {
 	}
 }
 
+func TestNormalizeSeverity(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"critical", "CRITICAL"},
+		{"HIGH", "HIGH"},
+		{"moderate", "MEDIUM"},
+		{" Medium ", "MEDIUM"},
+		{"low", "LOW"},
+		{"unknown", ""},
+		{"", ""},
+	}
+	for _, tc := range tests {
+		if got := normalizeSeverity(tc.input); got != tc.want {
+			t.Errorf("normalizeSeverity(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestCheckSeverityFromCVSSVector(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, `{"vulns":[{"id":"CVE-2021-5678","summary":"test","severity":[{"type":"CVSS_V3","score":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}]}]}`)
