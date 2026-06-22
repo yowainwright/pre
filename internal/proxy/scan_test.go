@@ -369,7 +369,7 @@ func TestCanResolveConstraintSemverRange(t *testing.T) {
 
 func TestResolveScanVersionEmptyNoAllow(t *testing.T) {
 	_, label, updated, exact, err := resolveScanVersion(npmMgr(), "react", "", false)
-	if err != nil || updated || exact {
+	if !errors.Is(err, errMissingVersion) || updated || exact {
 		t.Errorf("expected skip: label=%q updated=%v exact=%v err=%v", label, updated, exact, err)
 	}
 }
@@ -379,8 +379,8 @@ func TestResolveScanVersionConstraintEmptyResolved(t *testing.T) {
 		return "", nil
 	})()
 	_, _, updated, exact, err := resolveScanVersion(npmMgr(), "react", "^18.0.0", false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, errMissingVersion) {
+		t.Fatalf("expected missing-version error, got: %v", err)
 	}
 	if !updated {
 		t.Error("expected updated=true when constraint resolves to empty")
@@ -392,7 +392,7 @@ func TestResolveScanVersionConstraintEmptyResolved(t *testing.T) {
 
 func TestResolveScanVersionDefault(t *testing.T) {
 	_, _, updated, exact, err := resolveScanVersion(npmMgr(), "react", "file:/local/pkg", false)
-	if err != nil || updated || exact {
+	if !errors.Is(err, errMissingVersion) || updated || exact {
 		t.Errorf("expected default skip: updated=%v exact=%v err=%v", updated, exact, err)
 	}
 }
@@ -479,14 +479,14 @@ func TestScanAllIgnoresNonExactCacheHit(t *testing.T) {
 
 func TestScanPackageWithoutVersionDoesNotResolveWhenDisabled(t *testing.T) {
 	resolveCalled := false
-	checkedVersion := "unset"
+	securityCalled := false
 
 	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
 		resolveCalled = true
 		return "18.0.0", nil
 	})()
 	defer withSecurityCheck(func(_, _, ver string) ([]security.Vulnerability, error) {
-		checkedVersion = ver
+		securityCalled = true
 		return nil, nil
 	})()
 
@@ -496,10 +496,10 @@ func TestScanPackageWithoutVersionDoesNotResolveWhenDisabled(t *testing.T) {
 	if resolveCalled {
 		t.Error("expected disabled missing-version resolution")
 	}
-	if checkedVersion != "" {
-		t.Errorf("expected generic package check without a guessed version, got %q", checkedVersion)
+	if securityCalled {
+		t.Error("expected missing-version package to skip security check")
 	}
-	if r.version != "" || r.cacheable {
+	if !errors.Is(r.err, errMissingVersion) || r.version != "" || r.cacheable {
 		t.Errorf("expected non-cacheable generic result, got %+v", r)
 	}
 	if len(c) != 0 {

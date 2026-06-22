@@ -18,7 +18,7 @@ brew install yowainwright/tap/pre
 curl -fsSL https://raw.githubusercontent.com/yowainwright/pre/main/install.sh | sh
 ```
 
-Every release ships with SHA256 checksums and a cosign signature. The install script verifies the checksum automatically; cosign verification runs if `cosign` is on your PATH.
+Every release ships with SHA256 checksums and a cosign signature. The install script verifies the checksum automatically; if `cosign` is on your PATH, signature verification must pass too.
 
 ## Setup
 

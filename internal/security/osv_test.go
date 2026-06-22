@@ -69,6 +69,65 @@ func TestCheckSeverityFromDatabaseSpecific(t *testing.T) {
 	}
 }
 
+func TestCheckSeverityFromDatabaseSpecificNormalizes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, `{"vulns":[{"id":"CVE-2021-1234","summary":"test","database_specific":{"severity":" high "}}]}`)
+	}))
+	defer srv.Close()
+	origEndpoint := Endpoint
+	Endpoint = srv.URL
+	defer func() { Endpoint = origEndpoint }()
+
+	vulns, err := Check("npm", "lodash", "4.17.11")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if vulns[0].Severity != "HIGH" {
+		t.Errorf("expected HIGH severity, got %q", vulns[0].Severity)
+	}
+}
+
+func TestCheckUnknownDatabaseSpecificSeverityFallsBackToCVSS(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, `{"vulns":[{"id":"CVE-2021-5678","summary":"test","database_specific":{"severity":"IMPORTANT"},"severity":[{"type":"CVSS_V3","score":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}]}]}`)
+	}))
+	defer srv.Close()
+	origEndpoint := Endpoint
+	Endpoint = srv.URL
+	defer func() { Endpoint = origEndpoint }()
+
+	vulns, err := Check("npm", "lodash", "4.17.11")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if vulns[0].Severity != "CRITICAL" {
+		t.Errorf("expected CRITICAL from CVSS fallback, got %q", vulns[0].Severity)
+	}
+	if vulns[0].Score < 9.0 {
+		t.Errorf("expected CVSS fallback score >= 9.0, got %.1f", vulns[0].Score)
+	}
+}
+
+func TestNormalizeSeverity(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"critical", "CRITICAL"},
+		{"HIGH", "HIGH"},
+		{"moderate", "MEDIUM"},
+		{" Medium ", "MEDIUM"},
+		{"low", "LOW"},
+		{"unknown", ""},
+		{"", ""},
+	}
+	for _, tc := range tests {
+		if got := normalizeSeverity(tc.input); got != tc.want {
+			t.Errorf("normalizeSeverity(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestCheckSeverityFromCVSSVector(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, `{"vulns":[{"id":"CVE-2021-5678","summary":"test","severity":[{"type":"CVSS_V3","score":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}]}]}`)

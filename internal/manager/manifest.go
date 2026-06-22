@@ -34,21 +34,24 @@ func readPackageJSON(dir string) []string {
 		return nil
 	}
 	var pkg struct {
-		Dependencies    map[string]string `json:"dependencies"`
-		DevDependencies map[string]string `json:"devDependencies"`
+		Dependencies         map[string]string `json:"dependencies"`
+		DevDependencies      map[string]string `json:"devDependencies"`
+		OptionalDependencies map[string]string `json:"optionalDependencies"`
 	}
 	if err := json.Unmarshal(data, &pkg); err != nil {
 		return nil
 	}
-	seen := make(map[string]bool, len(pkg.Dependencies)+len(pkg.DevDependencies))
-	names := make([]string, 0, len(pkg.Dependencies)+len(pkg.DevDependencies))
-	for name, spec := range pkg.Dependencies {
-		if !seen[name] {
-			seen[name] = true
-			names = append(names, npmDependencySpec(name, spec))
-		}
-	}
-	for name, spec := range pkg.DevDependencies {
+	count := len(pkg.Dependencies) + len(pkg.DevDependencies) + len(pkg.OptionalDependencies)
+	seen := make(map[string]bool, count)
+	names := make([]string, 0, count)
+	names = appendNPMDependencySpecs(names, seen, pkg.Dependencies)
+	names = appendNPMDependencySpecs(names, seen, pkg.DevDependencies)
+	names = appendNPMDependencySpecs(names, seen, pkg.OptionalDependencies)
+	return names
+}
+
+func appendNPMDependencySpecs(names []string, seen map[string]bool, deps map[string]string) []string {
+	for name, spec := range deps {
 		if !seen[name] {
 			seen[name] = true
 			names = append(names, npmDependencySpec(name, spec))

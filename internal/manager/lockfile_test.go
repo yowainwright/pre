@@ -2,6 +2,7 @@ package manager
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 )
@@ -58,6 +59,91 @@ func TestReadPackageLockJSONPreservesMultipleVersions(t *testing.T) {
 	m := toSet(pkgs)
 	if !m["lodash@4.17.21"] || !m["lodash@4.17.20"] {
 		t.Errorf("expected both lodash versions, got %v", pkgs)
+	}
+}
+
+func TestReadPackageLockJSONV1Dependencies(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/package-lock.json", []byte(`{
+		"lockfileVersion": 1,
+		"dependencies": {
+			"lodash": {"version": "4.17.21"},
+			"pkg-a": {
+				"version": "1.0.0",
+				"dependencies": {
+					"lodash": {"version": "4.17.20"}
+				}
+			}
+		}
+	}`), 0644)
+
+	pkgs := readPackageLockJSON(dir)
+	m := toSet(pkgs)
+	if !m["lodash@4.17.21"] || !m["pkg-a@1.0.0"] || !m["lodash@4.17.20"] {
+		t.Errorf("expected v1 dependencies and nested dependencies, got %v", pkgs)
+	}
+	if len(pkgs) != 3 {
+		t.Errorf("expected 3 packages, got %d: %v", len(pkgs), pkgs)
+	}
+}
+
+func TestReadPackageLockJSONRootOnlyPackagesFallsBackToDependencies(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/package-lock.json", []byte(`{
+		"lockfileVersion": 2,
+		"packages": {
+			"": {"version": "1.0.0"}
+		},
+		"dependencies": {
+			"lodash": {"version": "4.17.21"}
+		}
+	}`), 0644)
+
+	pkgs := readPackageLockJSON(dir)
+	if len(pkgs) != 1 || pkgs[0] != "lodash@4.17.21" {
+		t.Errorf("expected dependency fallback for root-only packages map, got %v", pkgs)
+	}
+}
+
+func TestReadPackageLockJSONV1DepthLimit(t *testing.T) {
+	dir := t.TempDir()
+	lockfile := struct {
+		LockfileVersion int                              `json:"lockfileVersion"`
+		Dependencies    map[string]packageLockDependency `json:"dependencies"`
+	}{
+		LockfileVersion: 1,
+		Dependencies:    nestedPackageLockDeps(0, maxPackageLockDependencyDepth+5),
+	}
+	data, err := json.Marshal(lockfile)
+	if err != nil {
+		t.Fatalf("marshal lockfile: %v", err)
+	}
+	os.WriteFile(dir+"/package-lock.json", data, 0644)
+
+	pkgs := readPackageLockJSON(dir)
+	m := toSet(pkgs)
+	lastAllowed := fmt.Sprintf("pkg-%02d@1.0.%d", maxPackageLockDependencyDepth-1, maxPackageLockDependencyDepth-1)
+	firstSkipped := fmt.Sprintf("pkg-%02d@1.0.%d", maxPackageLockDependencyDepth, maxPackageLockDependencyDepth)
+	if !m["pkg-00@1.0.0"] || !m[lastAllowed] {
+		t.Errorf("expected packages through depth limit, got %v", pkgs)
+	}
+	if m[firstSkipped] {
+		t.Errorf("expected package beyond depth limit to be skipped, got %v", pkgs)
+	}
+	if len(pkgs) != maxPackageLockDependencyDepth {
+		t.Errorf("expected %d packages, got %d: %v", maxPackageLockDependencyDepth, len(pkgs), pkgs)
+	}
+}
+
+func nestedPackageLockDeps(depth, maxDepth int) map[string]packageLockDependency {
+	if depth >= maxDepth {
+		return nil
+	}
+	return map[string]packageLockDependency{
+		fmt.Sprintf("pkg-%02d", depth): {
+			Version:      fmt.Sprintf("1.0.%d", depth),
+			Dependencies: nestedPackageLockDeps(depth+1, maxDepth),
+		},
 	}
 }
 

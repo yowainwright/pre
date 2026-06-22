@@ -90,13 +90,16 @@ verify_cosign() {
   bundle="$1"
   file="$2"
   if command -v cosign >/dev/null 2>&1; then
-    cosign verify-blob \
+    if cosign verify-blob \
       --bundle "$bundle" \
       --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
       --certificate-identity-regexp "https://github.com/yowainwright/pre/" \
-      "$file" 2>/dev/null && \
-      echo "pre: cosign signature verified" || \
-      echo "pre: cosign verification failed (continuing)" >&2
+      "$file" 2>/dev/null; then
+      echo "pre: cosign signature verified"
+    else
+      echo "pre: cosign verification failed" >&2
+      return 1
+    fi
   else
     echo "pre: cosign not found, skipping signature verification"
   fi

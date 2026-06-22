@@ -24,6 +24,10 @@ exit_code() {
   "$@" 2>/dev/null; echo $?
 }
 
+exit_code_quiet() {
+  "$@" >/dev/null 2>&1; echo $?
+}
+
 # validate_os
 check "validate_os accepts Darwin"  "0" "$(exit_code validate_os "Darwin")"
 check "validate_os accepts Linux"   "0" "$(exit_code validate_os "Linux")"
@@ -71,6 +75,25 @@ bad_sum="0000000000000000000000000000000000000000000000000000000000000000"
 check "verify_checksum passes" "0" "$(exit_code verify_checksum "$tmp" "$good_sum")"
 check "verify_checksum fails"  "1" "$(exit_code verify_checksum "$tmp" "$bad_sum")"
 rm -f "$tmp"
+
+# verify_cosign
+orig_path="$PATH"
+tmp_dir="$(mktemp -d)"
+cat > "${tmp_dir}/cosign" <<'EOF'
+#!/usr/bin/env sh
+exit 0
+EOF
+chmod +x "${tmp_dir}/cosign"
+PATH="${tmp_dir}:$orig_path"
+check "verify_cosign passes" "0" "$(exit_code_quiet verify_cosign "bundle" "file")"
+cat > "${tmp_dir}/cosign" <<'EOF'
+#!/usr/bin/env sh
+exit 1
+EOF
+chmod +x "${tmp_dir}/cosign"
+check "verify_cosign fails" "1" "$(exit_code_quiet verify_cosign "bundle" "file")"
+PATH="$orig_path"
+rm -rf "$tmp_dir"
 
 # ensure_dir
 tmp_dir="$(mktemp -d)"

@@ -394,14 +394,14 @@ func TestInterceptQuietWhenClean(t *testing.T) {
 
 func TestInterceptManifestFallbackSkipsLatestGuess(t *testing.T) {
 	resolveCalled := false
-	checkedVersion := "unset"
+	securityCalled := false
 
 	defer withExecFn(noopExec)()
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
 	defer withSpawnBackgroundScan(func(string) {})()
 	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
-		checkedVersion = ver
+		securityCalled = true
 		return nil, nil
 	})()
 	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
@@ -415,8 +415,8 @@ func TestInterceptManifestFallbackSkipsLatestGuess(t *testing.T) {
 	if resolveCalled {
 		t.Error("expected manifest fallback without an exact version to skip latest-version resolution")
 	}
-	if checkedVersion != "" {
-		t.Errorf("expected package-level check without a guessed version, got %q", checkedVersion)
+	if securityCalled {
+		t.Error("expected manifest fallback without an exact version to skip security check")
 	}
 }
 
@@ -498,14 +498,14 @@ func TestScanPackageResolvesNPMDistTag(t *testing.T) {
 
 func TestScanPackageGoBranchDoesNotResolveAsLatest(t *testing.T) {
 	resolveCalled := false
-	checkedVersion := "unset"
+	securityCalled := false
 
 	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
 		resolveCalled = true
 		return "v1.2.3", nil
 	})()
 	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
-		checkedVersion = ver
+		securityCalled = true
 		return nil, nil
 	})()
 
@@ -514,11 +514,11 @@ func TestScanPackageGoBranchDoesNotResolveAsLatest(t *testing.T) {
 	if resolveCalled {
 		t.Error("expected floating Go branch to avoid latest-version resolution")
 	}
-	if checkedVersion != "" {
-		t.Errorf("expected package-level Go check, got version %q", checkedVersion)
+	if securityCalled {
+		t.Error("expected floating Go branch to skip security check")
 	}
-	if r.cacheable {
-		t.Error("expected floating Go branch result to be non-cacheable")
+	if !errors.Is(r.err, errMissingVersion) || r.cacheable {
+		t.Errorf("expected floating Go branch result to be non-cacheable skip, got %+v", r)
 	}
 	if cache.Hit(c, cache.Key("Go", "golang.org/x/tools/gopls", "master")) {
 		t.Error("expected floating Go branch not to be cached as an exact version")
@@ -595,7 +595,9 @@ func TestScanPackageSetsCache(t *testing.T) {
 }
 
 func TestScanPackageEmptyResolvedVersion(t *testing.T) {
+	securityCalled := false
 	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
+		securityCalled = true
 		return nil, nil
 	})()
 	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
@@ -604,8 +606,11 @@ func TestScanPackageEmptyResolvedVersion(t *testing.T) {
 
 	c := make(cache.Cache)
 	r := scanPackage(npmMgr(), "react", c)
-	if r.err != nil {
-		t.Errorf("expected no error, got %v", r.err)
+	if !errors.Is(r.err, errMissingVersion) {
+		t.Errorf("expected missing-version error, got %v", r.err)
+	}
+	if securityCalled {
+		t.Error("expected empty resolved version to skip security check")
 	}
 	if cache.Hit(c, cache.Key("npm", "react", "")) {
 		t.Error("empty version should not be cached")
