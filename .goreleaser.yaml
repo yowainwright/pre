@@ -56,7 +56,15 @@ brews:
     description: Security proxy for package managers
     license: MIT
     install: bin.install Dir["pre-*"].first => "pre"
-    test: assert_match version.to_s, shell_output("#{bin}/pre --version")
+    caveats: |
+      Shell hooks are not installed automatically. To intercept package
+      manager commands, run:
+        pre setup
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/pre --version")
+      ENV["HOME"] = testpath.to_s
+      output = shell_output("#{bin}/pre status")
+      assert_match "shell hooks: not installed", output
 
 changelog:
   sort: asc
