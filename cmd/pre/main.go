@@ -139,12 +139,12 @@ func handleSkillsAdd(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	skillDir := filepath.Join(absBase, ".claude", "skills", "pre")
-	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
 		fmt.Fprintf(stderr, "pre skills: %v\n", err)
 		return 1
 	}
 	skillPath := filepath.Join(skillDir, "SKILL.md")
-	if err := os.WriteFile(skillPath, []byte(skills.Pre), 0o644); err != nil {
+	if err := os.WriteFile(skillPath, []byte(skills.Pre), 0o600); err != nil {
 		fmt.Fprintf(stderr, "pre skills: %v\n", err)
 		return 1
 	}
