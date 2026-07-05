@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/yowainwright/pre/internal/manager"
 	"github.com/yowainwright/pre/internal/proxy"
 	"github.com/yowainwright/pre/internal/security"
+	"github.com/yowainwright/pre/skills"
 )
 
 var version = "dev"
@@ -33,6 +36,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: pre <manager> <command> [args]")
 		fmt.Fprintln(stderr, "       pre manage | m | installed | install | update | downgrade | uninstall")
 		fmt.Fprintln(stderr, "       pre setup | teardown | status | config [set <key> <value>]")
+		fmt.Fprintln(stderr, "       pre skills <add|show> [--global]")
 		return 1
 	}
 	proxy.SetSystemScanEnabled(cfg.SystemScan)
@@ -84,6 +88,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return handlePackages(args[1:], stdout, stderr)
 	case "self":
 		return handleSelf(args[1:], cfg, stdout, stderr)
+	case "skills":
+		return handleSkills(args[1:], stdout, stderr)
 	case "screenshots":
 		return handleScreenshots(args[1:], stdout, stderr)
 	case "--version", "-v":
@@ -96,6 +102,48 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		proxy.Intercept(mgr, args[1:])
 	}
+	return 0
+}
+
+func handleSkills(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: pre skills <add|show> [--global]")
+		return 1
+	}
+	switch args[0] {
+	case "show":
+		fmt.Fprint(stdout, skills.Pre)
+		return 0
+	case "add":
+		return handleSkillsAdd(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintln(stderr, "usage: pre skills <add|show> [--global]")
+		return 1
+	}
+}
+
+func handleSkillsAdd(args []string, stdout, stderr io.Writer) int {
+	isGlobal := slices.Contains(args, "--global")
+	baseDir := "."
+	if isGlobal {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(stderr, "pre skills: cannot resolve home directory: %v\n", err)
+			return 1
+		}
+		baseDir = home
+	}
+	skillDir := filepath.Join(baseDir, ".claude", "skills", "pre")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		fmt.Fprintf(stderr, "pre skills: %v\n", err)
+		return 1
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte(skills.Pre), 0o644); err != nil {
+		fmt.Fprintf(stderr, "pre skills: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "pre skill installed: %s\n", skillPath)
 	return 0
 }
 

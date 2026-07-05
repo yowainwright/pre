@@ -560,6 +560,75 @@ func TestRunSelfUpdateManualInstall(t *testing.T) {
 	}
 }
 
+func TestRunSkillsUsage(t *testing.T) {
+	for _, args := range [][]string{{"skills"}, {"skills", "bogus"}} {
+		var out, errOut bytes.Buffer
+		code := run(args, &out, &errOut)
+		if code != 1 {
+			t.Errorf("%v: expected exit 1, got %d", args, code)
+		}
+		if !strings.Contains(errOut.String(), "usage: pre skills") {
+			t.Errorf("%v: expected usage message, got: %s", args, errOut.String())
+		}
+	}
+}
+
+func TestRunSkillsShow(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"skills", "show"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "name: pre") {
+		t.Errorf("expected skill frontmatter, got: %s", out.String())
+	}
+}
+
+func TestRunSkillsAdd(t *testing.T) {
+	dir := t.TempDir()
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(prev); err != nil {
+			t.Errorf("restore wd: %v", err)
+		}
+	})
+	var out, errOut bytes.Buffer
+	code := run([]string{"skills", "add"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".claude", "skills", "pre", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("expected skill file: %v", err)
+	}
+	if !strings.Contains(string(data), "name: pre") {
+		t.Errorf("expected skill frontmatter, got: %s", data)
+	}
+}
+
+func TestRunSkillsAddGlobal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := run([]string{"skills", "add", "--global"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+	skillPath := filepath.Join(home, ".claude", "skills", "pre", "SKILL.md")
+	if _, err := os.Stat(skillPath); err != nil {
+		t.Errorf("expected global skill file: %v", err)
+	}
+	if !strings.Contains(out.String(), skillPath) {
+		t.Errorf("expected path in output, got: %s", out.String())
+	}
+}
+
 func TestRunSelfUpdateHomebrewInstall(t *testing.T) {
 	defer withExecutablePath(func() (string, error) {
 		return "/opt/homebrew/Cellar/pre/1.2.3/bin/pre", nil
