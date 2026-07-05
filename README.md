@@ -141,6 +141,8 @@ pre downgrade <mgr> <pkg> <v> # install an older package version
 pre uninstall <mgr> <pkg>     # remove a package
 pre config                    # show current config
 pre config set <key> <value>  # update a config value
+pre skills add [--global]     # install the agent skill to .claude/skills (~/.claude with --global)
+pre skills show               # print the agent skill to stdout
 pre scan system               # scan all cached packages now
 pre self update               # update the pre binary
 pre self uninstall [--purge]  # remove pre itself
