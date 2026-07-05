@@ -610,6 +610,9 @@ func TestRunSkillsAdd(t *testing.T) {
 	if !strings.Contains(string(data), "name: pre") {
 		t.Errorf("expected skill frontmatter, got: %s", data)
 	}
+	if !strings.Contains(out.String(), "pre skill installed: /") {
+		t.Errorf("expected absolute path in output, got: %s", out.String())
+	}
 }
 
 func TestRunSkillsAddGlobal(t *testing.T) {

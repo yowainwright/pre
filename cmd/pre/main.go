@@ -133,7 +133,12 @@ func handleSkillsAdd(args []string, stdout, stderr io.Writer) int {
 		}
 		baseDir = home
 	}
-	skillDir := filepath.Join(baseDir, ".claude", "skills", "pre")
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "pre skills: cannot resolve directory: %v\n", err)
+		return 1
+	}
+	skillDir := filepath.Join(absBase, ".claude", "skills", "pre")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		fmt.Fprintf(stderr, "pre skills: %v\n", err)
 		return 1
