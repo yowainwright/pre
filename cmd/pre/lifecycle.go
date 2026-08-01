@@ -24,8 +24,9 @@ const (
 )
 
 const (
-	installSourceManual   = "manual"
-	installSourceHomebrew = "homebrew"
+	installSourceManual       = "manual"
+	installSourceHomebrew     = "homebrew"
+	installSourceHomebrewCask = "homebrew-cask"
 )
 
 var (
@@ -77,14 +78,15 @@ func handleSelfUpdate(args []string, cfg *config.Config, stdout, stderr io.Write
 		return 1
 	}
 
-	if info.Source == installSourceHomebrew {
+	if isHomebrewInstall(info.Source) {
+		brewArgs := homebrewLifecycleArgs(info.Source, "upgrade")
 		if _, err := lookPathFn("brew"); err != nil {
 			fmt.Fprintln(stderr, "pre update: Homebrew install detected, but brew is not on PATH")
-			fmt.Fprintln(stderr, "pre update: run: brew upgrade pre")
+			fmt.Fprintf(stderr, "pre update: run: brew %s\n", strings.Join(brewArgs, " "))
 			return 1
 		}
 		fmt.Fprintln(stdout, "pre: updating with Homebrew")
-		if err := commandRunnerFn("brew", []string{"upgrade", "pre"}, nil, stdout, stderr); err != nil {
+		if err := commandRunnerFn("brew", brewArgs, nil, stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "pre update: %v\n", err)
 			return 1
 		}
@@ -177,14 +179,15 @@ func handleSelfUninstall(args []string, cfg *config.Config, stdout, stderr io.Wr
 
 	info := collectInstallInfo(cfg)
 
-	if info.Source == installSourceHomebrew {
+	if isHomebrewInstall(info.Source) {
+		brewArgs := homebrewLifecycleArgs(info.Source, "uninstall")
 		if _, err := lookPathFn("brew"); err != nil {
 			fmt.Fprintln(stderr, "pre uninstall: Homebrew install detected, but brew is not on PATH")
-			fmt.Fprintln(stderr, "pre uninstall: run: brew uninstall pre")
+			fmt.Fprintf(stderr, "pre uninstall: run: brew %s\n", strings.Join(brewArgs, " "))
 			return 1
 		}
-		fmt.Fprintln(stdout, "pre: uninstalling Homebrew formula")
-		if err := commandRunnerFn("brew", []string{"uninstall", "pre"}, nil, stdout, stderr); err != nil {
+		fmt.Fprintln(stdout, "pre: uninstalling with Homebrew")
+		if err := commandRunnerFn("brew", brewArgs, nil, stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "pre uninstall: %v\n", err)
 			return 1
 		}
@@ -289,15 +292,31 @@ func detectInstallSource(binaryPath string) string {
 	if p, err := filepath.EvalSymlinks(binaryPath); err == nil {
 		resolved = p
 	}
-	if strings.Contains(filepath.ToSlash(resolved), "/Cellar/pre/") {
+	normalized := filepath.ToSlash(resolved)
+	if strings.Contains(normalized, "/Caskroom/pre/") {
+		return installSourceHomebrewCask
+	}
+	if strings.Contains(normalized, "/Cellar/pre/") {
 		return installSourceHomebrew
 	}
 	return installSourceManual
 }
 
+func isHomebrewInstall(source string) bool {
+	return source == installSourceHomebrew || source == installSourceHomebrewCask
+}
+
+func homebrewLifecycleArgs(source, action string) []string {
+	args := []string{action}
+	if source == installSourceHomebrewCask {
+		args = append(args, "--cask")
+	}
+	return append(args, "pre")
+}
+
 func sourceLabel(source string) string {
 	switch source {
-	case installSourceHomebrew:
+	case installSourceHomebrew, installSourceHomebrewCask:
 		return "Homebrew"
 	default:
 		return "manual"

@@ -38,3 +38,10 @@ func TestOSVPyPIEcosystem(t *testing.T) {
 		t.Fatalf("unexpected error for PyPI ecosystem: %v", err)
 	}
 }
+
+func TestOSVCratesIOEcosystem(t *testing.T) {
+	_, err := security.Check("crates.io", "serde", "1.0.217")
+	if err != nil {
+		t.Fatalf("unexpected error for crates.io ecosystem: %v", err)
+	}
+}

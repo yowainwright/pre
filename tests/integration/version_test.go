@@ -4,6 +4,7 @@ package integration
 
 import (
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/yowainwright/pre/internal/manager"
@@ -28,6 +29,17 @@ func TestPyPIVersionResolution(t *testing.T) {
 	}
 	if version == "" {
 		t.Error("expected non-empty version for requests")
+	}
+}
+
+func TestCratesIOVersionResolution(t *testing.T) {
+	mgr := &manager.Manager{Name: "cargo", Ecosystem: "crates.io", InstallCmds: []string{"add"}}
+	version, err := manager.ResolveVersion(mgr, "serde@^1.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasPrefix(version, "1.") {
+		t.Errorf("expected a serde 1.x version, got %q", version)
 	}
 }
 

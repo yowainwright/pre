@@ -210,3 +210,34 @@ func TestSemverConstraintResolvesWithoutError(t *testing.T) {
 		t.Errorf("got resolution error for semver constraint:\n%s", stdout)
 	}
 }
+
+func TestCargoLockScansBeforeFetch(t *testing.T) {
+	home := t.TempDir()
+	dir := t.TempDir()
+	binDir := t.TempDir()
+	lockfile := `version = 4
+
+[[package]]
+name = "serde"
+version = "1.0.217"
+source = "registry+https://index.crates.io/"
+`
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.lock"), []byte(lockfile), 0644); err != nil {
+		t.Fatal(err)
+	}
+	fakeCargo := "#!/bin/sh\nprintf 'fake cargo %s\\n' \"$*\"\n"
+	cargoPath := filepath.Join(binDir, "cargo")
+	if err := os.WriteFile(cargoPath, []byte(fakeCargo), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	pathValue := "PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH")
+	env := append(baseEnv(home), pathValue, "PRE_NO_BACKGROUND=1")
+	stdout, stderr, code := runInDir(dir, env, "cargo", "fetch", "--locked")
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "fake cargo fetch --locked") {
+		t.Errorf("expected Cargo execution after scan, got: %s", stdout)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -14,13 +15,19 @@ import (
 var (
 	goProxyBase = "https://proxy.golang.org"
 	pypiBase    = "https://pypi.org"
+	cratesBase  = "https://crates.io"
 	versionHTTP = &http.Client{Timeout: 10 * time.Second}
+	crateNameRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
 	runCmd      = func(name string, args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return exec.CommandContext(ctx, name, args...).Output() // #nosec G204 -- executable names are package manager tools.
 	}
 )
+
+type crateVersionResponse struct {
+	Versions []crateVersionInfo `json:"versions"`
+}
 
 func ResolveVersion(mgr *Manager, pkg string) (string, error) {
 	switch mgr.Ecosystem {
@@ -32,9 +39,56 @@ func ResolveVersion(mgr *Manager, pkg string) (string, error) {
 		return goVersion(pkg)
 	case "PyPI":
 		return pypiVersion(pkg)
+	case "crates.io":
+		return crateVersion(pkg)
 	default:
 		return "", nil
 	}
+}
+
+func crateVersion(spec string) (string, error) {
+	name, requirement := parseAtSeparator(spec)
+	if !IsValidCrateName(name) {
+		return "", fmt.Errorf("crates.io: invalid crate name %q", name)
+	}
+	url := fmt.Sprintf("%s/api/v1/crates/%s", cratesBase, name)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("crates.io: %w", err)
+	}
+	req.Header.Set("User-Agent", "pre (https://github.com/yowainwright/pre)")
+	resp, err := versionHTTP.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("crates.io: %w", err)
+	}
+	defer resp.Body.Close()
+	return decodeCrateVersion(resp, name, requirement)
+}
+
+func IsValidCrateName(name string) bool {
+	return crateNameRE.MatchString(name)
+}
+
+func decodeCrateVersion(resp *http.Response, name, requirement string) (string, error) {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("crates.io: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var result crateVersionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("parse crates.io: %w", err)
+	}
+	if requirement != "" {
+		version, ok := selectCargoVersion(result.Versions, requirement)
+		if !ok {
+			return "", fmt.Errorf("crates.io: no version of %q matches %q", name, requirement)
+		}
+		return version, nil
+	}
+	if version, ok := selectCargoVersion(result.Versions, "*"); ok {
+		return version, nil
+	}
+	return "", fmt.Errorf("crates.io: no non-yanked stable version for %q", name)
 }
 
 func brewVersion(name string) (string, error) {

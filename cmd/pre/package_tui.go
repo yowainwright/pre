@@ -1300,6 +1300,8 @@ func buildPackageManagerArgs(req packageActionReq) ([]string, error) {
 		return buildNPMArgs(req, name, "add", "remove")
 	case "go":
 		return buildGoArgs(req, name)
+	case "cargo":
+		return buildCargoArgs(req, name)
 	case "pip", "pip3":
 		return buildPipArgs(req, name)
 	case "uv":
@@ -1369,6 +1371,38 @@ func buildGoArgs(req packageActionReq, name string) ([]string, error) {
 		return []string{"get", name + "@" + req.Version}, nil
 	}
 	return nil, unsupportedPackageAction(req)
+}
+
+func buildCargoArgs(req packageActionReq, name string) ([]string, error) {
+	switch req.Action {
+	case actionInstall:
+		return buildCargoInstallArgs(req, name), nil
+	case actionUpdate:
+		return buildCargoUpdateArgs(req, name), nil
+	case actionUninstall:
+		return []string{"remove", name}, nil
+	case actionDowngrade:
+		return []string{"update", name, "--precise", req.Version}, nil
+	}
+	return nil, unsupportedPackageAction(req)
+}
+
+func buildCargoInstallArgs(req packageActionReq, name string) []string {
+	spec := req.Package
+	if req.Version != "" {
+		spec = name + "@=" + req.Version
+	}
+	return []string{"add", spec}
+}
+
+func buildCargoUpdateArgs(req packageActionReq, name string) []string {
+	if name == "" {
+		return []string{"update"}
+	}
+	if req.Version != "" {
+		return []string{"update", name, "--precise", req.Version}
+	}
+	return []string{"update", name}
 }
 
 func buildPipArgs(req packageActionReq, name string) ([]string, error) {
@@ -1582,6 +1616,8 @@ func listInstalledPackages(mgr *manager.Manager) ([]installedPackage, error) {
 	case "poetry":
 		out, err := commandOutputFn("poetry", []string{"show", "--top-level"})
 		return packagesOrError(parsePoetryShowPackages(mgr, out), err)
+	case "cargo":
+		return cargoManifestPackages(mgr)
 	default:
 		return manifestPackages(mgr), nil
 	}
@@ -1667,7 +1703,26 @@ func packagesOrError(pkgs []installedPackage, err error) ([]installedPackage, er
 }
 
 func manifestPackages(mgr *manager.Manager) []installedPackage {
+	if mgr.Name == "cargo" {
+		packages, _ := cargoManifestPackages(mgr)
+		return packages
+	}
 	specs := manager.ReadManifest(mgr)
+	return installedPackagesFromSpecs(mgr, specs)
+}
+
+func cargoManifestPackages(mgr *manager.Manager) ([]installedPackage, error) {
+	specs, err := manager.ReadCargoUpdatePackages("Cargo.toml", "")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return installedPackagesFromSpecs(mgr, specs), nil
+}
+
+func installedPackagesFromSpecs(mgr *manager.Manager, specs []string) []installedPackage {
 	pkgs := make([]installedPackage, 0, len(specs))
 	for _, spec := range specs {
 		name, version := manager.ParseSpec(mgr.Ecosystem, spec)

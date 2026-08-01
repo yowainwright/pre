@@ -261,6 +261,102 @@ func TestPypiVersionEmptyVersion(t *testing.T) {
 	}
 }
 
+func TestCrateVersionSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/crates/serde" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if r.Header.Get("User-Agent") == "" {
+			t.Error("expected User-Agent header")
+		}
+		fmt.Fprintln(w, `{
+			"crate":{"max_stable_version":"1.0.218","max_version":"1.0.219-alpha.1"},
+			"versions":[
+				{"num":"1.0.218","yanked":true},
+				{"num":"1.0.217","yanked":false},
+				{"num":"1.0.219-alpha.1","yanked":false}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	origBase := cratesBase
+	cratesBase = srv.URL
+	defer func() { cratesBase = origBase }()
+
+	ver, err := crateVersion("serde")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ver != "1.0.217" {
+		t.Errorf("expected '1.0.217', got %q", ver)
+	}
+}
+
+func TestCrateVersionRequirement(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintln(w, `{
+			"crate":{"max_stable_version":"2.0.0"},
+			"versions":[
+				{"num":"2.0.0","yanked":false},
+				{"num":"1.8.0","yanked":false},
+				{"num":"1.9.0","yanked":true}
+			]
+		}`)
+	}))
+	defer srv.Close()
+
+	origBase := cratesBase
+	cratesBase = srv.URL
+	defer func() { cratesBase = origBase }()
+
+	ver, err := crateVersion("example@^1.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ver != "1.8.0" {
+		t.Errorf("expected '1.8.0', got %q", ver)
+	}
+}
+
+func TestCrateVersionRejectsInvalidName(t *testing.T) {
+	for _, name := range []string{"../serde", "1serde"} {
+		if _, err := crateVersion(name); err == nil {
+			t.Errorf("expected invalid crate name error for %q", name)
+		}
+	}
+}
+
+func TestCrateVersionNoMatchingRequirement(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintln(w, `{"crate":{"max_stable_version":"2.0.0"},"versions":[{"num":"2.0.0"}]}`)
+	}))
+	defer srv.Close()
+
+	origBase := cratesBase
+	cratesBase = srv.URL
+	defer func() { cratesBase = origBase }()
+
+	if _, err := crateVersion("example@^1.0"); err == nil {
+		t.Error("expected no matching version error")
+	}
+}
+
+func TestCrateVersionRejectsUnverifiableMaximum(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintln(w, `{"crate":{"max_stable_version":"1.0.218"}}`)
+	}))
+	defer srv.Close()
+
+	origBase := cratesBase
+	cratesBase = srv.URL
+	defer func() { cratesBase = origBase }()
+
+	if _, err := crateVersion("serde"); err == nil {
+		t.Error("expected unverifiable maximum version error")
+	}
+}
+
 func TestResolveVersionHomebrew(t *testing.T) {
 	orig := runCmd
 	runCmd = func(name string, args ...string) ([]byte, error) {

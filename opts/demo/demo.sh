@@ -39,7 +39,7 @@ npm install lodash@4.17.21
 printf "\n"
 sleep 2
 
-printf "${dim}# known CVE — pre catches it before anything installs${reset}\n"
+printf "${dim}# known CVE — pre catches the requested version before npm runs${reset}\n"
 type_cmd "npm install minimist@0.0.8"
 printf 'n\n' | npm install minimist@0.0.8
 printf "\n"
@@ -55,7 +55,7 @@ type_cmd "pre status"
 pre status
 
 printf "\n${dim}──────────────────────────────────────────────────────────${reset}\n"
-printf "Install  ${cyan}brew install yowainwright/tap/pre${reset}\n"
+printf "Install  ${cyan}brew install --cask yowainwright/tap/pre${reset}\n"
 printf "Docs     ${dim}github.com/yowainwright/pre${reset}\n\n"
 
 exec bash -i

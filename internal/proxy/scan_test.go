@@ -450,6 +450,22 @@ func TestCanResolveConstraintSemverRange(t *testing.T) {
 	}
 }
 
+func TestResolveScanVersionCargoRequirement(t *testing.T) {
+	target := ""
+	defer withResolveVersion(func(_ *manager.Manager, pkg string) (string, error) {
+		target = pkg
+		return "1.8.0", nil
+	})()
+
+	version, _, resolved, exact, err := resolveScanVersion(cargoMgr(), "serde", "^1.0", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if target != "serde@^1.0" || version != "1.8.0" || !resolved || !exact {
+		t.Errorf("unexpected Cargo resolution: target=%q version=%q resolved=%v exact=%v", target, version, resolved, exact)
+	}
+}
+
 func TestResolveScanVersionEmptyNoAllow(t *testing.T) {
 	_, label, updated, exact, err := resolveScanVersion(npmMgr(), "react", "", false)
 	if !errors.Is(err, errMissingVersion) || updated || exact {
