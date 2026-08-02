@@ -1712,7 +1712,14 @@ func manifestPackages(mgr *manager.Manager) []installedPackage {
 }
 
 func cargoManifestPackages(mgr *manager.Manager) ([]installedPackage, error) {
-	specs, err := manager.ReadCargoUpdatePackages("Cargo.toml", "")
+	manifestPath, err := manager.DiscoverCargoManifest("Cargo.toml")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	specs, err := manager.ReadCargoUpdatePackages(manifestPath, "")
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}

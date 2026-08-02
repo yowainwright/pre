@@ -235,6 +235,56 @@ func cargoInstallError(mgr *manager.Manager, args []string) error {
 	return err
 }
 
+func npmInstallError(mgr *manager.Manager, args []string) error {
+	if mgr == nil || mgr.Ecosystem != "npm" {
+		return nil
+	}
+	for _, arg := range npmPackageArguments(mgr, args) {
+		if unsupportedNPMPackageSource(arg) {
+			return fmt.Errorf("%s dependency source %q cannot be scanned", mgr.Name, arg)
+		}
+	}
+	return nil
+}
+
+func npmPackageArguments(mgr *manager.Manager, args []string) []string {
+	var packages []string
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if packageFlagConsumesValue(mgr, arg) {
+			if !strings.Contains(arg, "=") {
+				index++
+			}
+			continue
+		}
+		if !strings.HasPrefix(arg, "-") {
+			packages = append(packages, arg)
+		}
+	}
+	return packages
+}
+
+func unsupportedNPMPackageSource(spec string) bool {
+	if strings.Contains(spec, "@npm:") {
+		return true
+	}
+	requested := npmRequestedSpec(spec)
+	return requested != "" && !manager.IsSupportedNPMRegistrySpec(requested)
+}
+
+func npmRequestedSpec(spec string) string {
+	if strings.HasPrefix(spec, "@") {
+		if index := strings.LastIndex(spec, "@"); index > 0 {
+			return spec[index+1:]
+		}
+		return ""
+	}
+	if name, requested, found := strings.Cut(spec, "@"); found && name != "" {
+		return requested
+	}
+	return spec
+}
+
 func cargoManifestPath(args []string) (string, bool, error) {
 	path, explicit, err := findCargoManifestPath(args)
 	if err != nil {
@@ -302,12 +352,89 @@ func cargoSeparateManifestPath(args []string, index int) (string, bool, error) {
 
 func installFallbackPackages(mgr *manager.Manager, args []string) ([]string, error) {
 	if mgr == nil || mgr.Name != "cargo" {
-		if err := validateManifestFn(mgr, "."); err != nil {
+		dir, err := installProjectDir(mgr, args)
+		if err != nil {
 			return nil, err
 		}
-		return readManifestFn(mgr), nil
+		if err := validateManifestFn(mgr, dir); err != nil {
+			return nil, err
+		}
+		return readManifestDirFn(mgr, dir), nil
 	}
 	return cargoFallbackPackages(mgr, args)
+}
+
+func installProjectDir(mgr *manager.Manager, args []string) (string, error) {
+	flags := projectDirectoryFlags(mgr)
+	values, err := projectDirectoryValues(args, flags)
+	if err != nil || len(values) == 0 {
+		return ".", err
+	}
+	for _, value := range values[1:] {
+		if value != values[0] {
+			return "", errors.New("conflicting project directory flags")
+		}
+	}
+	return filepath.Clean(values[0]), nil
+}
+
+func projectDirectoryFlags(mgr *manager.Manager) []string {
+	if mgr == nil {
+		return nil
+	}
+	switch mgr.Name {
+	case "npm":
+		return []string{"--prefix"}
+	case "bun":
+		return []string{"--cwd"}
+	case "pnpm":
+		return []string{"--dir", "-C"}
+	case "uv":
+		return []string{"--project"}
+	case "poetry":
+		return []string{"--project", "-P"}
+	default:
+		return nil
+	}
+}
+
+func projectDirectoryValues(args, flags []string) ([]string, error) {
+	var values []string
+	for index := 0; index < len(args); index++ {
+		value, consumed, err := projectDirectoryValueAt(args, index, flags)
+		if err != nil {
+			return nil, err
+		}
+		if value != "" {
+			values = append(values, value)
+		}
+		if consumed {
+			index++
+		}
+	}
+	return values, nil
+}
+
+func projectDirectoryValueAt(args []string, index int, flags []string) (string, bool, error) {
+	for _, flag := range flags {
+		if value, ok := strings.CutPrefix(args[index], flag+"="); ok {
+			return requireProjectDirectory(value, false, flag)
+		}
+		if args[index] == flag {
+			if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") {
+				return "", false, fmt.Errorf("%s requires a value", flag)
+			}
+			return requireProjectDirectory(args[index+1], true, flag)
+		}
+	}
+	return "", false, nil
+}
+
+func requireProjectDirectory(value string, consumed bool, flag string) (string, bool, error) {
+	if value == "" {
+		return "", consumed, fmt.Errorf("%s requires a value", flag)
+	}
+	return value, consumed, nil
 }
 
 func cargoFallbackPackages(mgr *manager.Manager, args []string) ([]string, error) {
@@ -360,42 +487,7 @@ func cargoProjectManifest(args []string) (string, bool, error) {
 }
 
 func discoverCargoManifest(startPath string) (string, error) {
-	candidate, err := filepath.Abs(startPath)
-	if err != nil {
-		return "", err
-	}
-	for {
-		found, err := cargoManifestExists(candidate)
-		if err != nil {
-			return "", err
-		}
-		if found {
-			return candidate, nil
-		}
-		next, ok := parentCargoManifest(candidate)
-		if !ok {
-			break
-		}
-		candidate = next
-	}
-	return "", fmt.Errorf("Cargo.toml not found from %s: %w", startPath, os.ErrNotExist)
-}
-
-func cargoManifestExists(path string) (bool, error) {
-	_, err := os.Stat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	return err == nil, err
-}
-
-func parentCargoManifest(path string) (string, bool) {
-	dir := filepath.Dir(path)
-	parent := filepath.Dir(dir)
-	if parent == dir {
-		return "", false
-	}
-	return filepath.Join(parent, "Cargo.toml"), true
+	return manager.DiscoverCargoManifest(startPath)
 }
 
 func readCargoFallback(mgr *manager.Manager, command string, args []string, path string) ([]string, error) {
@@ -560,7 +652,7 @@ func packageFlagConsumesValue(mgr *manager.Manager, arg string) bool {
 
 func npmFlagConsumesValue(flag string) bool {
 	flags := []string{
-		"--workspace", "-w", "--prefix", "--tag", "--registry", "--userconfig", "--cache",
+		"--workspace", "-w", "--prefix", "--cwd", "--dir", "-C", "--tag", "--registry", "--userconfig", "--cache",
 		"--omit", "--include", "--install-strategy", "--save-prefix", "--otp", "--before", "--scope",
 	}
 	return slices.Contains(flags, flag)
@@ -572,6 +664,7 @@ func pythonFlagConsumesValue(managerName, flag string) bool {
 		"--extra-index-url", "-f", "--find-links", "--trusted-host", "--python", "--platform", "--python-version",
 		"--implementation", "--abi", "--target", "--root", "--prefix", "--src", "--upgrade-strategy",
 		"--config-settings", "-C", "--global-option", "--build-option", "--only-binary", "--no-binary", "--report", "-e", "--editable",
+		"--project", "-P",
 	}
 	if slices.Contains(flags, flag) {
 		return true

@@ -24,6 +24,7 @@ var (
 	saveCacheFn                         = cache.Save
 	updateCacheFn                       = cache.Update
 	readManifestFn                      = manager.ReadManifest
+	readManifestDirFn                   = manager.ReadManifestDir
 	validateManifestFn                  = manager.ValidateManifest
 	readRequirementsFileFn              = manager.ReadRequirementsFile
 	readCargoFetchPackagesFn            = manager.ReadCargoFetchPackages
@@ -46,7 +47,12 @@ func Intercept(mgr *manager.Manager, args []string) {
 		blockIncompleteInstall(err)
 		return
 	}
+	if err := npmInstallError(mgr, packageArgs); err != nil {
+		blockIncompleteInstall(err)
+		return
+	}
 
+	fromProject := len(requirementFilePaths(mgr, packageArgs)) > 0
 	packages, err := installPackages(mgr, packageArgs)
 	if err != nil {
 		blockIncompleteInstall(err)
@@ -57,6 +63,7 @@ func Intercept(mgr *manager.Manager, args []string) {
 		return
 	}
 	if len(packages) == 0 {
+		fromProject = true
 		packages, err = installFallbackPackages(mgr, args)
 	}
 	if err != nil {
@@ -82,7 +89,7 @@ func Intercept(mgr *manager.Manager, args []string) {
 		fmt.Print(display.Dim(fmt.Sprintf("scanning %d package(s)...\n", uncachedCount)))
 	}
 
-	results := scanAll(mgr, packages, c)
+	results := scanAllWithPolicy(mgr, packages, c, !fromProject)
 
 	fresh := make(cache.Cache)
 	for _, r := range results {

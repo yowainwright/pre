@@ -217,7 +217,7 @@ func TestReadManifestFallsBackToManifest(t *testing.T) {
 	}
 }
 
-func TestReadPackageJSONSkipsLocalSpecs(t *testing.T) {
+func TestReadPackageJSONKeepsUnsupportedSpecsForValidation(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(dir+"/package.json", []byte(`{
 		"dependencies": {
@@ -227,8 +227,9 @@ func TestReadPackageJSONSkipsLocalSpecs(t *testing.T) {
 	}`), 0644)
 
 	names := readPackageJSON(dir)
-	if len(names) != 0 {
-		t.Errorf("expected local specs to be skipped, got %v", names)
+	set := manifestSet(names)
+	if len(names) != 2 || !set["localpkg"] || !set["workspacepkg"] {
+		t.Errorf("expected unsupported specs to remain visible, got %v", names)
 	}
 }
 

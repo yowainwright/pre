@@ -256,14 +256,10 @@ func readBunLock(dir string) []string {
 	if err != nil {
 		return nil
 	}
-	content := string(data)
-	if idx := strings.Index(content, "{"); idx != -1 {
-		content = content[idx:]
-	}
 	var lockfile struct {
 		Packages map[string]json.RawMessage `json:"packages"`
 	}
-	if err := json.Unmarshal([]byte(content), &lockfile); err != nil {
+	if err := unmarshalBunLock(data, &lockfile); err != nil {
 		return nil
 	}
 	seen := make(map[string]bool, len(lockfile.Packages))

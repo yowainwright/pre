@@ -202,6 +202,85 @@ private = { git = "https://example.com/private", version = "1" }
 	}
 }
 
+func TestReadCargoUpdatePackagesBlocksQuotedExternalSourceKey(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "Cargo.toml")
+	manifest := `[dependencies]
+private = { version = "1", "git" = "https://example.com/private" }
+`
+	writeCargoTestFile(t, manifestPath, manifest)
+
+	_, err := ReadCargoUpdatePackages(manifestPath, "")
+	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+		t.Fatalf("expected quoted source key error, got %v", err)
+	}
+}
+
+func TestReadCargoUpdatePackagesBlocksEscapedQuotedSourceKey(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "Cargo.toml")
+	manifest := `[dependencies]
+private = { version = "1", "g\u0069t" = "https://example.com/private" }
+`
+	writeCargoTestFile(t, manifestPath, manifest)
+
+	_, err := ReadCargoUpdatePackages(manifestPath, "")
+	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+		t.Fatalf("expected escaped source key error, got %v", err)
+	}
+}
+
+func TestReadCargoUpdatePackagesBlocksQuotedTableSourceKey(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "Cargo.toml")
+	manifest := `[dependencies.private]
+version = "1"
+"path" = "../private"
+`
+	writeCargoTestFile(t, manifestPath, manifest)
+
+	_, err := ReadCargoUpdatePackages(manifestPath, "")
+	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+		t.Fatalf("expected quoted table source key error, got %v", err)
+	}
+}
+
+func TestReadCargoUpdatePackagesAllowsCratesIORegistry(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "Cargo.toml")
+	manifest := `[dependencies]
+serde = { version = "1", registry = "crates-io" }
+
+[dependencies.regex]
+version = "1.11"
+"registry" = "crates-io"
+`
+	writeCargoTestFile(t, manifestPath, manifest)
+
+	packages, err := ReadCargoUpdatePackages(manifestPath, "")
+	if err != nil {
+		t.Fatalf("expected crates.io registry to pass, got %v", err)
+	}
+	want := []string{"serde@^1", "regex@^1.11"}
+	if !slices.Equal(packages, want) {
+		t.Fatalf("expected %v, got %v", want, packages)
+	}
+}
+
+func TestReadCargoUpdatePackagesBlocksCustomQuotedRegistry(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "Cargo.toml")
+	manifest := `[dependencies]
+private = { version = "1", "registry" = "internal" }
+`
+	writeCargoTestFile(t, manifestPath, manifest)
+
+	_, err := ReadCargoUpdatePackages(manifestPath, "")
+	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+		t.Fatalf("expected custom registry error, got %v", err)
+	}
+}
+
 func TestReadCargoUpdatePackagesBlocksPatchedExternalSource(t *testing.T) {
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "Cargo.toml")
@@ -342,6 +421,76 @@ serde = { git = "https://example.com/serde" }
 	_, err := ReadCargoUpdatePackages(memberPath, "")
 	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
 		t.Fatalf("expected workspace source error, got %v", err)
+	}
+}
+
+func TestReadCargoUpdatePackagesIncludesWorkspaceMembers(t *testing.T) {
+	root := `[workspace]
+members = [
+  "member",
+]
+`
+	member := "[dependencies]\nserde = \"1\"\n"
+	rootPath, _ := writeCargoWorkspace(t, root, member)
+
+	packages, err := ReadCargoUpdatePackages(rootPath, "")
+	if err != nil {
+		t.Fatalf("read workspace root: %v", err)
+	}
+	if !slices.Equal(packages, []string{"serde@^1"}) {
+		t.Fatalf("expected member dependency, got %v", packages)
+	}
+}
+
+func TestReadCargoUpdatePackagesBlocksWorkspaceMemberSource(t *testing.T) {
+	root := `[workspace]
+members = ["member"]
+`
+	member := `[dependencies]
+private = { version = "1", git = "https://example.com/private" }
+`
+	rootPath, _ := writeCargoWorkspace(t, root, member)
+
+	_, err := ReadCargoUpdatePackages(rootPath, "")
+	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+		t.Fatalf("expected member source error, got %v", err)
+	}
+}
+
+func TestReadCargoUpdatePackagesHonorsWorkspaceExclude(t *testing.T) {
+	root := `[workspace]
+members = ["member", "excluded"]
+exclude = ["excluded"]
+`
+	rootPath, _ := writeCargoWorkspace(t, root, "[dependencies]\nserde = \"1\"\n")
+	excludedDir := filepath.Join(filepath.Dir(rootPath), "excluded")
+	if err := os.MkdirAll(excludedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	excluded := "[dependencies]\nprivate = { git = \"https://example.com/private\" }\n"
+	writeCargoTestFile(t, filepath.Join(excludedDir, "Cargo.toml"), excluded)
+
+	packages, err := ReadCargoUpdatePackages(rootPath, "")
+	if err != nil {
+		t.Fatalf("read workspace with exclusion: %v", err)
+	}
+	if !slices.Equal(packages, []string{"serde@^1"}) {
+		t.Fatalf("unexpected workspace packages: %v", packages)
+	}
+}
+
+func TestDiscoverCargoManifestSearchesParents(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "src", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(dir, "Cargo.toml")
+	writeCargoTestFile(t, manifestPath, "[dependencies]\nserde = \"1\"\n")
+
+	got, err := DiscoverCargoManifest(filepath.Join(nested, "Cargo.toml"))
+	if err != nil || got != manifestPath {
+		t.Fatalf("DiscoverCargoManifest() = %q, %v; want %q, nil", got, err, manifestPath)
 	}
 }
 

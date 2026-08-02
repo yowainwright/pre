@@ -20,6 +20,14 @@ func npmMgr() *manager.Manager {
 	return &manager.Manager{Name: "npm", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i", "ci"}}
 }
 
+func bunMgr() *manager.Manager {
+	return &manager.Manager{Name: "bun", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i", "update"}}
+}
+
+func pnpmMgr() *manager.Manager {
+	return &manager.Manager{Name: "pnpm", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i", "update"}}
+}
+
 func pipMgr() *manager.Manager {
 	return &manager.Manager{Name: "pip", Ecosystem: "PyPI", InstallCmds: []string{"install"}}
 }
@@ -87,6 +95,12 @@ func withReadManifest(fn func(*manager.Manager) []string) func() {
 	return func() { readManifestFn = orig }
 }
 
+func withReadManifestDir(fn func(*manager.Manager, string) []string) func() {
+	orig := readManifestDirFn
+	readManifestDirFn = fn
+	return func() { readManifestDirFn = orig }
+}
+
 func withValidateManifest(fn func(*manager.Manager, string) error) func() {
 	orig := validateManifestFn
 	validateManifestFn = fn
@@ -127,6 +141,22 @@ func withStdinInput(input string) func() {
 	orig := stdinReader
 	stdinReader = strings.NewReader(input)
 	return func() { stdinReader = orig }
+}
+
+func withWorkingDir(t *testing.T, dir string) func() {
+	t.Helper()
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if err := os.Chdir(original); err != nil {
+			t.Error(err)
+		}
+	}
 }
 
 func emptyCache() cache.Cache      { return make(cache.Cache) }
@@ -226,7 +256,7 @@ func TestInterceptNPMCI(t *testing.T) {
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
 	defer withSpawnBackgroundScan(func(string) {})()
-	defer withReadManifest(func(*manager.Manager) []string { return []string{"react@18.0.0"} })()
+	defer withReadManifestDir(func(*manager.Manager, string) []string { return []string{"react@18.0.0"} })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
 		securityCalled = true
 		return nil, nil
@@ -251,6 +281,121 @@ func TestInterceptInvalidManifestBlocks(t *testing.T) {
 	})
 	if execCalled {
 		t.Error("expected invalid manifest to block npm ci")
+	}
+}
+
+func TestInterceptManifestCommandUsesSelectedProject(t *testing.T) {
+	tests := []struct {
+		name        string
+		manager     *manager.Manager
+		args        func(string) []string
+		lockName    string
+		lock        string
+		packageName string
+	}{
+		{
+			name: "npm prefix", manager: npmMgr(),
+			args:        func(dir string) []string { return []string{"ci", "--prefix", dir} },
+			lockName:    "package-lock.json",
+			lock:        `{"packages":{"node_modules/react":{"version":"18.2.0"}}}`,
+			packageName: "react",
+		},
+		{
+			name: "bun cwd", manager: bunMgr(),
+			args:        func(dir string) []string { return []string{"install", "--cwd", dir} },
+			lockName:    "bun.lock",
+			lock:        "{\n  \"packages\": {\n    \"react\": [\"react@18.2.0\", {}],\n  },\n}\n",
+			packageName: "react",
+		},
+		{
+			name: "pnpm dir", manager: pnpmMgr(),
+			args:        func(dir string) []string { return []string{"install", "--dir", dir} },
+			lockName:    "pnpm-lock.yaml",
+			lock:        "packages:\n  react@18.2.0:\n    resolution: {integrity: sha512-abc}\n",
+			packageName: "react",
+		},
+		{
+			name: "uv project", manager: uvMgr(),
+			args:        func(dir string) []string { return []string{"sync", "--project", dir} },
+			lockName:    "uv.lock",
+			lock:        "[[package]]\nname = \"requests\"\nversion = \"2.32.0\"\n",
+			packageName: "requests",
+		},
+		{
+			name: "poetry project", manager: poetryMgr(),
+			args:        func(dir string) []string { return []string{"install", "-P", dir} },
+			lockName:    "poetry.lock",
+			lock:        "[[package]]\nname = \"requests\"\nversion = \"2.32.0\"\n",
+			packageName: "requests",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			currentDir := t.TempDir()
+			projectDir := t.TempDir()
+			defer withWorkingDir(t, currentDir)()
+			path := filepath.Join(projectDir, test.lockName)
+			if err := os.WriteFile(path, []byte(test.lock), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			scanned := false
+			defer withExecFn(noopExec)()
+			defer withLoadCache(emptyCache)()
+			defer withUpdateCache(noopUpdate)()
+			defer withSpawnBackgroundScan(func(string) {})()
+			defer withSecurityCheck(func(_ string, name, _ string) ([]security.Vulnerability, error) {
+				scanned = scanned || name == test.packageName
+				return nil, nil
+			})()
+
+			Intercept(test.manager, test.args(projectDir))
+			if !scanned {
+				t.Fatalf("expected %s package to be scanned", test.packageName)
+			}
+		})
+	}
+}
+
+func TestInterceptNPMExternalSourceBlocks(t *testing.T) {
+	specs := []string{
+		"git+https://example.com/private.git",
+		"private@file:../private",
+		"alias@npm:react@18",
+		"private@workspace:*",
+		"https://example.com/private.tgz",
+	}
+	for _, spec := range specs {
+		t.Run(spec, func(t *testing.T) {
+			execCalled := false
+			defer withExecFn(func(string, []string) { execCalled = true })()
+
+			expectProcessExit(t, 1, func() {
+				Intercept(npmMgr(), []string{"install", spec})
+			})
+			if execCalled {
+				t.Error("expected external npm source to block install")
+			}
+		})
+	}
+}
+
+func TestInterceptNPMManifestExternalSourceBlocks(t *testing.T) {
+	dir := t.TempDir()
+	manifest := `{"dependencies":{"private":"git+https://example.com/private.git"}}`
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer withWorkingDir(t, dir)()
+
+	execCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
+	expectProcessExit(t, 1, func() {
+		Intercept(npmMgr(), []string{"install"})
+	})
+	if execCalled {
+		t.Error("expected manifest external source to block install")
 	}
 }
 
@@ -722,7 +867,7 @@ func TestInterceptPoetryInstallScansManifestInsteadOfFlagValues(t *testing.T) {
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
 	defer withSpawnBackgroundScan(func(string) {})()
-	defer withReadManifest(func(*manager.Manager) []string { return []string{"requests==2.32.0"} })()
+	defer withReadManifestDir(func(*manager.Manager, string) []string { return []string{"requests==2.32.0"} })()
 	defer withSecurityCheck(func(_, name, _ string) ([]security.Vulnerability, error) {
 		scannedName = name
 		return nil, nil
@@ -787,8 +932,8 @@ func TestInterceptInstallManifestFallback(t *testing.T) {
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
 	defer withSpawnBackgroundScan(func(string) {})()
-	defer withReadManifest(func(mgr *manager.Manager) []string {
-		return []string{"lodash", "react"}
+	defer withReadManifestDir(func(mgr *manager.Manager, _ string) []string {
+		return []string{"lodash@1.0.0", "react@18.0.0"}
 	})()
 	Intercept(npmMgr(), []string{"install"})
 	if !execCalled {
@@ -799,7 +944,7 @@ func TestInterceptInstallManifestFallback(t *testing.T) {
 func TestInterceptInstallManifestEmpty(t *testing.T) {
 	execCalled := false
 	defer withExecFn(func(name string, args []string) { execCalled = true })()
-	defer withReadManifest(func(mgr *manager.Manager) []string { return nil })()
+	defer withReadManifestDir(func(mgr *manager.Manager, _ string) []string { return nil })()
 
 	Intercept(npmMgr(), []string{"install"})
 	if !execCalled {
@@ -1129,11 +1274,18 @@ func TestInterceptPackageLimitBypassesScan(t *testing.T) {
 	}
 }
 
-func TestInterceptManifestFallbackResolvesMissingVersion(t *testing.T) {
+func TestInterceptManifestFallbackBlocksMissingVersion(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("requests\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer withWorkingDir(t, dir)()
+
+	execCalled := false
 	resolveCalled := false
 	securityCalled := false
 
-	defer withExecFn(noopExec)()
+	defer withExecFn(func(string, []string) { execCalled = true })()
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
 	defer withSpawnBackgroundScan(func(string) {})()
@@ -1145,15 +1297,58 @@ func TestInterceptManifestFallbackResolvesMissingVersion(t *testing.T) {
 		resolveCalled = true
 		return "18.0.0", nil
 	})()
-	defer withReadManifest(func(*manager.Manager) []string { return []string{"react"} })()
 
-	Intercept(npmMgr(), []string{"install"})
-
-	if !resolveCalled {
-		t.Error("expected manifest fallback to resolve the install version")
+	expectProcessExit(t, 1, func() {
+		Intercept(pipMgr(), []string{"install"})
+	})
+	if resolveCalled || securityCalled || execCalled {
+		t.Error("expected unversioned manifest dependency to block before resolution")
 	}
-	if !securityCalled {
-		t.Error("expected resolved manifest package to be scanned")
+}
+
+func TestInterceptRequirementFileBlocksMissingVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "requirements.txt")
+	if err := os.WriteFile(path, []byte("requests\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	execCalled := false
+	resolveCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
+	defer withLoadCache(emptyCache)()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		resolveCalled = true
+		return "2.32.0", nil
+	})()
+
+	expectProcessExit(t, 1, func() {
+		Intercept(pipMgr(), []string{"install", "-r", path})
+	})
+	if resolveCalled || execCalled {
+		t.Error("expected unversioned requirements dependency to block before resolution")
+	}
+}
+
+func TestInterceptDirectPackageResolvesMissingVersion(t *testing.T) {
+	resolveCalled := false
+	securityCalled := false
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		resolveCalled = true
+		return "18.2.0", nil
+	})()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		securityCalled = true
+		return nil, nil
+	})()
+
+	Intercept(npmMgr(), []string{"install", "react"})
+	if !resolveCalled || !securityCalled {
+		t.Error("expected direct unversioned package to resolve and scan")
 	}
 }
 
@@ -1396,7 +1591,7 @@ func TestInterceptSpawnsSystemScan(t *testing.T) {
 	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
 		return "18.0.0", nil
 	})()
-	defer withReadManifest(func(*manager.Manager) []string { return []string{"react"} })()
+	defer withReadManifestDir(func(*manager.Manager, string) []string { return []string{"react@18.0.0"} })()
 
 	Intercept(npmMgr(), []string{"install"})
 	if !systemSpawned {

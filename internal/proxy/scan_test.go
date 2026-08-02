@@ -423,8 +423,9 @@ func TestCanResolveConstraintEmpty(t *testing.T) {
 func TestCanResolveConstraintSpecialPrefixes(t *testing.T) {
 	prefixes := []string{
 		"file:/path", "git+https://github.com/foo/bar", "github:foo/bar",
-		"workspace:*", "link:/path", "npm:pkg",
+		"workspace:*", "catalog:default", "link:/path", "portal:/path", "patch:pkg", "npm:pkg",
 		"http://example.com/pkg.tgz", "https://example.com/pkg.tgz",
+		"package.tgz", "user/repository",
 	}
 	for _, v := range prefixes {
 		if canResolveConstraint("npm", v) {

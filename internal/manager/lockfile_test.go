@@ -187,6 +187,26 @@ func TestReadBunLock(t *testing.T) {
 	}
 }
 
+func TestReadBunLockAllowsJSONC(t *testing.T) {
+	dir := t.TempDir()
+	lock := `# Bun Lockfile v1
+
+{
+  // Bun emits JSONC, not strict JSON.
+  "lockfileVersion": 1,
+  "packages": {
+    "react": ["react@18.2.0", {}, "sha512-abc"],
+  },
+}
+`
+	os.WriteFile(dir+"/bun.lock", []byte(lock), 0o644)
+
+	packages := readBunLock(dir)
+	if len(packages) != 1 || packages[0] != "react@18.2.0" {
+		t.Fatalf("unexpected Bun packages: %v", packages)
+	}
+}
+
 func TestReadBunLockBadJSON(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(dir+"/bun.lock", []byte("not json"), 0644)

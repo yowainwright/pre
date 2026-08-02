@@ -60,7 +60,13 @@ homebrew_casks:
         install: |
           if OS.mac?
             binary = Dir["#{staged_path}/pre-darwin-*"].first
-            system_command "/usr/bin/xattr", args: ["-d", "com.apple.quarantine", binary] if binary
+            if binary
+              quarantine = system_command "/usr/bin/xattr",
+                                          args: ["-p", "com.apple.quarantine", binary],
+                                          must_succeed: false,
+                                          print_stderr: false
+              system_command "/usr/bin/xattr", args: ["-d", "com.apple.quarantine", binary] if quarantine.success?
+            end
           end
     caveats: |
       The macOS binary is checksum-verified but not notarized. This cask

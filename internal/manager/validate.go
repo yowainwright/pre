@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func ValidateManifest(mgr *Manager, dir string) error {
@@ -45,7 +46,7 @@ func validateNPMProject(name, dir string) error {
 	if err != nil {
 		return err
 	}
-	return validateJSONFiles(dir, "package.json")
+	return validatePackageJSON(filepath.Join(dir, "package.json"))
 }
 
 func validateAllNPMLocks(dir string) error {
@@ -155,15 +156,43 @@ func validateBunLock(path string) error {
 	if err != nil || !exists {
 		return err
 	}
-	if index := bytes.IndexByte(data, '{'); index >= 0 {
-		data = data[index:]
-	}
 	var object map[string]json.RawMessage
-	if err := json.Unmarshal(data, &object); err != nil {
+	if err := unmarshalBunLock(data, &object); err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
 	}
 	if object == nil {
 		return fmt.Errorf("parse %s: expected JSON object", path)
+	}
+	return nil
+}
+
+func validatePackageJSON(path string) error {
+	data, exists, err := readOptionalProjectFile(path)
+	if err != nil || !exists {
+		return err
+	}
+	var manifest *npmPackageManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	if manifest == nil {
+		return fmt.Errorf("parse %s: expected JSON object", path)
+	}
+	return validateNPMDependencySources(*manifest, path)
+}
+
+func validateNPMDependencySources(manifest npmPackageManifest, path string) error {
+	groups := []map[string]string{
+		manifest.Dependencies,
+		manifest.DevDependencies,
+		manifest.OptionalDependencies,
+	}
+	for _, dependencies := range groups {
+		for name, spec := range dependencies {
+			if !IsSupportedNPMRegistrySpec(strings.TrimSpace(spec)) {
+				return fmt.Errorf("unsupported npm dependency source for %q in %s", name, path)
+			}
+		}
 	}
 	return nil
 }

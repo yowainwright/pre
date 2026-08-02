@@ -443,6 +443,25 @@ source = "registry+https://index.crates.io/"
 	}
 }
 
+func TestCargoManifestPackagesDiscoversParentManifest(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "src", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "[dependencies]\nserde = \"1.0\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer withWorkingDir(t, nested)()
+
+	packages, err := cargoManifestPackages(mustManager(t, "cargo"))
+	if err != nil {
+		t.Fatalf("read parent Cargo manifest: %v", err)
+	}
+	assertPackage(t, packages, "serde", "^1.0")
+}
+
 func TestCollectPackageInventoryUsesManifestFallback(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"dependencies":{"react":"18.2.0"}}`), 0644); err != nil {

@@ -352,18 +352,7 @@ func canResolveConstraint(ecosystem, version string) bool {
 	if ecosystem != "npm" {
 		return false
 	}
-	for _, prefix := range []string{
-		"file:", "git+", "github:", "workspace:", "link:", "npm:",
-		"http://", "https://",
-	} {
-		if strings.HasPrefix(version, prefix) {
-			return false
-		}
-	}
-	return !strings.HasPrefix(version, "./") &&
-		!strings.HasPrefix(version, "../") &&
-		!strings.HasPrefix(version, "/") &&
-		!isExactVersion(ecosystem, version)
+	return manager.IsSupportedNPMRegistrySpec(version) && !isExactVersion(ecosystem, version)
 }
 
 func isExactVersion(ecosystem, version string) bool {
