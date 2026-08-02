@@ -32,6 +32,9 @@ verify-snapshot:
 	grep -Fq 'print_stderr: false' $(DIST)/homebrew/Casks/pre.rb
 	grep -Fq 'args: ["-d", "com.apple.quarantine", binary] if quarantine.success?' $(DIST)/homebrew/Casks/pre.rb
 
+verify-cask-install: verify-snapshot
+	sh tests/scripts/homebrew_cask_test.sh $(DIST)
+
 release-preview:
 	$(MAKE) lint
 	$(MAKE) test-race
@@ -42,6 +45,7 @@ release-preview:
 	$(MAKE) release-check
 	$(MAKE) snapshot
 	$(MAKE) verify-snapshot
+	@if [ "$$(uname -s)" = "Darwin" ]; then $(MAKE) verify-cask-install; fi
 
 clean:
 	rm -rf $(DIST)
