@@ -43,28 +43,38 @@ signs:
     artifacts: checksum
     signature: ${artifact}.bundle
 
-brews:
+homebrew_casks:
   - name: pre
+    binaries:
+      - pre
+    directory: Casks
     repository:
       owner: yowainwright
       name: homebrew-tap
+      branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    commit_author:
-      name: github-actions[bot]
-      email: github-actions[bot]@users.noreply.github.com
     homepage: https://github.com/yowainwright/pre
-    description: Security proxy for package managers
-    license: MIT
-    install: bin.install Dir["pre-*"].first => "pre"
+    description: Security guardrail for package managers
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            binary = Dir["#{staged_path}/pre-darwin-*"].first
+            if binary
+              quarantine = system_command "/usr/bin/xattr",
+                                          args: ["-p", "com.apple.quarantine", binary],
+                                          must_succeed: false,
+                                          print_stderr: false
+              system_command "/usr/bin/xattr", args: ["-d", "com.apple.quarantine", binary] if quarantine.success?
+            end
+          end
     caveats: |
+      The macOS binary is checksum-verified but not notarized. This cask
+      removes quarantine only from the staged pre binary.
+
       Shell hooks are not installed automatically. To intercept package
       manager commands, run:
         pre setup
-    test: |
-      assert_match version.to_s, shell_output("#{bin}/pre --version")
-      ENV["HOME"] = testpath.to_s
-      output = shell_output("#{bin}/pre status")
-      assert_match "shell hooks: not installed", output
 
 changelog:
   sort: asc

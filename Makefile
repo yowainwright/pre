@@ -18,11 +18,43 @@ release:
 snapshot:
 	goreleaser release --snapshot --clean --skip=sign
 
+release-check:
+	goreleaser check
+
+verify-snapshot:
+	test -s $(DIST)/homebrew/Casks/pre.rb
+	ruby -c $(DIST)/homebrew/Casks/pre.rb
+	grep -Eq 'version "[^"]+"' $(DIST)/homebrew/Casks/pre.rb
+	test "$$(grep -Ec 'sha256 "[0-9a-f]{64}"' $(DIST)/homebrew/Casks/pre.rb)" -eq 4
+	test "$$(grep -Ec 'binary "pre-[^"]+", target: "pre"' $(DIST)/homebrew/Casks/pre.rb)" -eq 4
+	grep -Fq 'args: ["-p", "com.apple.quarantine", binary],' $(DIST)/homebrew/Casks/pre.rb
+	grep -Fq 'must_succeed: false,' $(DIST)/homebrew/Casks/pre.rb
+	grep -Fq 'print_stderr: false' $(DIST)/homebrew/Casks/pre.rb
+	grep -Fq 'args: ["-d", "com.apple.quarantine", binary] if quarantine.success?' $(DIST)/homebrew/Casks/pre.rb
+
+verify-cask-install: verify-snapshot
+	sh tests/scripts/homebrew_cask_test.sh $(DIST)
+
+release-preview:
+	$(MAKE) lint
+	$(MAKE) test-race
+	$(MAKE) script-test
+	$(MAKE) integration
+	$(MAKE) e2e
+	$(MAKE) security
+	$(MAKE) release-check
+	$(MAKE) snapshot
+	$(MAKE) verify-snapshot
+	@if [ "$$(uname -s)" = "Darwin" ]; then $(MAKE) verify-cask-install; fi
+
 clean:
 	rm -rf $(DIST)
 
 test:
 	go test ./...
+
+test-race:
+	go test -race ./...
 
 e2e:
 	go test -tags e2e ./tests/e2e/

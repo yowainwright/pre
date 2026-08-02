@@ -35,8 +35,9 @@ var (
 )
 
 var (
-	npmExactVersionRE = regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
-	goExactVersionRE  = regexp.MustCompile(`^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+	npmExactVersionRE   = regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+	goExactVersionRE    = regexp.MustCompile(`^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+	crateExactVersionRE = regexp.MustCompile(`^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
 )
 
 const systemScanLockStaleAfter = 30 * time.Minute
@@ -324,7 +325,11 @@ func resolveScanVersion(mgr *manager.Manager, name, version string, allowMissing
 	case isExactVersion(mgr.Ecosystem, version):
 		return version, label, false, true, nil
 	case canResolveConstraint(mgr.Ecosystem, version):
-		resolved, err := resolveVersionFn(mgr, name)
+		target := name
+		if mgr.Ecosystem == "crates.io" {
+			target = label
+		}
+		resolved, err := resolveVersionFn(mgr, target)
 		if err != nil {
 			return "", label, false, false, err
 		}
@@ -338,21 +343,16 @@ func resolveScanVersion(mgr *manager.Manager, name, version string, allowMissing
 }
 
 func canResolveConstraint(ecosystem, version string) bool {
-	if ecosystem != "npm" || version == "" {
+	if version == "" {
 		return false
 	}
-	for _, prefix := range []string{
-		"file:", "git+", "github:", "workspace:", "link:", "npm:",
-		"http://", "https://",
-	} {
-		if strings.HasPrefix(version, prefix) {
-			return false
-		}
+	if ecosystem == "crates.io" {
+		return !isExactVersion(ecosystem, version)
 	}
-	return !strings.HasPrefix(version, "./") &&
-		!strings.HasPrefix(version, "../") &&
-		!strings.HasPrefix(version, "/") &&
-		!isExactVersion(ecosystem, version)
+	if ecosystem != "npm" {
+		return false
+	}
+	return manager.IsSupportedNPMRegistrySpec(version) && !isExactVersion(ecosystem, version)
 }
 
 func isExactVersion(ecosystem, version string) bool {
@@ -364,6 +364,8 @@ func isExactVersion(ecosystem, version string) bool {
 		return npmExactVersionRE.MatchString(version)
 	case "Go":
 		return goExactVersionRE.MatchString(version)
+	case "crates.io":
+		return crateExactVersionRE.MatchString(version)
 	}
 	return true
 }

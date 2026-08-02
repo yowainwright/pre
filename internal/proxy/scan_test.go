@@ -423,8 +423,9 @@ func TestCanResolveConstraintEmpty(t *testing.T) {
 func TestCanResolveConstraintSpecialPrefixes(t *testing.T) {
 	prefixes := []string{
 		"file:/path", "git+https://github.com/foo/bar", "github:foo/bar",
-		"workspace:*", "link:/path", "npm:pkg",
+		"workspace:*", "catalog:default", "link:/path", "portal:/path", "patch:pkg", "npm:pkg",
 		"http://example.com/pkg.tgz", "https://example.com/pkg.tgz",
+		"package.tgz", "user/repository",
 	}
 	for _, v := range prefixes {
 		if canResolveConstraint("npm", v) {
@@ -447,6 +448,22 @@ func TestCanResolveConstraintSemverRange(t *testing.T) {
 	}
 	if !canResolveConstraint("npm", "~1.0.0") {
 		t.Error("expected true for semver range ~1.0.0")
+	}
+}
+
+func TestResolveScanVersionCargoRequirement(t *testing.T) {
+	target := ""
+	defer withResolveVersion(func(_ *manager.Manager, pkg string) (string, error) {
+		target = pkg
+		return "1.8.0", nil
+	})()
+
+	version, _, resolved, exact, err := resolveScanVersion(cargoMgr(), "serde", "^1.0", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if target != "serde@^1.0" || version != "1.8.0" || !resolved || !exact {
+		t.Errorf("unexpected Cargo resolution: target=%q version=%q resolved=%v exact=%v", target, version, resolved, exact)
 	}
 }
 

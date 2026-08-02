@@ -1,6 +1,6 @@
 # pre≋≈~∿
 
-Security proxy for package managers. Sits between your shell and `npm`, `pip`, `brew`, and friends — checks packages against the [OSV vulnerability database](https://osv.dev) before anything installs.
+Security guardrail for package managers. Sits between your shell and `npm`, `pip`, `brew`, and friends, checking requested versions and existing lockfiles against the [OSV vulnerability database](https://osv.dev) before the package manager runs.
 
 [![CI](https://github.com/yowainwright/pre/actions/workflows/test.yml/badge.svg)](https://github.com/yowainwright/pre/actions/workflows/test.yml)
 [![Release](https://img.shields.io/github/v/release/yowainwright/pre)](https://github.com/yowainwright/pre/releases)
@@ -12,13 +12,15 @@ Zero config. Zero dependencies. One binary.
 
 ```sh
 # Homebrew
-brew install yowainwright/tap/pre
+brew install --cask yowainwright/tap/pre
 
 # or curl (macOS + Linux)
 curl -fsSL https://raw.githubusercontent.com/yowainwright/pre/main/install.sh | sh
 ```
 
 Every release ships with SHA256 checksums and a cosign signature. The install script verifies the checksum automatically; if `cosign` is on your PATH, signature verification must pass too.
+
+The macOS cask is checksum-verified but not notarized; its install hook removes quarantine only from the staged `pre` binary.
 
 ## Setup
 
@@ -28,7 +30,7 @@ pre teardown # removes them
 pre status   # shows install state, cache, managers, and scan status
 ```
 
-After setup, every `npm install`, `pip install`, `brew install`, etc. goes through `pre` automatically — no extra commands needed.
+After setup, supported install commands in interactive Zsh and Bash sessions go through `pre` automatically. Scripts and CI can call `pre <manager> ...` directly.
 
 ## Emergency controls
 
@@ -58,7 +60,7 @@ pre manage
 pre m
 ```
 
-The manager opens a full-screen, keyboard-driven terminal UI for installed packages from available managers. It supports themed rows, arrow or `j`/`k` navigation, live `/` search with no enter-to-apply step, `m` manager toggles, `enter`/`o` action dialogs, `x`/`esc` dialog close, and `q` or `ctrl+c` exit. The default theme uses Catppuccin Mocha truecolor values; set `PRE_MANAGE_THEME=contrast` for a brighter theme or `PRE_MANAGE_THEME=mono` for no color. Package actions run back through `pre <manager> ...`, so install and downgrade flows still use the vulnerability scan before the package manager runs. `uv` package actions use `uv pip ...` to match the `uv pip list` inventory source, so they update the active environment rather than `pyproject.toml` or `uv.lock`.
+The manager opens a full-screen, keyboard-driven terminal UI for installed packages from available managers. It supports themed rows, arrow or `j`/`k` navigation, live `/` search with no enter-to-apply step, `m` manager toggles, `enter`/`o` action dialogs, `x`/`esc` dialog close, and `q` or `ctrl+c` exit. The default theme uses Catppuccin Mocha truecolor values; set `PRE_MANAGE_THEME=contrast` for a brighter theme or `PRE_MANAGE_THEME=mono` for no color. Package actions run back through `pre <manager> ...`, so install and downgrade flows still use the vulnerability scan before the package manager runs. `uv` actions target the active environment with `uv pip ...`; Cargo actions edit project dependencies with `cargo add`, `cargo update`, and `cargo remove`.
 
 Non-interactive package commands are available too:
 
@@ -95,6 +97,7 @@ flowchart TD
     G -->|hit| H["proceed silently"]
     G -->|miss| I["OSV API (parallel)"]
     I --> J{"result?"}
+    J -->|scan error| O["block install"]
     J -->|clean| K["proceed + cache"]
     J -->|CVE found| L{"severity?"}
     L -->|low / medium| M["warn, proceed"]
@@ -109,19 +112,46 @@ flowchart TD
 | New packages, no issues | `scanning 12 packages... all clean` |
 | Low/medium CVE | Warning printed, install proceeds |
 | High/critical CVE | CVE detail box shown, Y/N prompt |
+| OSV or version-resolution error | Install blocked; `PRE_DISABLE=1` is the explicit bypass |
 
 ### Lockfile-first scanning
 
-`pre` reads lockfiles for exact pinned versions (including transitive deps) before falling back to manifests:
+`pre` reads existing lockfiles for exact pinned versions, including transitive dependencies, before falling back to manifests:
 
 | Manager | Lockfiles |
 |---------|-----------|
-| npm / bun / pnpm | `package-lock.json` → `bun.lock` → `pnpm-lock.yaml` |
+| npm | `package-lock.json` |
+| bun | `bun.lock` |
+| pnpm | `pnpm-lock.yaml` |
 | go | `go.sum` |
-| pip / uv / poetry | `uv.lock` → `poetry.lock` → `Pipfile.lock` |
+| cargo | `Cargo.lock` |
+| pip / pip3 | `Pipfile.lock` |
+| uv | `uv.lock` |
+| poetry | `poetry.lock` |
 | brew | `Brewfile.lock.json` |
 
-Supported managers: `brew`, `npm`, `pnpm`, `bun`, `go`, `pip`, `pip3`, `uv`, `poetry`
+Supported managers: `brew`, `npm`, `pnpm`, `bun`, `go`, `cargo`, `pip`, `pip3`, `uv`, `poetry`
+
+Intercepted commands:
+
+| Manager | Commands |
+|---------|----------|
+| brew | `install`, `reinstall`, `upgrade` |
+| npm | `install`, `add`, `i`, `update`, `ci` |
+| pnpm / bun | `install`, `add`, `i`, `update` |
+| go | `get`, `install` |
+| cargo | `add`, `install`, `update`, `fetch` |
+| pip / pip3 | `install` |
+| uv | `add`, `sync`, `pip install` |
+| poetry | `add`, `update`, `install` |
+
+When an install creates or changes a lockfile, newly resolved transitive dependencies are not knowable in advance. The requested packages are checked first and the resulting lockfile is scanned in the background after a successful install unless `PRE_NO_BACKGROUND=1` is set.
+
+Cargo scans crates.io dependencies from `Cargo.lock` or `Cargo.toml` and resolves version requirements against non-yanked crates.io releases. Path, Git, custom-registry, alternate-default-registry, offline resolution, resolution-changing unstable options, `--config`, `--lockfile-path`, and resolution-changing Cargo config block the command because OSV cannot identify them reliably as crates.io packages; `PRE_DISABLE=1` is the explicit bypass.
+
+Workspace-wide `cargo fetch` requires the shared `Cargo.lock`; run `cargo generate-lockfile` first when creating a workspace lockfile.
+
+`uv sync` and lockfile-wide Poetry commands require an existing `uv.lock` or `poetry.lock`. Run `uv lock` or `poetry lock` first so the pre-install scan has exact versions.
 
 ## Commands
 
@@ -186,9 +216,13 @@ Entries matching a built-in `name` replace it; new names extend the list.
 
 - Queries [OSV.dev](https://osv.dev) — Google-operated, free, open
 - Only package name + version leave your machine — no code uploaded
-- Lockfile-first ensures transitive deps are checked, not just top-level
-- Binaries signed with cosign (sigstore keyless) on every release
+- Existing lockfiles provide exact pre-install checks for transitive dependencies
+- OSV, version-resolution, and detected project-read errors block the package manager; `PRE_DISABLE=1` is an explicit fail-open override
+- Newly resolved transitive dependencies are checked after installation
+- Release checksums signed with cosign (Sigstore keyless) on every release
 - SHA256 checksums for all platforms
+
+`pre` is a vulnerability guardrail, not a sandbox or a complete software-supply-chain policy. Keep lockfiles, review dependency changes, and run ecosystem-native audit tooling in CI.
 
 ## Update pre
 
@@ -196,7 +230,7 @@ Entries matching a built-in `name` replace it; new names extend the list.
 pre self update
 ```
 
-Homebrew installs run `brew upgrade pre`. Curl/manual installs rerun the checksum-verifying installer into the current binary directory.
+Homebrew installs run `brew upgrade --cask pre`. Curl/manual installs rerun the checksum-verifying installer into the current binary directory.
 
 ## Uninstall pre
 
@@ -205,7 +239,7 @@ pre self uninstall
 pre self uninstall --purge # also removes config/cache data
 ```
 
-Homebrew installs run `brew uninstall pre`. Manual installs remove the current `pre` binary after removing shell hooks.
+Homebrew installs run `brew uninstall --cask pre`. Manual installs remove the current `pre` binary after removing shell hooks.
 
 ## Project layout
 
@@ -258,6 +292,7 @@ make vuln        # govulncheck scan (requires network)
 make security    # govulncheck + gosec
 make screenshots # generate TUI SVG screenshots in dist/screenshots
 make snapshot    # local release dry-run (all 4 binaries, no publish)
+make release-preview # full beta release validation, no publish
 make demo        # run in Docker
 ```
 

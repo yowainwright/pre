@@ -187,6 +187,26 @@ func TestReadBunLock(t *testing.T) {
 	}
 }
 
+func TestReadBunLockAllowsJSONC(t *testing.T) {
+	dir := t.TempDir()
+	lock := `# Bun Lockfile v1
+
+{
+  // Bun emits JSONC, not strict JSON.
+  "lockfileVersion": 1,
+  "packages": {
+    "react": ["react@18.2.0", {}, "sha512-abc"],
+  },
+}
+`
+	os.WriteFile(dir+"/bun.lock", []byte(lock), 0o644)
+
+	packages := readBunLock(dir)
+	if len(packages) != 1 || packages[0] != "react@18.2.0" {
+		t.Fatalf("unexpected Bun packages: %v", packages)
+	}
+}
+
 func TestReadBunLockBadJSON(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(dir+"/bun.lock", []byte("not json"), 0644)
@@ -661,6 +681,55 @@ func TestReadLockfileNPM(t *testing.T) {
 	}
 }
 
+func TestReadLockfileUsesNPMManagerLock(t *testing.T) {
+	dir := t.TempDir()
+	packageLock := `{"packages":{"node_modules/from-npm":{"version":"1.0.0"}}}`
+	bunLock := `{"packages":{"from-bun@2.0.0":["from-bun@2.0.0",{}]}}`
+	pnpmLock := "packages:\n  from-pnpm@3.0.0:\n"
+	os.WriteFile(dir+"/package-lock.json", []byte(packageLock), 0o644)
+	os.WriteFile(dir+"/bun.lock", []byte(bunLock), 0o644)
+	os.WriteFile(dir+"/pnpm-lock.yaml", []byte(pnpmLock), 0o644)
+
+	tests := []struct {
+		manager string
+		want    string
+	}{
+		{manager: "npm", want: "from-npm@1.0.0"},
+		{manager: "bun", want: "from-bun@2.0.0"},
+		{manager: "pnpm", want: "from-pnpm@3.0.0"},
+	}
+	for _, test := range tests {
+		mgr := &Manager{Name: test.manager, Ecosystem: "npm"}
+		packages := ReadLockfile(mgr, dir)
+		if len(packages) != 1 || packages[0] != test.want {
+			t.Errorf("%s: expected %q, got %v", test.manager, test.want, packages)
+		}
+	}
+}
+
+func TestReadLockfileUsesPythonManagerLock(t *testing.T) {
+	dir := t.TempDir()
+	uvLock := "[[package]]\nname = \"from-uv\"\nversion = \"1.0.0\"\n"
+	poetryLock := "[[package]]\nname = \"from-poetry\"\nversion = \"2.0.0\"\n"
+	pipfileLock := `{"default":{"from-pip":{"version":"==3.0.0"}}}`
+	os.WriteFile(dir+"/uv.lock", []byte(uvLock), 0o644)
+	os.WriteFile(dir+"/poetry.lock", []byte(poetryLock), 0o644)
+	os.WriteFile(dir+"/Pipfile.lock", []byte(pipfileLock), 0o644)
+
+	uvPackages := ReadLockfile(&Manager{Name: "uv", Ecosystem: "PyPI"}, dir)
+	poetryPackages := ReadLockfile(&Manager{Name: "poetry", Ecosystem: "PyPI"}, dir)
+	pipPackages := ReadLockfile(&Manager{Name: "pip", Ecosystem: "PyPI"}, dir)
+	if len(uvPackages) != 1 || uvPackages[0] != "from-uv==1.0.0" {
+		t.Fatalf("unexpected uv packages: %v", uvPackages)
+	}
+	if len(poetryPackages) != 1 || poetryPackages[0] != "from-poetry==2.0.0" {
+		t.Fatalf("unexpected Poetry packages: %v", poetryPackages)
+	}
+	if len(pipPackages) != 1 || pipPackages[0] != "from-pip==3.0.0" {
+		t.Fatalf("unexpected pip packages: %v", pipPackages)
+	}
+}
+
 func TestReadLockfileHomebrew(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(dir+"/Brewfile.lock.json", []byte(`{
@@ -739,6 +808,41 @@ func TestReadPipfileLockDuplicate(t *testing.T) {
 	pkgs := readPipfileLock(dir)
 	if len(pkgs) != 1 {
 		t.Errorf("expected 1 (deduped), got %d: %v", len(pkgs), pkgs)
+	}
+}
+
+func TestReadCargoLock(t *testing.T) {
+	dir := t.TempDir()
+	err := os.WriteFile(dir+"/Cargo.lock", []byte(`version = 4
+
+[[package]]
+name = "app"
+version = "0.1.0"
+
+[[package]]
+name = "serde"
+version = "1.0.217"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "regex"
+version = "1.11.1"
+source = "sparse+https://index.crates.io/"
+
+[[package]]
+name = "git-only"
+version = "1.2.3"
+source = "git+https://example.com/repo"
+`), 0644)
+	if err != nil {
+		t.Fatalf("write Cargo.lock: %v", err)
+	}
+
+	mgr := &Manager{Ecosystem: "crates.io"}
+	pkgs := ReadLockfile(mgr, dir)
+	set := toSet(pkgs)
+	if len(pkgs) != 2 || !set["serde@1.0.217"] || !set["regex@1.11.1"] {
+		t.Errorf("unexpected Cargo.lock packages: %v", pkgs)
 	}
 }
 

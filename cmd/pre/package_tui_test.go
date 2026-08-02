@@ -244,6 +244,11 @@ func TestBuildPackageManagerArgs(t *testing.T) {
 		{name: "bun install", req: packageActionReq{Action: actionInstall, Manager: mustManager(t, "bun"), Package: "react", Version: "18.2.0"}, want: []string{"add", "react@18.2.0"}},
 		{name: "go update all", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "go")}, want: []string{"get", "-u", "./..."}},
 		{name: "go uninstall", req: packageActionReq{Action: actionUninstall, Manager: mustManager(t, "go"), Package: "golang.org/x/text"}, want: []string{"get", "golang.org/x/text@none"}},
+		{name: "cargo install exact", req: packageActionReq{Action: actionInstall, Manager: mustManager(t, "cargo"), Package: "serde", Version: "1.0.217"}, want: []string{"add", "serde@=1.0.217"}},
+		{name: "cargo update all", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "cargo")}, want: []string{"update"}},
+		{name: "cargo update exact", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "cargo"), Package: "serde", Version: "1.0.217"}, want: []string{"update", "serde", "--precise", "1.0.217"}},
+		{name: "cargo uninstall", req: packageActionReq{Action: actionUninstall, Manager: mustManager(t, "cargo"), Package: "serde"}, want: []string{"remove", "serde"}},
+		{name: "cargo downgrade", req: packageActionReq{Action: actionDowngrade, Manager: mustManager(t, "cargo"), Package: "serde", Version: "1.0.200"}, want: []string{"update", "serde", "--precise", "1.0.200"}},
 		{name: "pip update package", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "pip"), Package: "urllib3", Version: "1.26.0"}, want: []string{"install", "--upgrade", "urllib3==1.26.0"}},
 		{name: "pip update all error", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "pip")}, wantErr: "pip updates require a package name"},
 		{name: "uv downgrade", req: packageActionReq{Action: actionDowngrade, Manager: mustManager(t, "uv"), Package: "urllib3", Version: "1.26.0"}, want: []string{"pip", "install", "urllib3==1.26.0"}},
@@ -396,6 +401,65 @@ func TestListInstalledPackagesRoutesAndFallbacks(t *testing.T) {
 	if len(pkgs) != 0 {
 		t.Fatalf("expected no default packages, got %#v", pkgs)
 	}
+}
+
+func TestListInstalledPackagesCargoUsesDirectManifestDependencies(t *testing.T) {
+	dir := t.TempDir()
+	manifest := "[dependencies]\nserde = \"1.0\"\n"
+	manifestPath := filepath.Join(dir, "Cargo.toml")
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lockfile := `[[package]]
+name = "serde"
+version = "1.0.217"
+source = "registry+https://index.crates.io/"
+
+[[package]]
+name = "syn"
+version = "2.0.0"
+source = "registry+https://index.crates.io/"
+`
+	lockPath := filepath.Join(dir, "Cargo.lock")
+	if err := os.WriteFile(lockPath, []byte(lockfile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(originalDir)
+
+	packages, err := listInstalledPackages(mustManager(t, "cargo"))
+	if err != nil {
+		t.Fatalf("unexpected list error: %v", err)
+	}
+	assertPackage(t, packages, "serde", "^1.0")
+	if packageNamed(packages, "syn") {
+		t.Fatal("expected transitive lockfile package to be excluded")
+	}
+}
+
+func TestCargoManifestPackagesDiscoversParentManifest(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "src", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "[dependencies]\nserde = \"1.0\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer withWorkingDir(t, nested)()
+
+	packages, err := cargoManifestPackages(mustManager(t, "cargo"))
+	if err != nil {
+		t.Fatalf("read parent Cargo manifest: %v", err)
+	}
+	assertPackage(t, packages, "serde", "^1.0")
 }
 
 func TestCollectPackageInventoryUsesManifestFallback(t *testing.T) {
@@ -615,6 +679,15 @@ func assertPackage(t *testing.T, pkgs []installedPackage, name, version string) 
 		}
 	}
 	t.Fatalf("expected package %s in %#v", name, pkgs)
+}
+
+func packageNamed(packages []installedPackage, name string) bool {
+	for _, pkg := range packages {
+		if pkg.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func withManageActionPause(fn func()) func() {

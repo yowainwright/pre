@@ -16,6 +16,48 @@ const (
 	shellHookEnd   = "# end pre security proxy"
 )
 
+const cargoShellHookText = "function " + "cargo() {\n" + `  case "${PRE_DISABLE:-}" in
+    1|true|TRUE|True|yes|YES|Yes|on|ON|On)
+      command cargo "$@"
+      return
+      ;;
+  esac
+  local _pre_cargo_arg
+  local _pre_cargo_command=""
+  local _pre_cargo_index=0
+  local _pre_cargo_skip=0
+  for _pre_cargo_arg in "$@"; do
+    _pre_cargo_index=$((_pre_cargo_index + 1))
+    if [[ "$_pre_cargo_skip" == "1" ]]; then
+      _pre_cargo_skip=0
+      continue
+    fi
+    if [[ "$_pre_cargo_index" == "1" && "$_pre_cargo_arg" == +* ]]; then
+      continue
+    fi
+    case "$_pre_cargo_arg" in
+      --color|--config|--explain|--manifest-path|--target-dir|-C|-Z)
+		_pre_cargo_skip=1
+		;;
+      --color=*|--config=*|--explain=*|--manifest-path=*|--target-dir=*|-C?*|-Z?*|-*)
+        ;;
+      *)
+        _pre_cargo_command="$_pre_cargo_arg"
+        break
+        ;;
+    esac
+  done
+  case "$_pre_cargo_command" in
+    add|install|update|fetch)
+      command pre cargo "$@"
+      ;;
+    *)
+      command cargo "$@"
+      ;;
+  esac
+}
+`
+
 func Setup() {
 	rcFile := detectRCFile()
 
@@ -64,20 +106,35 @@ func buildShellHook() string {
 	sb.WriteString("\n" + shellHookStart + "\n")
 
 	for _, m := range manager.All() {
-		conditions := make([]string, len(m.InstallCmds))
-		for i, c := range m.InstallCmds {
-			conditions[i] = fmt.Sprintf(`"$1" == "%s"`, c)
+		if m.Name == "cargo" {
+			sb.WriteString(cargoShellHookText)
+			continue
 		}
-		condition := strings.Join(conditions, ` || `)
-
-		fmt.Fprintf(&sb,
-			"function %s() {\n  case \"${PRE_DISABLE:-}\" in\n    1|true|TRUE|True|yes|YES|Yes|on|ON|On)\n      command %s \"$@\"\n      return\n      ;;\n  esac\n  if [[ %s ]]; then\n    command pre %s \"$@\"\n  else\n    command %s \"$@\"\n  fi\n}\n",
-			m.Name, m.Name, condition, m.Name, m.Name,
-		)
+		sb.WriteString(managerShellHook(m))
 	}
 
 	sb.WriteString(shellHookEnd + "\n")
 	return sb.String()
+}
+
+func managerShellHook(m manager.Manager) string {
+	condition := shellInstallCondition(m)
+	return fmt.Sprintf(
+		"function %s() {\n  case \"${PRE_DISABLE:-}\" in\n    1|true|TRUE|True|yes|YES|Yes|on|ON|On)\n      command %s \"$@\"\n      return\n      ;;\n  esac\n  if %s; then\n    command pre %s \"$@\"\n  else\n    command %s \"$@\"\n  fi\n}\n",
+		m.Name, m.Name, condition, m.Name, m.Name,
+	)
+}
+
+func shellInstallCondition(m manager.Manager) string {
+	conditions := make([]string, len(m.InstallCmds))
+	for i, command := range m.InstallCmds {
+		conditions[i] = fmt.Sprintf(`"$1" == "%s"`, command)
+	}
+	condition := "[[ " + strings.Join(conditions, ` || `) + " ]]"
+	if m.Name == "uv" {
+		condition += ` || [[ "$1" == "pip" && "$2" == "install" ]]`
+	}
+	return condition
 }
 
 func Teardown() {

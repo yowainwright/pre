@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,6 +32,61 @@ func TestBuildShellHookIncludesDisableBypass(t *testing.T) {
 	}
 	if !strings.Contains(hook, `command npm "$@"`) {
 		t.Error("expected hook bypass to call the original package manager")
+	}
+}
+
+func TestBuildShellHookIncludesNestedUVInstall(t *testing.T) {
+	hook := buildShellHook()
+	condition := `[[ "$1" == "pip" && "$2" == "install" ]]`
+	if !strings.Contains(hook, condition) {
+		t.Errorf("expected uv pip install condition, got:\n%s", hook)
+	}
+}
+
+func TestBuildShellHookParsesCargoGlobalOptions(t *testing.T) {
+	hook := buildShellHook()
+	markers := []string{"_pre_cargo_command", "+*", "--color|--config|--explain|--manifest-path|--target-dir|-C|-Z", "add|install|update|fetch"}
+	for _, marker := range markers {
+		if !strings.Contains(hook, marker) {
+			t.Errorf("expected Cargo hook marker %q", marker)
+		}
+	}
+}
+
+func TestBuildShellHookHasValidBashSyntax(t *testing.T) {
+	cmd := exec.Command("bash", "-n")
+	cmd.Stdin = strings.NewReader(buildShellHook())
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("invalid Bash hook: %v\n%s", err, output)
+	}
+}
+
+func TestCargoShellHookRoutesGlobalOptions(t *testing.T) {
+	binDir := t.TempDir()
+	prePath := filepath.Join(binDir, "pre")
+	cargoPath := filepath.Join(binDir, "cargo")
+	writeShellFixture(t, prePath, "#!/bin/sh\nprintf 'pre:%s\\n' \"$*\"\n")
+	writeShellFixture(t, cargoPath, "#!/bin/sh\nprintf 'cargo:%s\\n' \"$*\"\n")
+	t.Setenv("PATH", binDir)
+
+	hook := buildShellHook()
+	commands := "\ncargo +nightly --color always update\ncargo +nightly build\n"
+	cmd := exec.Command("/bin/bash", "-c", hook+commands)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run Cargo hook: %v\n%s", err, output)
+	}
+	want := "pre:cargo +nightly --color always update\ncargo:+nightly build\n"
+	if string(output) != want {
+		t.Fatalf("unexpected Cargo hook output: %q", output)
+	}
+}
+
+func writeShellFixture(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write shell fixture: %v", err)
 	}
 }
 

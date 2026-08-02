@@ -658,6 +658,24 @@ func TestRunSelfUpdateHomebrewInstall(t *testing.T) {
 	}
 }
 
+func TestRunSelfUpdateHomebrewCask(t *testing.T) {
+	defer withExecutablePath(func() (string, error) {
+		return "/opt/homebrew/Caskroom/pre/1.2.3/pre-darwin-arm64", nil
+	})()
+	defer withLookPath(func(name string) (string, error) { return "/opt/homebrew/bin/" + name, nil })()
+
+	var gotArgs []string
+	defer withCommandRunner(func(_ string, args []string, _ []string, _, _ io.Writer) error {
+		gotArgs = args
+		return nil
+	})()
+
+	code := run([]string{"self", "update"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != 0 || strings.Join(gotArgs, " ") != "upgrade --cask pre" {
+		t.Errorf("expected cask upgrade, got code=%d args=%v", code, gotArgs)
+	}
+}
+
 func TestRunSelfUninstallManualInstall(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
@@ -719,6 +737,33 @@ func TestRunSelfUninstallHomebrewInstall(t *testing.T) {
 	}
 	if gotName != "brew" || strings.Join(gotArgs, " ") != "uninstall pre" {
 		t.Errorf("expected brew uninstall pre, got %q %v", gotName, gotArgs)
+	}
+}
+
+func TestRunSelfUninstallHomebrewCask(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SHELL", "/bin/zsh")
+	defer withExecutablePath(func() (string, error) {
+		return "/opt/homebrew/Caskroom/pre/1.2.3/pre-darwin-arm64", nil
+	})()
+	defer withLookPath(func(name string) (string, error) { return "/opt/homebrew/bin/" + name, nil })()
+
+	var gotArgs []string
+	defer withCommandRunner(func(_ string, args []string, _ []string, _, _ io.Writer) error {
+		gotArgs = args
+		return nil
+	})()
+
+	code := run([]string{"self", "uninstall"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != 0 || strings.Join(gotArgs, " ") != "uninstall --cask pre" {
+		t.Errorf("expected cask uninstall, got code=%d args=%v", code, gotArgs)
+	}
+}
+
+func TestDetectInstallSourceHomebrewCask(t *testing.T) {
+	path := "/opt/homebrew/Caskroom/pre/1.2.3/pre-darwin-arm64"
+	if source := detectInstallSource(path); source != installSourceHomebrewCask {
+		t.Errorf("expected Homebrew cask source, got %q", source)
 	}
 }
 

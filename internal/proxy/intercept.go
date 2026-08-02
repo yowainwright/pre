@@ -15,15 +15,20 @@ import (
 )
 
 var (
-	processExit                = os.Exit
-	stdinReader      io.Reader = os.Stdin
-	ExecFn                     = execReal
-	securityCheckFn            = security.Check
-	resolveVersionFn           = manager.ResolveVersion
-	loadCacheFn                = cache.Load
-	saveCacheFn                = cache.Save
-	updateCacheFn              = cache.Update
-	readManifestFn             = manager.ReadManifest
+	processExit                         = os.Exit
+	stdinReader               io.Reader = os.Stdin
+	ExecFn                              = execReal
+	securityCheckFn                     = security.Check
+	resolveVersionFn                    = manager.ResolveVersion
+	loadCacheFn                         = cache.Load
+	saveCacheFn                         = cache.Save
+	updateCacheFn                       = cache.Update
+	readManifestFn                      = manager.ReadManifest
+	readManifestDirFn                   = manager.ReadManifestDir
+	validateManifestFn                  = manager.ValidateManifest
+	readRequirementsFileFn              = manager.ReadRequirementsFile
+	readCargoFetchPackagesFn            = manager.ReadCargoFetchPackages
+	readCargoUpdatePackagesFn           = manager.ReadCargoUpdatePackages
 )
 
 func Intercept(mgr *manager.Manager, args []string) {
@@ -32,17 +37,38 @@ func Intercept(mgr *manager.Manager, args []string) {
 		return
 	}
 
-	isPassthrough := len(args) == 0 || !slices.Contains(mgr.InstallCmds, args[0])
+	packageArgs, isInstall := installPackageArgs(mgr, args)
+	isPassthrough := !isInstall
 	if isPassthrough {
 		ExecFn(mgr.Name, args)
 		return
 	}
+	if err := cargoInstallError(mgr, args); err != nil {
+		blockIncompleteInstall(err)
+		return
+	}
+	if err := npmInstallError(mgr, packageArgs); err != nil {
+		blockIncompleteInstall(err)
+		return
+	}
 
-	packages := extractPackages(mgr, args[1:])
-	fromManifest := false
+	fromProject := len(requirementFilePaths(mgr, packageArgs)) > 0
+	packages, err := installPackages(mgr, packageArgs)
+	if err != nil {
+		blockIncompleteInstall(err)
+		return
+	}
+	if err = validateCargoDirectPackages(mgr, args, packages); err != nil {
+		blockIncompleteInstall(err)
+		return
+	}
 	if len(packages) == 0 {
-		packages = readManifestFn(mgr)
-		fromManifest = true
+		fromProject = true
+		packages, err = installFallbackPackages(mgr, args)
+	}
+	if err != nil {
+		blockIncompleteInstall(err)
+		return
 	}
 	if len(packages) == 0 {
 		ExecFn(mgr.Name, args)
@@ -63,7 +89,7 @@ func Intercept(mgr *manager.Manager, args []string) {
 		fmt.Print(display.Dim(fmt.Sprintf("scanning %d package(s)...\n", uncachedCount)))
 	}
 
-	results := scanAllWithPolicy(mgr, packages, c, !fromManifest)
+	results := scanAllWithPolicy(mgr, packages, c, !fromProject)
 
 	fresh := make(cache.Cache)
 	for _, r := range results {
@@ -90,6 +116,11 @@ func Intercept(mgr *manager.Manager, args []string) {
 	default:
 		fmt.Print(renderTree(mgr.Ecosystem, results))
 	}
+	if hasScanErrors(results) {
+		fmt.Print(display.Red("pre: scan incomplete; install blocked (use PRE_DISABLE=1 to bypass)\n"))
+		processExit(1)
+		return
+	}
 
 	var criticals []scanResult
 	for _, r := range results {
@@ -112,6 +143,20 @@ func Intercept(mgr *manager.Manager, args []string) {
 			spawnSystemScanFn()
 		}
 	}
+}
+
+func blockIncompleteInstall(err error) {
+	format := "pre: scan incomplete: %v; install blocked (use PRE_DISABLE=1 to bypass)\n"
+	message := fmt.Sprintf(format, err)
+	styled := display.Red(message)
+	fmt.Print(styled)
+	processExit(1)
+}
+
+func hasScanErrors(results []scanResult) bool {
+	return slices.ContainsFunc(results, func(result scanResult) bool {
+		return result.err != nil
+	})
 }
 
 type outputMode int

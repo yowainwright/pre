@@ -6,7 +6,7 @@ const brewLockVersionSeparator = "@@"
 
 func ParseSpec(ecosystem, spec string) (name, version string) {
 	switch ecosystem {
-	case "npm", "Go":
+	case "npm", "Go", "crates.io":
 		return parseAtSeparator(spec)
 	case "Homebrew":
 		return parseHomebrewSpec(spec)

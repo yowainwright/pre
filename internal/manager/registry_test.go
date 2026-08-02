@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -25,6 +26,26 @@ func TestGetNpm(t *testing.T) {
 	}
 	if mgr.Name != "npm" {
 		t.Errorf("expected name 'npm', got %q", mgr.Name)
+	}
+}
+
+func TestBuiltinsCoverInstallCommands(t *testing.T) {
+	tests := map[string][]string{
+		"cargo":  {"add", "install", "update", "fetch"},
+		"npm":    {"install", "ci"},
+		"uv":     {"add", "sync"},
+		"poetry": {"add", "install", "update"},
+	}
+	for name, commands := range tests {
+		mgr := Get(name)
+		if mgr == nil {
+			t.Fatalf("expected manager %q", name)
+		}
+		for _, command := range commands {
+			if !slices.Contains(mgr.InstallCmds, command) {
+				t.Errorf("expected %s to intercept %q", name, command)
+			}
+		}
 	}
 }
 

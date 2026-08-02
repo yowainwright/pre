@@ -8,14 +8,15 @@ type Manager struct {
 
 var builtins = []Manager{
 	{Name: "brew", Ecosystem: "Homebrew", InstallCmds: []string{"install", "reinstall", "upgrade"}},
-	{Name: "npm", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i", "update"}},
+	{Name: "npm", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i", "update", "ci"}},
 	{Name: "pnpm", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i", "update"}},
 	{Name: "bun", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i", "update"}},
 	{Name: "go", Ecosystem: "Go", InstallCmds: []string{"get", "install"}},
+	{Name: "cargo", Ecosystem: "crates.io", InstallCmds: []string{"add", "install", "update", "fetch"}},
 	{Name: "pip", Ecosystem: "PyPI", InstallCmds: []string{"install"}},
 	{Name: "pip3", Ecosystem: "PyPI", InstallCmds: []string{"install"}},
-	{Name: "uv", Ecosystem: "PyPI", InstallCmds: []string{"add", "install"}},
-	{Name: "poetry", Ecosystem: "PyPI", InstallCmds: []string{"add", "update"}},
+	{Name: "uv", Ecosystem: "PyPI", InstallCmds: []string{"add", "sync"}},
+	{Name: "poetry", Ecosystem: "PyPI", InstallCmds: []string{"add", "update", "install"}},
 }
 
 var extraManagers []Manager

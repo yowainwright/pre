@@ -30,6 +30,7 @@ make gosec       # static security checks (requires Go 1.26+)
 make vuln        # govulncheck (requires network)
 make security    # govulncheck + gosec
 make screenshots # TUI SVG screenshots for PRs
+make release-preview # full release validation without publishing
 ```
 
 ## Code Style

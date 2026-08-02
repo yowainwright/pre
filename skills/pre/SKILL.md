@@ -12,10 +12,16 @@ Run `pre setup` once to install shell hooks in ~/.zshrc or ~/.bashrc.
 Run `pre status` for read-only install state, managers, and cache info.
 Run `pre teardown` to remove shell hooks.
 
-After setup, `npm install`, `pip install`, `brew install`, and friends are
-scanned automatically — no wrapper commands needed.
+After setup, supported install commands in interactive Zsh and Bash sessions
+are scanned automatically. Scripts and CI can call `pre <manager> ...`.
 
-Supported managers: brew, npm, pnpm, bun, go, pip, pip3, uv, poetry.
+Supported managers: brew, npm, pnpm, bun, go, cargo, pip, pip3, uv, poetry.
+Common lockfile installs include `npm ci`, `cargo fetch`, `cargo update`,
+`uv sync`, `uv pip install`, and `poetry install`.
+Cargo scanning supports crates.io only. Path, Git, alternate-registry,
+`--config`, `--lockfile-path`, and resolution-changing config require
+`PRE_DISABLE=1`.
+Run `uv lock` or `poetry lock` before lockfile-wide sync/install commands.
 
 ## Emergency bypass
 
@@ -72,7 +78,10 @@ Keys: `api.endpoint`, `cache.ttl`, `systemScan`, `systemTTL`, `managers`.
 
 1. Run `pre status` to check install state.
 2. If hooks are missing and interception is wanted, run `pre setup`.
-3. Run installs normally; only high/critical CVEs block with a Y/N prompt.
-4. In non-interactive sessions, expect blocked installs to fail — inspect
-   the printed CVE details and choose a safe version instead.
-5. Report scan results and any bypasses used.
+3. Run installs normally; high/critical CVEs require confirmation.
+4. Scan, version-resolution, or detected project-read errors fail closed. Use
+   `PRE_DISABLE=1` only as an explicit, reported bypass.
+5. Newly resolved transitive dependencies are checked by the post-install
+   background scan; existing lockfiles are checked before installation.
+6. In non-interactive sessions, inspect failures and choose a safe version.
+7. Report scan results and any bypasses used.

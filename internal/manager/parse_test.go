@@ -16,6 +16,8 @@ func TestParseSpec(t *testing.T) {
 		{"npm", "@scope/pkg@1.0.0", "@scope/pkg", "1.0.0"},
 		{"Go", "github.com/foo/bar", "github.com/foo/bar", ""},
 		{"Go", "github.com/foo/bar@v1.2.3", "github.com/foo/bar", "v1.2.3"},
+		{"crates.io", "serde", "serde", ""},
+		{"crates.io", "serde@1.0.217", "serde", "1.0.217"},
 		{"PyPI", "requests", "requests", ""},
 		{"PyPI", "requests==2.28.0", "requests", "2.28.0"},
 		{"PyPI", "requests>=1.0", "requests", ""},

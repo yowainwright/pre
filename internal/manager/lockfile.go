@@ -11,15 +11,169 @@ import (
 func ReadLockfile(mgr *Manager, dir string) []string {
 	switch mgr.Ecosystem {
 	case "npm":
-		return readNPMLockfile(dir)
+		return readNPMManagerLockfile(mgr.Name, dir)
 	case "Go":
 		return readGoSum(dir)
 	case "PyPI":
-		return readPyLockfile(dir)
+		return readPythonManagerLockfile(mgr.Name, dir)
 	case "Homebrew":
 		return readBrewfileLockJSON(dir)
+	case "crates.io":
+		return readCargoLock(dir)
 	}
 	return nil
+}
+
+func readNPMManagerLockfile(name, dir string) []string {
+	switch name {
+	case "npm":
+		return readPackageLockJSON(dir)
+	case "bun":
+		return readBunLock(dir)
+	case "pnpm":
+		return readPNPMLock(dir)
+	default:
+		return readNPMLockfile(dir)
+	}
+}
+
+type cargoLockPackage struct {
+	name    string
+	version string
+	source  string
+}
+
+type cargoLockState struct {
+	current           cargoLockPackage
+	seen              map[string]bool
+	result            []string
+	active            bool
+	unsupportedSource bool
+}
+
+func readCargoLock(dir string) []string {
+	lockPath := filepath.Join(dir, "Cargo.lock")
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		return nil
+	}
+	state, err := parseCargoLock(data)
+	if err != nil {
+		return nil
+	}
+	return state.result
+}
+
+func parseCargoLock(data []byte) (cargoLockState, error) {
+	content := string(data)
+	reader := strings.NewReader(content)
+	scanner := bufio.NewScanner(reader)
+	state := newCargoLockState()
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		state.consume(line)
+	}
+	state.flush()
+	return state, scanner.Err()
+}
+
+func newCargoLockState() cargoLockState {
+	seen := make(map[string]bool)
+	return cargoLockState{seen: seen}
+}
+
+func (s *cargoLockState) consume(line string) {
+	if isCargoLockPackageHeader(line) {
+		s.flush()
+		s.active = true
+		return
+	}
+	if !s.active {
+		return
+	}
+	if strings.HasPrefix(line, "[") {
+		s.flush()
+		s.active = false
+		return
+	}
+	s.consumeField(line)
+}
+
+func isCargoLockPackageHeader(line string) bool {
+	if !strings.HasPrefix(line, "[[") || !strings.HasSuffix(line, "]]") {
+		return false
+	}
+	name := strings.TrimSpace(line[2 : len(line)-2])
+	return strings.Trim(name, `"'`) == "package"
+}
+
+func (s *cargoLockState) consumeField(line string) {
+	key, value, ok := strings.Cut(line, "=")
+	if !ok {
+		return
+	}
+	key = strings.TrimSpace(key)
+	trimmedValue := cargoLockString(value)
+	s.set(key, trimmedValue)
+}
+
+func cargoLockString(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) < 2 || (trimmed[0] != '"' && trimmed[0] != '\'') {
+		return ""
+	}
+	quote := trimmed[0]
+	escaped := false
+	for index := 1; index < len(trimmed); index++ {
+		if trimmed[index] == quote && !escaped {
+			return trimmed[1:index]
+		}
+		escaped = trimmed[index] == '\\' && !escaped
+		if trimmed[index] != '\\' {
+			escaped = false
+		}
+	}
+	return ""
+}
+
+func (s *cargoLockState) set(key, value string) {
+	switch key {
+	case "name":
+		s.current.name = value
+	case "version":
+		s.current.version = value
+	case "source":
+		s.current.source = value
+	}
+}
+
+func (s *cargoLockState) flush() {
+	current := s.current
+	s.current = cargoLockPackage{}
+	if current.name == "" || current.version == "" {
+		return
+	}
+	if current.source != "" && !isCratesIOSource(current.source) {
+		s.unsupportedSource = true
+		return
+	}
+	if !isCratesIOSource(current.source) {
+		return
+	}
+	spec := current.name + "@" + current.version
+	if s.seen[spec] {
+		return
+	}
+	s.seen[spec] = true
+	s.result = append(s.result, spec)
+}
+
+func isCratesIOSource(source string) bool {
+	trimmed := strings.TrimSuffix(source, "/")
+	legacySource := trimmed == "registry+https://github.com/rust-lang/crates.io-index"
+	registrySource := trimmed == "registry+https://index.crates.io"
+	sparseSource := trimmed == "sparse+https://index.crates.io"
+	return legacySource || registrySource || sparseSource
 }
 
 // npm: package-lock.json → bun.lock → pnpm-lock.yaml
@@ -102,14 +256,10 @@ func readBunLock(dir string) []string {
 	if err != nil {
 		return nil
 	}
-	content := string(data)
-	if idx := strings.Index(content, "{"); idx != -1 {
-		content = content[idx:]
-	}
 	var lockfile struct {
 		Packages map[string]json.RawMessage `json:"packages"`
 	}
-	if err := json.Unmarshal([]byte(content), &lockfile); err != nil {
+	if err := unmarshalBunLock(data, &lockfile); err != nil {
 		return nil
 	}
 	seen := make(map[string]bool, len(lockfile.Packages))
@@ -221,6 +371,19 @@ func readPyLockfile(dir string) []string {
 		return pkgs
 	}
 	return readPipfileLock(dir)
+}
+
+func readPythonManagerLockfile(name, dir string) []string {
+	switch name {
+	case "uv":
+		return readUVLock(dir)
+	case "poetry":
+		return readPoetryLock(dir)
+	case "pip", "pip3":
+		return readPipfileLock(dir)
+	default:
+		return readPyLockfile(dir)
+	}
 }
 
 func readUVLock(dir string) []string {

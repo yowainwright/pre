@@ -4,6 +4,8 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,7 +17,15 @@ import (
 func noopExec(name string, args []string) {}
 
 func npmMgr() *manager.Manager {
-	return &manager.Manager{Name: "npm", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i"}}
+	return &manager.Manager{Name: "npm", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i", "ci"}}
+}
+
+func bunMgr() *manager.Manager {
+	return &manager.Manager{Name: "bun", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i", "update"}}
+}
+
+func pnpmMgr() *manager.Manager {
+	return &manager.Manager{Name: "pnpm", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i", "update"}}
 }
 
 func pipMgr() *manager.Manager {
@@ -28,6 +38,19 @@ func goMgr() *manager.Manager {
 
 func brewMgr() *manager.Manager {
 	return &manager.Manager{Name: "brew", Ecosystem: "Homebrew", InstallCmds: []string{"install"}}
+}
+
+func uvMgr() *manager.Manager {
+	return &manager.Manager{Name: "uv", Ecosystem: "PyPI", InstallCmds: []string{"add", "sync"}}
+}
+
+func poetryMgr() *manager.Manager {
+	return &manager.Manager{Name: "poetry", Ecosystem: "PyPI", InstallCmds: []string{"add", "update", "install"}}
+}
+
+func cargoMgr() *manager.Manager {
+	commands := []string{"add", "install", "update", "fetch"}
+	return &manager.Manager{Name: "cargo", Ecosystem: "crates.io", InstallCmds: commands}
 }
 
 func withExecFn(fn func(string, []string)) func() {
@@ -72,6 +95,36 @@ func withReadManifest(fn func(*manager.Manager) []string) func() {
 	return func() { readManifestFn = orig }
 }
 
+func withReadManifestDir(fn func(*manager.Manager, string) []string) func() {
+	orig := readManifestDirFn
+	readManifestDirFn = fn
+	return func() { readManifestDirFn = orig }
+}
+
+func withValidateManifest(fn func(*manager.Manager, string) error) func() {
+	orig := validateManifestFn
+	validateManifestFn = fn
+	return func() { validateManifestFn = orig }
+}
+
+func withReadRequirementsFile(fn func(string) ([]string, error)) func() {
+	orig := readRequirementsFileFn
+	readRequirementsFileFn = fn
+	return func() { readRequirementsFileFn = orig }
+}
+
+func withReadCargoFetchPackages(fn func(string) ([]string, error)) func() {
+	orig := readCargoFetchPackagesFn
+	readCargoFetchPackagesFn = fn
+	return func() { readCargoFetchPackagesFn = orig }
+}
+
+func withReadCargoUpdatePackages(fn func(string, string) ([]string, error)) func() {
+	orig := readCargoUpdatePackagesFn
+	readCargoUpdatePackagesFn = fn
+	return func() { readCargoUpdatePackagesFn = orig }
+}
+
 func withSpawnBackgroundScan(fn func(string)) func() {
 	orig := spawnBackgroundScanFn
 	spawnBackgroundScanFn = fn
@@ -88,6 +141,22 @@ func withStdinInput(input string) func() {
 	orig := stdinReader
 	stdinReader = strings.NewReader(input)
 	return func() { stdinReader = orig }
+}
+
+func withWorkingDir(t *testing.T, dir string) func() {
+	t.Helper()
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if err := os.Chdir(original); err != nil {
+			t.Error(err)
+		}
+	}
 }
 
 func emptyCache() cache.Cache      { return make(cache.Cache) }
@@ -114,6 +183,23 @@ func captureStdout(t *testing.T, fn func()) string {
 		t.Fatalf("read stdout: %v", err)
 	}
 	return string(out)
+}
+
+func expectProcessExit(t *testing.T, want int, fn func()) {
+	t.Helper()
+	orig := processExit
+	code := -1
+	processExit = func(got int) { code = got; panic("exit") }
+	defer func() {
+		processExit = orig
+		if recover() == nil {
+			t.Error("expected processExit to be called")
+		}
+		if code != want {
+			t.Errorf("expected exit code %d, got %d", want, code)
+		}
+	}()
+	fn()
 }
 
 // Intercept flow tests
@@ -164,6 +250,676 @@ func TestInterceptEmptyArgs(t *testing.T) {
 	}
 }
 
+func TestInterceptNPMCI(t *testing.T) {
+	securityCalled := false
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+	defer withReadManifestDir(func(*manager.Manager, string) []string { return []string{"react@18.0.0"} })()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		securityCalled = true
+		return nil, nil
+	})()
+
+	Intercept(npmMgr(), []string{"ci"})
+
+	if !securityCalled {
+		t.Error("expected npm ci to scan the lockfile")
+	}
+}
+
+func TestInterceptInvalidManifestBlocks(t *testing.T) {
+	execCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
+	defer withValidateManifest(func(*manager.Manager, string) error {
+		return errors.New("invalid package-lock.json")
+	})()
+
+	expectProcessExit(t, 1, func() {
+		Intercept(npmMgr(), []string{"ci"})
+	})
+	if execCalled {
+		t.Error("expected invalid manifest to block npm ci")
+	}
+}
+
+func TestInterceptManifestCommandUsesSelectedProject(t *testing.T) {
+	tests := []struct {
+		name        string
+		manager     *manager.Manager
+		args        func(string) []string
+		lockName    string
+		lock        string
+		packageName string
+	}{
+		{
+			name: "npm prefix", manager: npmMgr(),
+			args:        func(dir string) []string { return []string{"ci", "--prefix", dir} },
+			lockName:    "package-lock.json",
+			lock:        `{"packages":{"node_modules/react":{"version":"18.2.0"}}}`,
+			packageName: "react",
+		},
+		{
+			name: "bun cwd", manager: bunMgr(),
+			args:        func(dir string) []string { return []string{"install", "--cwd", dir} },
+			lockName:    "bun.lock",
+			lock:        "{\n  \"packages\": {\n    \"react\": [\"react@18.2.0\", {}],\n  },\n}\n",
+			packageName: "react",
+		},
+		{
+			name: "pnpm dir", manager: pnpmMgr(),
+			args:        func(dir string) []string { return []string{"install", "--dir", dir} },
+			lockName:    "pnpm-lock.yaml",
+			lock:        "packages:\n  react@18.2.0:\n    resolution: {integrity: sha512-abc}\n",
+			packageName: "react",
+		},
+		{
+			name: "uv project", manager: uvMgr(),
+			args:        func(dir string) []string { return []string{"sync", "--project", dir} },
+			lockName:    "uv.lock",
+			lock:        "[[package]]\nname = \"requests\"\nversion = \"2.32.0\"\n",
+			packageName: "requests",
+		},
+		{
+			name: "poetry project", manager: poetryMgr(),
+			args:        func(dir string) []string { return []string{"install", "-P", dir} },
+			lockName:    "poetry.lock",
+			lock:        "[[package]]\nname = \"requests\"\nversion = \"2.32.0\"\n",
+			packageName: "requests",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			currentDir := t.TempDir()
+			projectDir := t.TempDir()
+			defer withWorkingDir(t, currentDir)()
+			path := filepath.Join(projectDir, test.lockName)
+			if err := os.WriteFile(path, []byte(test.lock), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			scanned := false
+			defer withExecFn(noopExec)()
+			defer withLoadCache(emptyCache)()
+			defer withUpdateCache(noopUpdate)()
+			defer withSpawnBackgroundScan(func(string) {})()
+			defer withSecurityCheck(func(_ string, name, _ string) ([]security.Vulnerability, error) {
+				scanned = scanned || name == test.packageName
+				return nil, nil
+			})()
+
+			Intercept(test.manager, test.args(projectDir))
+			if !scanned {
+				t.Fatalf("expected %s package to be scanned", test.packageName)
+			}
+		})
+	}
+}
+
+func TestInterceptNPMExternalSourceBlocks(t *testing.T) {
+	specs := []string{
+		"git+https://example.com/private.git",
+		"private@file:../private",
+		"alias@npm:react@18",
+		"private@workspace:*",
+		"https://example.com/private.tgz",
+	}
+	for _, spec := range specs {
+		t.Run(spec, func(t *testing.T) {
+			execCalled := false
+			defer withExecFn(func(string, []string) { execCalled = true })()
+
+			expectProcessExit(t, 1, func() {
+				Intercept(npmMgr(), []string{"install", spec})
+			})
+			if execCalled {
+				t.Error("expected external npm source to block install")
+			}
+		})
+	}
+}
+
+func TestInterceptNPMManifestExternalSourceBlocks(t *testing.T) {
+	dir := t.TempDir()
+	manifest := `{"dependencies":{"private":"git+https://example.com/private.git"}}`
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer withWorkingDir(t, dir)()
+
+	execCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
+	expectProcessExit(t, 1, func() {
+		Intercept(npmMgr(), []string{"install"})
+	})
+	if execCalled {
+		t.Error("expected manifest external source to block install")
+	}
+}
+
+func TestInterceptUVPipInstall(t *testing.T) {
+	securityCalled := false
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+	defer withSecurityCheck(func(ecosystem, name, version string) ([]security.Vulnerability, error) {
+		securityCalled = ecosystem == "PyPI" && name == "requests" && version == "2.32.0"
+		return nil, nil
+	})()
+
+	Intercept(uvMgr(), []string{"pip", "install", "requests==2.32.0"})
+
+	if !securityCalled {
+		t.Error("expected uv pip install to scan the requested package")
+	}
+}
+
+func TestInterceptUVPipListPassesThrough(t *testing.T) {
+	execCalled := false
+	securityCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		securityCalled = true
+		return nil, nil
+	})()
+
+	Intercept(uvMgr(), []string{"pip", "list"})
+
+	if !execCalled || securityCalled {
+		t.Error("expected uv pip list to pass through without scanning")
+	}
+}
+
+func TestInterceptCargoAddResolvesRequirement(t *testing.T) {
+	resolvedTarget := ""
+	scanned := false
+	executed := false
+	defer withExecFn(func(name string, args []string) {
+		executed = name == "cargo" && slices.Equal(args, []string{"add", "serde@1.0.0"})
+	})()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+	defer withResolveVersion(func(_ *manager.Manager, pkg string) (string, error) {
+		resolvedTarget = pkg
+		return "1.0.217", nil
+	})()
+	defer withSecurityCheck(func(ecosystem, name, version string) ([]security.Vulnerability, error) {
+		scanned = ecosystem == "crates.io" && name == "serde" && version == "1.0.217"
+		return nil, nil
+	})()
+
+	Intercept(cargoMgr(), []string{"add", "serde@1.0.0"})
+
+	if resolvedTarget != "serde@^1.0.0" || !scanned || !executed {
+		t.Errorf("unexpected Cargo interception: target=%q scanned=%v executed=%v", resolvedTarget, scanned, executed)
+	}
+}
+
+func TestInterceptCargoUpdateUsesSelectedManifestRequirement(t *testing.T) {
+	var gotPath, gotTarget string
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+	defer withReadCargoUpdatePackages(func(path, target string) ([]string, error) {
+		gotPath = path
+		gotTarget = target
+		return []string{"serde@^1.0"}, nil
+	})()
+	defer withResolveVersion(func(_ *manager.Manager, pkg string) (string, error) {
+		return "1.0.217", nil
+	})()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+
+	args := []string{"update", "--manifest-path", "nested/Cargo.toml", "serde"}
+	Intercept(cargoMgr(), args)
+
+	if gotPath != "nested/Cargo.toml" || gotTarget != "serde" {
+		t.Fatalf("unexpected Cargo project request: path=%q target=%q", gotPath, gotTarget)
+	}
+}
+
+func TestInterceptCargoUpdateReadsEveryTargetRequirement(t *testing.T) {
+	var targets []string
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+	defer withReadCargoUpdatePackages(func(_ string, target string) ([]string, error) {
+		targets = append(targets, target)
+		return []string{target + "@^1"}, nil
+	})()
+	defer withResolveVersion(func(_ *manager.Manager, _ string) (string, error) {
+		return "1.0.0", nil
+	})()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+
+	args := []string{"update", "--manifest-path", "Cargo.toml", "serde", "regex"}
+	Intercept(cargoMgr(), args)
+
+	if !slices.Equal(targets, []string{"serde", "regex"}) {
+		t.Fatalf("unexpected update targets: %v", targets)
+	}
+}
+
+func TestInterceptCargoFetchReadFailureBlocks(t *testing.T) {
+	execCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
+	defer withReadCargoFetchPackages(func(string) ([]string, error) {
+		return nil, errors.New("invalid Cargo.lock")
+	})()
+
+	expectProcessExit(t, 1, func() {
+		Intercept(cargoMgr(), []string{"fetch", "--manifest-path", "Cargo.toml"})
+	})
+	if execCalled {
+		t.Error("expected unreadable Cargo project to block fetch")
+	}
+}
+
+func TestInterceptCargoExternalSourceBlocks(t *testing.T) {
+	execCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
+
+	expectProcessExit(t, 1, func() {
+		Intercept(cargoMgr(), []string{"add", "--git", "https://example.com/repo", "private"})
+	})
+	if execCalled {
+		t.Error("expected external Cargo source to block install")
+	}
+}
+
+func TestCargoRepeatedRegistryFlagsBlockCustomSource(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	args := []string{"install", "--registry", "crates-io", "--registry=internal", "tool"}
+
+	err := cargoInstallError(cargoMgr(), args)
+	if err == nil || !strings.Contains(err.Error(), "custom-registry") {
+		t.Fatalf("expected custom registry error, got %v", err)
+	}
+}
+
+func TestInterceptCargoDefaultRegistryEnvironmentBlocks(t *testing.T) {
+	t.Setenv("CARGO_REGISTRY_DEFAULT", "internal")
+	t.Setenv("CARGO_HOME", t.TempDir())
+	args := []string{"add", "serde"}
+
+	err := cargoInstallError(cargoMgr(), args)
+	if err == nil || !strings.Contains(err.Error(), "default registry") {
+		t.Fatalf("expected default registry error, got %v", err)
+	}
+}
+
+func TestCargoConfigDefaultRegistryBlocks(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	projectDir := t.TempDir()
+	writeCargoConfig(t, projectDir, "[registry]\ndefault = \"internal\"\n")
+	args := []string{"-C", projectDir, "add", "serde"}
+
+	err := cargoInstallError(cargoMgr(), args)
+	if err == nil || !strings.Contains(err.Error(), "default registry") {
+		t.Fatalf("expected default registry error, got %v", err)
+	}
+}
+
+func TestCargoInlineDefaultRegistryBlocks(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	projectDir := t.TempDir()
+	writeCargoConfig(t, projectDir, "registry = { default = \"internal\" }\n")
+	args := []string{"-C", projectDir, "add", "serde"}
+
+	err := cargoInstallError(cargoMgr(), args)
+	if err == nil || !strings.Contains(err.Error(), "default registry") {
+		t.Fatalf("expected inline default registry error, got %v", err)
+	}
+}
+
+func TestCargoRegistryEnvironmentOverridesConfig(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	t.Setenv("CARGO_REGISTRY_DEFAULT", "crates-io")
+	projectDir := t.TempDir()
+	writeCargoConfig(t, projectDir, "[registry]\ndefault = \"internal\"\n")
+	args := []string{"-C", projectDir, "add", "serde"}
+
+	if err := cargoInstallError(cargoMgr(), args); err != nil {
+		t.Fatalf("expected crates.io override to pass, got %v", err)
+	}
+}
+
+func TestCargoExplicitRegistryOverridesDefault(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	t.Setenv("CARGO_REGISTRY_DEFAULT", "internal")
+	args := []string{"add", "--registry", "crates-io", "serde"}
+
+	if err := cargoInstallError(cargoMgr(), args); err != nil {
+		t.Fatalf("expected explicit crates.io registry to pass, got %v", err)
+	}
+}
+
+func TestCargoConfigSourceOverrideBlocks(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	projectDir := t.TempDir()
+	config := "[patch.crates-io]\nserde = { path = \"../serde\" }\n"
+	writeCargoConfig(t, projectDir, config)
+	args := []string{"-C", projectDir, "fetch"}
+
+	err := cargoInstallError(cargoMgr(), args)
+	if err == nil || !strings.Contains(err.Error(), "resolution override") {
+		t.Fatalf("expected resolution override error, got %v", err)
+	}
+}
+
+func TestCargoInlinePatchConfigBlocks(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	projectDir := t.TempDir()
+	config := "patch = { crates-io = { serde = { path = \"../serde\" } } }\n"
+	writeCargoConfig(t, projectDir, config)
+	args := []string{"-C", projectDir, "fetch"}
+
+	err := cargoInstallError(cargoMgr(), args)
+	if err == nil || !strings.Contains(err.Error(), "resolution override") {
+		t.Fatalf("expected inline patch error, got %v", err)
+	}
+}
+
+func TestCargoResolverLockfileConfigBlocks(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	projectDir := t.TempDir()
+	config := "[resolver]\nlockfile-path = \"other.lock\"\n"
+	writeCargoConfig(t, projectDir, config)
+	args := []string{"-C", projectDir, "fetch"}
+
+	err := cargoInstallError(cargoMgr(), args)
+	if err == nil || !strings.Contains(err.Error(), "resolution override") {
+		t.Fatalf("expected lockfile override error, got %v", err)
+	}
+}
+
+func TestCargoCommandConfigOverrideBlocks(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	args := []string{"--config", "registry.default='internal'", "add", "serde"}
+
+	err := cargoInstallError(cargoMgr(), args)
+	if err == nil || !strings.Contains(err.Error(), "--config") {
+		t.Fatalf("expected command config error, got %v", err)
+	}
+}
+
+func TestCargoCommandLockfileOverrideBlocks(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	args := []string{"update", "--lockfile-path", "other.lock"}
+
+	err := cargoInstallError(cargoMgr(), args)
+	if err == nil || !strings.Contains(err.Error(), "--lockfile-path") {
+		t.Fatalf("expected lockfile path error, got %v", err)
+	}
+}
+
+func TestCargoInstallUsesCargoHomeDefaultRegistry(t *testing.T) {
+	cargoHome := t.TempDir()
+	t.Setenv("CARGO_HOME", cargoHome)
+	configPath := filepath.Join(cargoHome, "config.toml")
+	config := "[registry]\ndefault = \"internal\"\n"
+	if err := os.WriteFile(configPath, []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := cargoInstallError(cargoMgr(), []string{"install", "ripgrep"})
+	if err == nil || !strings.Contains(err.Error(), "default registry") {
+		t.Fatalf("expected Cargo home registry error, got %v", err)
+	}
+}
+
+func TestCargoInstallIgnoresProjectRegistryConfig(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	projectDir := t.TempDir()
+	writeCargoConfig(t, projectDir, "[registry]\ndefault = \"internal\"\n")
+	args := []string{"-C", projectDir, "install", "ripgrep"}
+
+	if err := cargoInstallError(cargoMgr(), args); err != nil {
+		t.Fatalf("expected project config to be ignored, got %v", err)
+	}
+}
+
+func TestCargoCratesIOIndexEnvironmentBlocks(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	t.Setenv("CARGO_REGISTRIES_CRATES_IO_INDEX", "https://registry.example/index")
+
+	err := cargoInstallError(cargoMgr(), []string{"add", "serde"})
+	if err == nil || !strings.Contains(err.Error(), "index override") {
+		t.Fatalf("expected index override error, got %v", err)
+	}
+}
+
+func TestCargoCratesIOIndexConfigBlocks(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	projectDir := t.TempDir()
+	config := "[registries.crates-io]\nindex = \"https://registry.example/index\"\n"
+	writeCargoConfig(t, projectDir, config)
+
+	err := cargoInstallError(cargoMgr(), []string{"-C", projectDir, "add", "serde"})
+	if err == nil || !strings.Contains(err.Error(), "resolution override") {
+		t.Fatalf("expected registry index error, got %v", err)
+	}
+}
+
+func TestCargoCratesIOSourceRegistryConfigBlocks(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	projectDir := t.TempDir()
+	config := "[source.crates-io]\nregistry = \"https://registry.example/index\"\n"
+	writeCargoConfig(t, projectDir, config)
+
+	err := cargoInstallError(cargoMgr(), []string{"-C", projectDir, "fetch"})
+	if err == nil || !strings.Contains(err.Error(), "resolution override") {
+		t.Fatalf("expected source registry error, got %v", err)
+	}
+}
+
+func TestCargoOfflineFlagBlocks(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+
+	err := cargoInstallError(cargoMgr(), []string{"add", "--offline", "serde"})
+	if err == nil || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("expected offline error, got %v", err)
+	}
+}
+
+func TestCargoOfflineConfigBlocks(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	projectDir := t.TempDir()
+	writeCargoConfig(t, projectDir, "[net]\noffline = true\n")
+
+	err := cargoInstallError(cargoMgr(), []string{"-C", projectDir, "add", "serde"})
+	if err == nil || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("expected offline config error, got %v", err)
+	}
+}
+
+func TestCargoOfflineEnvironmentOverridesConfig(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	t.Setenv("CARGO_NET_OFFLINE", "false")
+	projectDir := t.TempDir()
+	writeCargoConfig(t, projectDir, "[net]\noffline = true\n")
+
+	if err := cargoInstallError(cargoMgr(), []string{"-C", projectDir, "add", "serde"}); err != nil {
+		t.Fatalf("expected online environment override to pass, got %v", err)
+	}
+}
+
+func TestCargoOfflineEnvironmentBlocks(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	t.Setenv("CARGO_NET_OFFLINE", "true")
+
+	err := cargoInstallError(cargoMgr(), []string{"install", "ripgrep"})
+	if err == nil || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("expected offline environment error, got %v", err)
+	}
+}
+
+func TestCargoResolutionChangingUnstableOptionBlocks(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+
+	err := cargoInstallError(cargoMgr(), []string{"-Zminimal-versions", "update"})
+	if err == nil || !strings.Contains(err.Error(), "unstable option") {
+		t.Fatalf("expected unstable option error, got %v", err)
+	}
+}
+
+func TestCargoUnstableOptionsGatePasses(t *testing.T) {
+	t.Setenv("CARGO_HOME", t.TempDir())
+	projectDir := t.TempDir()
+	args := []string{"-Z", "unstable-options", "-C", projectDir, "add", "serde"}
+
+	if err := cargoInstallError(cargoMgr(), args); err != nil {
+		t.Fatalf("expected unstable-options gate to pass, got %v", err)
+	}
+}
+
+func writeCargoConfig(t *testing.T, dir, content string) {
+	t.Helper()
+	configDir := filepath.Join(dir, ".cargo")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInterceptCargoPreciseUpdateBlocksManifestExternalSource(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "Cargo.toml")
+	manifest := "[dependencies]\nprivate = { registry = \"internal\", version = \"1\" }\n"
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write Cargo.toml: %v", err)
+	}
+	execCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+
+	args := []string{"update", "--manifest-path", manifestPath, "private", "--precise", "1.0.0"}
+	expectProcessExit(t, 1, func() {
+		Intercept(cargoMgr(), args)
+	})
+	if execCalled {
+		t.Error("expected manifest source to block precise update")
+	}
+}
+
+func TestCargoManifestPathRejectsMissingValue(t *testing.T) {
+	_, _, err := cargoManifestPath([]string{"fetch", "--manifest-path"})
+	if err == nil {
+		t.Fatal("expected missing manifest path error")
+	}
+}
+
+func TestCargoWorkingDirectoryRejectsEmptyAttachedValue(t *testing.T) {
+	_, _, err := cargoManifestPath([]string{"-C=", "update"})
+	if err == nil {
+		t.Fatal("expected empty -C value error")
+	}
+}
+
+func TestCargoManifestPathAppliesCargoWorkingDirectory(t *testing.T) {
+	args := []string{"-C", "workspace", "update", "--manifest-path", "member/Cargo.toml"}
+	path, explicit, err := cargoManifestPath(args)
+	want := filepath.Join("workspace", "member", "Cargo.toml")
+	if err != nil || !explicit || path != want {
+		t.Fatalf("cargoManifestPath() = %q, %v, %v; want %q, true, nil", path, explicit, err, want)
+	}
+}
+
+func TestDiscoverCargoManifestSearchesParents(t *testing.T) {
+	projectDir := t.TempDir()
+	nestedDir := filepath.Join(projectDir, "src", "nested")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("create nested directory: %v", err)
+	}
+	manifestPath := filepath.Join(projectDir, "Cargo.toml")
+	if err := os.WriteFile(manifestPath, []byte("[package]\nname = \"demo\"\n"), 0o644); err != nil {
+		t.Fatalf("write Cargo.toml: %v", err)
+	}
+
+	startPath := filepath.Join(nestedDir, "Cargo.toml")
+	got, err := discoverCargoManifest(startPath)
+	if err != nil || got != manifestPath {
+		t.Fatalf("discoverCargoManifest() = %q, %v; want %q, nil", got, err, manifestPath)
+	}
+}
+
+func TestInterceptPoetryInstallScansManifestInsteadOfFlagValues(t *testing.T) {
+	var scannedName string
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+	defer withReadManifestDir(func(*manager.Manager, string) []string { return []string{"requests==2.32.0"} })()
+	defer withSecurityCheck(func(_, name, _ string) ([]security.Vulnerability, error) {
+		scannedName = name
+		return nil, nil
+	})()
+
+	Intercept(poetryMgr(), []string{"install", "--with", "dev"})
+
+	if scannedName != "requests" {
+		t.Errorf("expected manifest package, got %q", scannedName)
+	}
+}
+
+func TestInterceptRequirementFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "beta.txt")
+	if err := os.WriteFile(path, []byte("requests==2.32.0\n"), 0644); err != nil {
+		t.Fatalf("write requirements file: %v", err)
+	}
+
+	execCalled := false
+	securityCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+	defer withSecurityCheck(func(ecosystem, name, version string) ([]security.Vulnerability, error) {
+		securityCalled = ecosystem == "PyPI" && name == "requests" && version == "2.32.0"
+		return nil, nil
+	})()
+
+	Intercept(pipMgr(), []string{"install", "-r", path})
+
+	if !execCalled || !securityCalled {
+		t.Error("expected requirements file packages to be scanned before install")
+	}
+}
+
+func TestInterceptMissingRequirementFileBlocks(t *testing.T) {
+	execCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
+	defer withReadRequirementsFile(func(string) ([]string, error) {
+		return nil, errors.New("not found")
+	})()
+
+	expectProcessExit(t, 1, func() {
+		Intercept(pipMgr(), []string{"install", "--requirement", "missing.txt"})
+	})
+	if execCalled {
+		t.Error("expected unreadable requirements file to block the install")
+	}
+}
+
 func TestInterceptInstallManifestFallback(t *testing.T) {
 	execCalled := false
 	defer withExecFn(func(name string, args []string) { execCalled = true })()
@@ -176,8 +932,8 @@ func TestInterceptInstallManifestFallback(t *testing.T) {
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
 	defer withSpawnBackgroundScan(func(string) {})()
-	defer withReadManifest(func(mgr *manager.Manager) []string {
-		return []string{"lodash", "react"}
+	defer withReadManifestDir(func(mgr *manager.Manager, _ string) []string {
+		return []string{"lodash@1.0.0", "react@18.0.0"}
 	})()
 	Intercept(npmMgr(), []string{"install"})
 	if !execCalled {
@@ -188,7 +944,7 @@ func TestInterceptInstallManifestFallback(t *testing.T) {
 func TestInterceptInstallManifestEmpty(t *testing.T) {
 	execCalled := false
 	defer withExecFn(func(name string, args []string) { execCalled = true })()
-	defer withReadManifest(func(mgr *manager.Manager) []string { return nil })()
+	defer withReadManifestDir(func(mgr *manager.Manager, _ string) []string { return nil })()
 
 	Intercept(npmMgr(), []string{"install"})
 	if !execCalled {
@@ -236,9 +992,11 @@ func TestInterceptInstallVersionResolutionFailure(t *testing.T) {
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
 	defer withSpawnBackgroundScan(func(string) {})()
-	Intercept(npmMgr(), []string{"install", "react"})
-	if !execCalled {
-		t.Error("expected ExecFn to be called even when version resolution fails")
+	expectProcessExit(t, 1, func() {
+		Intercept(npmMgr(), []string{"install", "react"})
+	})
+	if execCalled {
+		t.Error("expected version resolution failure to block the install")
 	}
 }
 
@@ -254,9 +1012,11 @@ func TestInterceptInstallSecurityCheckFailure(t *testing.T) {
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
 	defer withSpawnBackgroundScan(func(string) {})()
-	Intercept(npmMgr(), []string{"install", "lodash"})
-	if !execCalled {
-		t.Error("expected ExecFn to be called when security check fails (don't block)")
+	expectProcessExit(t, 1, func() {
+		Intercept(npmMgr(), []string{"install", "lodash"})
+	})
+	if execCalled {
+		t.Error("expected security check failure to block the install")
 	}
 }
 
@@ -514,11 +1274,18 @@ func TestInterceptPackageLimitBypassesScan(t *testing.T) {
 	}
 }
 
-func TestInterceptManifestFallbackSkipsLatestGuess(t *testing.T) {
+func TestInterceptManifestFallbackBlocksMissingVersion(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("requests\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer withWorkingDir(t, dir)()
+
+	execCalled := false
 	resolveCalled := false
 	securityCalled := false
 
-	defer withExecFn(noopExec)()
+	defer withExecFn(func(string, []string) { execCalled = true })()
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
 	defer withSpawnBackgroundScan(func(string) {})()
@@ -530,15 +1297,58 @@ func TestInterceptManifestFallbackSkipsLatestGuess(t *testing.T) {
 		resolveCalled = true
 		return "18.0.0", nil
 	})()
-	defer withReadManifest(func(*manager.Manager) []string { return []string{"react"} })()
 
-	Intercept(npmMgr(), []string{"install"})
-
-	if resolveCalled {
-		t.Error("expected manifest fallback without an exact version to skip latest-version resolution")
+	expectProcessExit(t, 1, func() {
+		Intercept(pipMgr(), []string{"install"})
+	})
+	if resolveCalled || securityCalled || execCalled {
+		t.Error("expected unversioned manifest dependency to block before resolution")
 	}
-	if securityCalled {
-		t.Error("expected manifest fallback without an exact version to skip security check")
+}
+
+func TestInterceptRequirementFileBlocksMissingVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "requirements.txt")
+	if err := os.WriteFile(path, []byte("requests\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	execCalled := false
+	resolveCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
+	defer withLoadCache(emptyCache)()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		resolveCalled = true
+		return "2.32.0", nil
+	})()
+
+	expectProcessExit(t, 1, func() {
+		Intercept(pipMgr(), []string{"install", "-r", path})
+	})
+	if resolveCalled || execCalled {
+		t.Error("expected unversioned requirements dependency to block before resolution")
+	}
+}
+
+func TestInterceptDirectPackageResolvesMissingVersion(t *testing.T) {
+	resolveCalled := false
+	securityCalled := false
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withSpawnBackgroundScan(func(string) {})()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		resolveCalled = true
+		return "18.2.0", nil
+	})()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		securityCalled = true
+		return nil, nil
+	})()
+
+	Intercept(npmMgr(), []string{"install", "react"})
+	if !resolveCalled || !securityCalled {
+		t.Error("expected direct unversioned package to resolve and scan")
 	}
 }
 
@@ -781,7 +1591,7 @@ func TestInterceptSpawnsSystemScan(t *testing.T) {
 	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
 		return "18.0.0", nil
 	})()
-	defer withReadManifest(func(*manager.Manager) []string { return []string{"react"} })()
+	defer withReadManifestDir(func(*manager.Manager, string) []string { return []string{"react@18.0.0"} })()
 
 	Intercept(npmMgr(), []string{"install"})
 	if !systemSpawned {
@@ -911,6 +1721,73 @@ func TestExtractPackagesSkipsRequirementFile(t *testing.T) {
 	}
 }
 
+func TestRequirementFilePaths(t *testing.T) {
+	args := []string{"-r", "base.txt", "--requirements=dev.txt", "requests"}
+	paths := requirementFilePaths(uvMgr(), args)
+	if len(paths) != 2 || paths[0] != "base.txt" || paths[1] != "dev.txt" {
+		t.Errorf("unexpected requirement paths: %v", paths)
+	}
+}
+
+func TestInstallPackageArgsManifestOnlyCommands(t *testing.T) {
+	tests := []struct {
+		manager *manager.Manager
+		args    []string
+	}{
+		{npmMgr(), []string{"ci", "--workspace", "app"}},
+		{uvMgr(), []string{"sync", "--group", "dev"}},
+		{poetryMgr(), []string{"install", "--with", "dev"}},
+	}
+	for _, test := range tests {
+		packageArgs, intercepted := installPackageArgs(test.manager, test.args)
+		if !intercepted || len(packageArgs) != 0 {
+			t.Errorf("expected manifest-only install for %s, got %v", test.manager.Name, packageArgs)
+		}
+	}
+}
+
+func TestInstallPackageArgsCargoCommands(t *testing.T) {
+	tests := []struct {
+		args        []string
+		want        []string
+		intercepted bool
+	}{
+		{args: []string{"fetch", "--locked"}, intercepted: true},
+		{args: []string{"--color", "always", "fetch", "--locked"}, intercepted: true},
+		{args: []string{"update"}, intercepted: true},
+		{args: []string{"update", "serde", "--precise", "1.0.217"}, want: []string{"serde@1.0.217"}, intercepted: true},
+		{args: []string{"update", "serde", "--precise", "abc123"}, intercepted: true},
+		{args: []string{"add", "serde@1.0.217"}, want: []string{"serde@^1.0.217"}, intercepted: true},
+		{args: []string{"+nightly", "add", "serde@1.0.217"}, want: []string{"serde@^1.0.217"}, intercepted: true},
+		{args: []string{"add", "--git", "https://example.com/repo", "custom"}, intercepted: true},
+		{args: []string{"install", "ripgrep", "--version", "14.1.1"}, want: []string{"ripgrep@14.1.1"}, intercepted: true},
+		{args: []string{"install", "ripgrep@14.1.1"}, want: []string{"ripgrep@14.1.1"}, intercepted: true},
+		{args: []string{"install", "ripgrep", "cargo-edit", "--version", "14.1.1"}, want: []string{"ripgrep@14.1.1", "cargo-edit@14.1.1"}, intercepted: true},
+		{args: []string{"install", "--registry", "internal", "tool"}, intercepted: true},
+		{args: []string{"install", "--registry", "crates-io", "tool"}, want: []string{"tool"}, intercepted: true},
+		{args: []string{"install", "--list"}, intercepted: false},
+		{args: []string{"add", "--help"}, intercepted: false},
+		{args: []string{"--help", "update"}, intercepted: false},
+		{args: []string{"--explain", "update"}, intercepted: false},
+		{args: []string{"fetch", "-h"}, intercepted: false},
+	}
+	for _, test := range tests {
+		got, intercepted := installPackageArgs(cargoMgr(), test.args)
+		if intercepted != test.intercepted || !slices.Equal(got, test.want) {
+			t.Errorf("installPackageArgs(%v) = %v, %v; want %v, %v", test.args, got, intercepted, test.want, test.intercepted)
+		}
+	}
+}
+
+func TestCargoUpdateTargetsIncludesRepeatedPackageFlags(t *testing.T) {
+	args := []string{"--package", "serde", "-p=regex", "--package", "anyhow"}
+	want := []string{"serde", "regex", "anyhow"}
+	got := cargoUpdateTargets(cargoMgr(), args)
+	if !slices.Equal(got, want) {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+}
+
 func TestExtractPackagesSkipsPythonManagerValueFlags(t *testing.T) {
 	mgr := &manager.Manager{Name: "poetry", Ecosystem: "PyPI", InstallCmds: []string{"add"}}
 	result := extractPackages(mgr, []string{"--group", "dev", "--source", "internal", "requests"})
@@ -930,6 +1807,13 @@ func TestExtractPackagesSkipsUnsupportedSources(t *testing.T) {
 	result := extractPackages(npmMgr(), []string{"github:user/repo", "git@github.com:user/repo.git", "alias@npm:react@18", "react"})
 	if len(result) != 1 || result[0] != "react" {
 		t.Errorf("expected only react, got %v", result)
+	}
+}
+
+func TestExtractPackagesRejectsInvalidCrateNames(t *testing.T) {
+	result := extractPackages(cargoMgr(), []string{"valid-crate", "bad/name", "serde@1.0.0"})
+	if !slices.Equal(result, []string{"valid-crate", "serde@1.0.0"}) {
+		t.Errorf("unexpected Cargo packages: %v", result)
 	}
 }
 
