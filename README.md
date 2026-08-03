@@ -283,6 +283,7 @@ graph TD
 
 ```sh
 make setup       # install deps, verify secrets, install git hooks
+mise install     # install the pinned release versioning tool
 make test        # unit tests
 make e2e         # end-to-end (requires npm)
 make integration # live API calls (requires network)
@@ -293,6 +294,7 @@ make security    # govulncheck + gosec
 make screenshots # generate TUI SVG screenshots in dist/screenshots
 make snapshot    # local release dry-run (all 4 binaries, no publish)
 make release-preview # full beta release validation, no publish
+make release     # interactive version prompt, validation, tag, and CI release
 make demo        # run in Docker
 ```
 
