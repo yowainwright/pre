@@ -29,7 +29,7 @@ check "cmd_exists finds sh"       "0" "$(exit_code cmd_exists "sh")"
 check "cmd_exists finds ls"       "0" "$(exit_code cmd_exists "ls")"
 check "cmd_exists rejects fake"   "1" "$(exit_code cmd_exists "notarealcmd_xyz")"
 
-check_deps_missing_optional_counts() (
+check_deps_missing_release_tools_counts() (
   passed=0
   failed=0
   warned=0
@@ -43,7 +43,7 @@ check_deps_missing_optional_counts() (
   printf "%s/%s/%s" "$passed" "$warned" "$failed"
 )
 
-check "check_deps treats release tools optional" "5/3/0" "$(check_deps_missing_optional_counts)"
+check "check_deps requires svu" "5/2/1" "$(check_deps_missing_release_tools_counts)"
 
 # gh_authed
 check "gh_authed passes with true"  "0" "$(exit_code gh_authed "true")"

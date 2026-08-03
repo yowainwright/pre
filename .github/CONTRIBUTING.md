@@ -31,7 +31,10 @@ make vuln        # govulncheck (requires network)
 make security    # govulncheck + gosec
 make screenshots # TUI SVG screenshots for PRs
 make release-preview # full release validation without publishing
+make release     # prompt for a version, validate, tag, push, and watch CI
 ```
+
+Run `mise install` once to install the pinned `svu` version. `make release` also requires GoReleaser, a clean synchronized `main` checkout, and an authenticated GitHub CLI. It creates an annotated tag; GitHub Actions publishes the release.
 
 ## Code Style
 

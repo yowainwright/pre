@@ -9,11 +9,12 @@ DIST = dist
 build:
 	$(BUILD) -o $(DIST)/pre ./cmd/pre
 
-tag:
-	sh scripts/tag.sh
+.PHONY: tag release
+
+tag: release
 
 release:
-	goreleaser release --clean
+	mise exec -- sh scripts/tag.sh
 
 snapshot:
 	goreleaser release --snapshot --clean --skip=sign
@@ -97,4 +98,5 @@ secrets:
 	gh secret set HOMEBREW_TAP_TOKEN --body "$$HOMEBREW_TAP_TOKEN"
 
 setup:
-	sh scripts/setup.sh
+	mise install
+	mise exec -- sh scripts/setup.sh
