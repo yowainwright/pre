@@ -6,11 +6,6 @@
 *.exe
 *.test
 
-# Demo dependencies
-/demo/node_modules/
-/demo/package.json
-/demo/package-lock.json
-
 # Local environment
 .env
 .env.*

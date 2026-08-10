@@ -75,13 +75,17 @@ pre downgrade pip urllib3 1.24.1
 pre uninstall brew ripgrep
 ```
 
-## Demo
+## Docker E2E tests
 
 ```sh
-make demo
+make test-e2e-list
+make test-e2e-docker E2E_TEST=npm
+make test-e2e-docker E2E_TEST=pip
 ```
 
-Requires Docker. Builds a container with `pre` installed and shell hooks active, then plays through real scans across npm and pip — clean installs, CVE detection, and blocked installs. Colors render fully via the TTY allocated by `docker run -it`.
+Requires Docker. Each scenario builds the same E2E container with `pre` installed
+and shell hooks active, then covers clean scanning, CVE detection, and a
+blocked install for one package manager.
 
 ## How it works
 
@@ -287,9 +291,10 @@ internal/manager/  Package-manager definitions, manifests, lockfiles, and versio
 internal/proxy/    Command interception, scanning, shell hooks, and rendering
 internal/security/ OSV client and severity scoring
 internal/skills/   Embedded pre skill
-demo/              Docker demo
 scripts/           Setup and release automation
-tests/             Integration, end-to-end, and shell tests
+tests/e2e/          Go and Docker package-manager tests
+tests/integration/  Live-service tests
+tests/scripts/      Shell tests
 ```
 
 Ecosystem-specific files use `<capability>_<ecosystem>.go`. Unit tests live beside
@@ -315,7 +320,8 @@ make screenshots      # generate TUI SVG screenshots in dist/screenshots
 make snapshot         # local release dry-run (all 4 binaries, no publish)
 make release-preview  # full beta release validation, no publish
 make release          # interactive version prompt, validation, tag, and CI release
-make demo             # run in Docker
+make test-e2e-list    # list Docker E2E tests
+make test-e2e-docker E2E_TEST=npm # run one Docker E2E test
 ```
 
 ## License

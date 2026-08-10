@@ -14,8 +14,11 @@ GOSEC := go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
 ifndef DIST
 DIST := dist
 endif
-ifndef DEMO_IMAGE
-DEMO_IMAGE := pre-demo
+ifndef E2E_IMAGE
+E2E_IMAGE := pre-e2e
+endif
+ifndef E2E_TEST
+E2E_TEST := npm
 endif
 LDFLAGS := -ldflags="-s -w -X main.version=$(VERSION)"
 BUILD := CGO_ENABLED=0 go build -trimpath $(LDFLAGS)
@@ -30,16 +33,23 @@ CASK_STDERR_PATTERN := print_stderr: false
 CASK_QUARANTINE_DELETE_PATTERN := args: ["-d", "com.apple.quarantine",
 CASK_QUARANTINE_DELETE_PATTERN += binary] if quarantine.success?
 CASK_PLATFORM_COUNT := 4
-DEMO_DIR := demo
-DEMO_DOCKERFILE := $(DEMO_DIR)/Dockerfile
+E2E_ROOT := tests/e2e
+E2E_DOCKERFILE := $(E2E_ROOT)/Dockerfile
+E2E_RUNNER := $(E2E_ROOT)/package_manager_test.sh
+E2E_TEST_SCRIPTS := $(wildcard $(E2E_ROOT)/*_test.sh)
+E2E_TEST_SCRIPTS := $(filter-out $(E2E_RUNNER),$(E2E_TEST_SCRIPTS))
+E2E_TEST_NAMES := $(basename $(notdir $(E2E_TEST_SCRIPTS)))
+E2E_TEST_NAMES := $(patsubst %_test,%,$(E2E_TEST_NAMES))
+E2E_TEST_SCRIPT := $(E2E_ROOT)/$(E2E_TEST)_test.sh
 HOST_OS := $(shell uname -s)
 
-.PHONY: build clean demo docker-build
+.PHONY: build clean
 .PHONY: e2e fmt fmt-check gosec integration lint
 .PHONY: release release-check release-preview
 .PHONY: screenshots script-test secrets security setup snapshot tag
-.PHONY: test test-e2e test-integration test-race test-scripts
-.PHONY: verify-cask-install verify-snapshot vuln
+.PHONY: test test-e2e test-e2e-build test-e2e-docker test-e2e-list
+.PHONY: test-integration test-race test-scripts
+.PHONY: verify-cask-install verify-e2e verify-e2e-test verify-snapshot vuln
 
 build:
 	$(BUILD) -o $(BINARY) ./cmd/pre
@@ -92,7 +102,7 @@ test:
 test-race:
 	go test -race ./...
 
-test-e2e:
+test-e2e: verify-e2e
 	go test -tags e2e ./tests/e2e/
 
 e2e: test-e2e
@@ -129,11 +139,23 @@ script-test: test-scripts
 screenshots:
 	go run ./cmd/pre screenshots dist/screenshots
 
-docker-build:
-	docker build -f $(DEMO_DOCKERFILE) -t $(DEMO_IMAGE) .
+verify-e2e:
+	test "$(words $(E2E_TEST_SCRIPTS))" -gt 1
+	bash -n $(E2E_RUNNER) $(E2E_TEST_SCRIPTS)
+	@for script in $(E2E_RUNNER) $(E2E_TEST_SCRIPTS); do test -x "$$script"; done
 
-demo: docker-build
-	docker run -it $(DEMO_IMAGE)
+verify-e2e-test: verify-e2e
+	printf '%s\n' $(E2E_TEST_NAMES) | grep -Fxq "$(E2E_TEST)"
+	test -f "$(E2E_TEST_SCRIPT)"
+
+test-e2e-list:
+	@printf '%s\n' $(E2E_TEST_NAMES)
+
+test-e2e-build: verify-e2e
+	docker build -f $(E2E_DOCKERFILE) -t $(E2E_IMAGE) .
+
+test-e2e-docker: verify-e2e-test test-e2e-build
+	docker run --rm -it $(E2E_IMAGE) "$(E2E_TEST)"
 
 secrets:
 	gh secret set HOMEBREW_TAP_TOKEN --body "$$HOMEBREW_TAP_TOKEN"

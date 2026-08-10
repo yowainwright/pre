@@ -31,6 +31,8 @@ make gosec            # static security checks (requires Go 1.26+)
 make vuln             # govulncheck (requires network)
 make security         # govulncheck + gosec
 make screenshots      # TUI SVG screenshots for PRs
+make test-e2e-list    # list Docker E2E tests
+make test-e2e-docker E2E_TEST=npm # run one Docker E2E test
 make release-preview  # full release validation without publishing
 make release          # prompt for a version, validate, tag, push, and watch CI
 ```
