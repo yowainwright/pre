@@ -202,7 +202,7 @@ func hasExactCacheHit(mgr *manager.Manager, c cache.Cache, name, version string)
 func hasCriticalVulns(r scanResult) bool {
 	for _, v := range r.vulns {
 		switch v.Severity {
-		case "CRITICAL", "HIGH":
+		case security.SeverityCritical, security.SeverityHigh:
 			return true
 		}
 	}

@@ -71,13 +71,13 @@ func cvssScore(vector string) float64 {
 func severityFromScore(score float64) string {
 	switch {
 	case score >= 9.0:
-		return "CRITICAL"
+		return SeverityCritical
 	case score >= 7.0:
-		return "HIGH"
+		return SeverityHigh
 	case score >= 4.0:
-		return "MEDIUM"
+		return SeverityMedium
 	case score > 0:
-		return "LOW"
+		return SeverityLow
 	default:
 		return ""
 	}

@@ -149,6 +149,24 @@ func TestCheckSeverityFromCVSSVector(t *testing.T) {
 	}
 }
 
+func TestCheckFailsClosedForCVSSV4(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintln(w, `{"vulns":[{"id":"CVE-2026-1234","severity":[{"type":"CVSS_V4","score":"CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H"}]}]}`)
+	}))
+	defer srv.Close()
+	origEndpoint := Endpoint
+	Endpoint = srv.URL
+	defer func() { Endpoint = origEndpoint }()
+
+	vulns, err := Check("npm", "example", "1.0.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if vulns[0].Severity != SeverityCritical {
+		t.Errorf("expected unsupported CVSS v4 to fail closed, got %q", vulns[0].Severity)
+	}
+}
+
 func TestCheckHTTPError(t *testing.T) {
 	origEndpoint := Endpoint
 	Endpoint = "http://invalid.local.invalid"

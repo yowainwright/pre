@@ -710,6 +710,31 @@ func TestRunSelfUninstallManualInstall(t *testing.T) {
 	}
 }
 
+func TestRunSelfUninstallKeepsManualBinaryWhenHookRemovalFails(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+	exe := filepath.Join(dir, "bin", "pre")
+	defer withExecutablePath(func() (string, error) { return exe, nil })()
+	binaryRemoved := false
+	defer withRemoveFile(func(string) error {
+		binaryRemoved = true
+		return nil
+	})()
+	rcPath := filepath.Join(dir, ".zshrc")
+	if err := os.Mkdir(rcPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	code := run([]string{"self", "uninstall"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if binaryRemoved {
+		t.Error("expected hook failure to preserve the manual binary")
+	}
+}
+
 func TestRunSelfUninstallHomebrewInstall(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
@@ -737,6 +762,35 @@ func TestRunSelfUninstallHomebrewInstall(t *testing.T) {
 	}
 	if gotName != "brew" || strings.Join(gotArgs, " ") != "uninstall pre" {
 		t.Errorf("expected brew uninstall pre, got %q %v", gotName, gotArgs)
+	}
+}
+
+func TestRunSelfUninstallKeepsHomebrewInstallWhenHookRemovalFails(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+	defer withExecutablePath(func() (string, error) {
+		return "/opt/homebrew/Cellar/pre/1.2.3/bin/pre", nil
+	})()
+	defer withLookPath(func(name string) (string, error) {
+		return "/opt/homebrew/bin/" + name, nil
+	})()
+	commandCalled := false
+	defer withCommandRunner(func(string, []string, []string, io.Writer, io.Writer) error {
+		commandCalled = true
+		return nil
+	})()
+	rcPath := filepath.Join(dir, ".zshrc")
+	if err := os.Mkdir(rcPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	code := run([]string{"self", "uninstall"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if commandCalled {
+		t.Error("expected hook failure to preserve the Homebrew install")
 	}
 }
 
@@ -839,6 +893,21 @@ func TestRunTeardown(t *testing.T) {
 	after, _ := os.ReadFile(rcPath)
 	if strings.Contains(string(after), "# pre security proxy") {
 		t.Error("expected teardown to remove hooks from rc file")
+	}
+}
+
+func TestRunTeardownPropagatesHookRemovalFailure(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+	rcPath := filepath.Join(dir, ".zshrc")
+	if err := os.Mkdir(rcPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	code := run([]string{"teardown"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
 	}
 }
 

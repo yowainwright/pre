@@ -166,62 +166,93 @@ func verifyInstallScript(script, checksums []byte) error {
 }
 
 func handleSelfUninstall(args []string, cfg *config.Config, stdout, stderr io.Writer) int {
+	purge, valid := selfUninstallOptions(args)
+	if !valid {
+		fmt.Fprintln(stderr, "usage: pre self uninstall [--purge]")
+		return 1
+	}
+	info := collectInstallInfo(cfg)
+	if !validateSelfUninstall(info, stderr) {
+		return 1
+	}
+	if !removeSelfHooks(stdout, stderr) {
+		return 1
+	}
+	if !uninstallSelfBinary(info, stdout, stderr) {
+		return 1
+	}
+	if purge && !purgeInstallData(stdout, stderr) {
+		return 1
+	}
+	return 0
+}
+
+func selfUninstallOptions(args []string) (bool, bool) {
 	purge := false
 	for _, arg := range args {
-		switch arg {
-		case "--purge":
-			purge = true
-		default:
-			fmt.Fprintln(stderr, "usage: pre self uninstall [--purge]")
-			return 1
+		if arg != "--purge" {
+			return false, false
 		}
+		purge = true
 	}
+	return purge, true
+}
 
-	info := collectInstallInfo(cfg)
-
+func validateSelfUninstall(info installInfo, stderr io.Writer) bool {
 	if isHomebrewInstall(info.Source) {
 		brewArgs := homebrewLifecycleArgs(info.Source, "uninstall")
 		if _, err := lookPathFn("brew"); err != nil {
 			fmt.Fprintln(stderr, "pre uninstall: Homebrew install detected, but brew is not on PATH")
 			fmt.Fprintf(stderr, "pre uninstall: run: brew %s\n", strings.Join(brewArgs, " "))
-			return 1
+			return false
 		}
-		fmt.Fprintln(stdout, "pre: uninstalling with Homebrew")
-		if err := commandRunnerFn("brew", brewArgs, nil, stdout, stderr); err != nil {
-			fmt.Fprintf(stderr, "pre uninstall: %v\n", err)
-			return 1
-		}
-	} else {
-		if info.BinaryPath == "" {
-			fmt.Fprintln(stderr, "pre uninstall: could not locate the pre binary")
-			return 1
-		}
-		if filepath.Base(info.BinaryPath) != "pre" {
-			fmt.Fprintf(stderr, "pre uninstall: refusing to remove %s because its filename is not pre\n", info.BinaryPath)
-			return 1
-		}
-		if err := removeFileFn(info.BinaryPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(stderr, "pre uninstall: remove %s: %v\n", info.BinaryPath, err)
-			return 1
-		}
-		fmt.Fprintf(stdout, "pre: removed binary %s\n", info.BinaryPath)
+		return true
 	}
+	return validateManualSelfUninstall(info, stderr)
+}
 
-	rcFile, removedHooks, err := proxy.RemoveShellHooks()
+func validateManualSelfUninstall(info installInfo, stderr io.Writer) bool {
+	if info.BinaryPath == "" {
+		fmt.Fprintln(stderr, "pre uninstall: could not locate the pre binary")
+		return false
+	}
+	if filepath.Base(info.BinaryPath) != "pre" {
+		fmt.Fprintf(stderr, "pre uninstall: refusing to remove %s because its filename is not pre\n", info.BinaryPath)
+		return false
+	}
+	return true
+}
+
+func removeSelfHooks(stdout, stderr io.Writer) bool {
+	rcFile, removed, err := proxy.RemoveShellHooks()
 	if err != nil {
 		fmt.Fprintf(stderr, "pre uninstall: %v\n", err)
-		return 1
+		return false
 	}
-	if removedHooks {
+	if removed {
 		fmt.Fprintf(stdout, "pre: removed hooks from %s\n", rcFile)
 	} else {
 		fmt.Fprintf(stdout, "pre: no hooks found in %s\n", rcFile)
 	}
+	return true
+}
 
-	if purge && !purgeInstallData(stdout, stderr) {
-		return 1
+func uninstallSelfBinary(info installInfo, stdout, stderr io.Writer) bool {
+	if isHomebrewInstall(info.Source) {
+		brewArgs := homebrewLifecycleArgs(info.Source, "uninstall")
+		fmt.Fprintln(stdout, "pre: uninstalling with Homebrew")
+		if err := commandRunnerFn("brew", brewArgs, nil, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "pre uninstall: %v\n", err)
+			return false
+		}
+		return true
 	}
-	return 0
+	if err := removeFileFn(info.BinaryPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(stderr, "pre uninstall: remove %s: %v\n", info.BinaryPath, err)
+		return false
+	}
+	fmt.Fprintf(stdout, "pre: removed binary %s\n", info.BinaryPath)
+	return true
 }
 
 type installInfo struct {

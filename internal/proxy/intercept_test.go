@@ -33,7 +33,7 @@ func pipMgr() *manager.Manager {
 }
 
 func goMgr() *manager.Manager {
-	return &manager.Manager{Name: "go", Ecosystem: "Go", InstallCmds: []string{"install"}}
+	return &manager.Manager{Name: "go", Ecosystem: "Go", InstallCmds: []string{"get", "install"}}
 }
 
 func brewMgr() *manager.Manager {
@@ -1743,6 +1743,45 @@ func TestInstallPackageArgsManifestOnlyCommands(t *testing.T) {
 		if !intercepted || len(packageArgs) != 0 {
 			t.Errorf("expected manifest-only install for %s, got %v", test.manager.Name, packageArgs)
 		}
+	}
+}
+
+func TestInstallPackageArgsParsesGlobalOptions(t *testing.T) {
+	tests := []struct {
+		manager *manager.Manager
+		args    []string
+		want    []string
+	}{
+		{manager: npmMgr(), args: []string{"--prefix", "app", "install", "react"}, want: []string{"react"}},
+		{manager: pnpmMgr(), args: []string{"--dir=app", "add", "react"}, want: []string{"react"}},
+		{manager: goMgr(), args: []string{"-C", "app", "get", "example.com/mod"}, want: []string{"example.com/mod"}},
+	}
+	for _, test := range tests {
+		packageArgs, intercepted := installPackageArgs(test.manager, test.args)
+		matches := slices.Equal(packageArgs, test.want)
+		if !intercepted || !matches {
+			t.Errorf("expected %s install args %v, got %v", test.manager.Name, test.want, packageArgs)
+		}
+	}
+}
+
+func TestInstallPackageArgsBypassesGoRemoval(t *testing.T) {
+	args := []string{"get", "example.com/mod@none"}
+	packageArgs, intercepted := installPackageArgs(goMgr(), args)
+	if intercepted || packageArgs != nil {
+		t.Errorf("expected Go removal passthrough, got intercepted=%v args=%v", intercepted, packageArgs)
+	}
+}
+
+func TestInstallPackagesSkipsGoRemovalInMixedGet(t *testing.T) {
+	args := []string{"example.com/old@none", "example.com/new@v1.0.0"}
+	packages, err := installPackages(goMgr(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"example.com/new@v1.0.0"}
+	if !slices.Equal(packages, want) {
+		t.Errorf("expected %v, got %v", want, packages)
 	}
 }
 

@@ -318,6 +318,7 @@ func readPNPMLock(dir string) []string {
 			continue
 		}
 		trimmed := strings.TrimSuffix(strings.TrimSpace(line), ":")
+		trimmed = trimYAMLKeyQuotes(trimmed)
 		trimmed = strings.TrimPrefix(trimmed, "/")
 		atIdx := strings.LastIndex(trimmed, "@")
 		if atIdx <= 0 {
@@ -332,6 +333,19 @@ func readPNPMLock(dir string) []string {
 		}
 	}
 	return result
+}
+
+func trimYAMLKeyQuotes(key string) string {
+	if len(key) < 2 {
+		return key
+	}
+	first := key[0]
+	last := key[len(key)-1]
+	isQuoted := first == last && (first == '\'' || first == '"')
+	if isQuoted {
+		return key[1 : len(key)-1]
+	}
+	return key
 }
 
 // Go: go.sum

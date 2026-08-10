@@ -46,7 +46,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "setup":
 		proxy.Setup()
 	case "teardown":
-		proxy.Teardown()
+		if err := proxy.Teardown(); err != nil {
+			return 1
+		}
 	case "scan":
 		if len(args) < 2 {
 			return 1

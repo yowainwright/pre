@@ -16,6 +16,29 @@ var (
 	httpClient = &http.Client{Timeout: 10 * time.Second}
 )
 
+const (
+	SeverityCritical = "CRITICAL"
+	SeverityHigh     = "HIGH"
+	SeverityMedium   = "MEDIUM"
+	SeverityLow      = "LOW"
+	cvssTypeV3       = "CVSS_V3"
+	cvssTypeV4       = "CVSS_V4"
+)
+
+type severityEntry struct {
+	Type  string `json:"type"`
+	Score string `json:"score"`
+}
+
+type osvVulnerability struct {
+	ID               string          `json:"id"`
+	Summary          string          `json:"summary"`
+	Severity         []severityEntry `json:"severity"`
+	DatabaseSpecific struct {
+		Severity string `json:"severity"`
+	} `json:"database_specific"`
+}
+
 type Vulnerability struct {
 	ID       string `json:"id"`
 	Summary  string `json:"summary"`
@@ -32,19 +55,8 @@ func Check(ecosystem, name, version string) ([]Vulnerability, error) {
 		Version string `json:"version,omitempty"`
 		Package pkg    `json:"package"`
 	}
-	type osvVuln struct {
-		ID       string `json:"id"`
-		Summary  string `json:"summary"`
-		Severity []struct {
-			Type  string `json:"type"`
-			Score string `json:"score"`
-		} `json:"severity"`
-		DatabaseSpecific struct {
-			Severity string `json:"severity"`
-		} `json:"database_specific"`
-	}
 	type response struct {
-		Vulns []osvVuln `json:"vulns"`
+		Vulns []osvVulnerability `json:"vulns"`
 	}
 
 	body, _ := json.Marshal(query{
@@ -83,16 +95,18 @@ func Check(ecosystem, name, version string) ([]Vulnerability, error) {
 	return vulns, nil
 }
 
-func extractSeverity(dbSeverity string, cvssEntries []struct {
-	Type  string `json:"type"`
-	Score string `json:"score"`
-}) (string, float64) {
+func extractSeverity(dbSeverity string, cvssEntries []severityEntry) (string, float64) {
 	if dbSeverity != "" {
 		if rating := normalizeSeverity(dbSeverity); rating != "" {
 			return rating, 0
 		}
 	}
 	for _, s := range cvssEntries {
+		isSupportedCVSS := s.Type == "" || s.Type == cvssTypeV3
+		isUnsupportedCVSS := strings.HasPrefix(s.Type, "CVSS_") && !isSupportedCVSS
+		if s.Type == cvssTypeV4 || isUnsupportedCVSS {
+			return SeverityCritical, 0
+		}
 		if rating, score := severityFromVector(s.Score); rating != "" {
 			return rating, score
 		}
@@ -102,14 +116,14 @@ func extractSeverity(dbSeverity string, cvssEntries []struct {
 
 func normalizeSeverity(severity string) string {
 	switch strings.ToUpper(strings.TrimSpace(severity)) {
-	case "CRITICAL":
-		return "CRITICAL"
-	case "HIGH":
-		return "HIGH"
+	case SeverityCritical:
+		return SeverityCritical
+	case SeverityHigh:
+		return SeverityHigh
 	case "MEDIUM", "MODERATE":
-		return "MEDIUM"
-	case "LOW":
-		return "LOW"
+		return SeverityMedium
+	case SeverityLow:
+		return SeverityLow
 	default:
 		return ""
 	}

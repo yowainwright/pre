@@ -497,6 +497,39 @@ func TestResolveScanVersionDefault(t *testing.T) {
 	}
 }
 
+func TestScanPackageParsesPyPIExtrasAndExactVersion(t *testing.T) {
+	var checkedName, checkedVersion string
+	defer withSecurityCheck(func(_ string, name, version string) ([]security.Vulnerability, error) {
+		checkedName = name
+		checkedVersion = version
+		return nil, nil
+	})()
+
+	result := scanPackageWithPolicy(pipMgr(), "requests[socks]==2.19.0", make(cache.Cache), false)
+	if result.err != nil {
+		t.Fatalf("unexpected error: %v", result.err)
+	}
+	if checkedName != "requests" || checkedVersion != "2.19.0" {
+		t.Errorf("expected requests 2.19.0, got %q %q", checkedName, checkedVersion)
+	}
+}
+
+func TestScanPackageRejectsUnresolvedPyPIConstraint(t *testing.T) {
+	securityCalled := false
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		securityCalled = true
+		return nil, nil
+	})()
+
+	result := scanPackageWithPolicy(pipMgr(), "urllib3<1.26", make(cache.Cache), false)
+	if !errors.Is(result.err, errMissingVersion) {
+		t.Fatalf("expected missing version error, got %v", result.err)
+	}
+	if securityCalled {
+		t.Error("expected unresolved requirement to fail before querying OSV")
+	}
+}
+
 func TestScanAllPostResolveCacheHit(t *testing.T) {
 	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
 		return "18.0.0", nil
@@ -536,8 +569,8 @@ func TestScanAllResolvesNPMSemverConstraint(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if resolveArg != "react" {
-		t.Errorf("expected name-only resolution for semver constraint, got %q", resolveArg)
+	if resolveArg != "react@^18.0.0" {
+		t.Errorf("expected range-aware resolution for semver constraint, got %q", resolveArg)
 	}
 	if results[0].version != "18.2.0" || !results[0].cacheable {
 		t.Errorf("expected cacheable resolved result, got %+v", results[0])
@@ -566,8 +599,8 @@ func TestScanAllIgnoresNonExactCacheHit(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if resolveArg != "react" {
-		t.Errorf("expected name-only resolution for semver constraint, got %q", resolveArg)
+	if resolveArg != "react@^18.0.0" {
+		t.Errorf("expected range-aware resolution for semver constraint, got %q", resolveArg)
 	}
 	if !securityCalled {
 		t.Error("expected security check after resolving non-exact cached spec")

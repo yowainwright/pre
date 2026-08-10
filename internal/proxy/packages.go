@@ -18,17 +18,94 @@ func installPackageArgs(mgr *manager.Manager, args []string) ([]string, bool) {
 	if mgr.Name == "cargo" {
 		return cargoInterceptArgs(mgr, args)
 	}
-	if slices.Contains(mgr.InstallCmds, args[0]) {
-		if isManifestInstall(mgr.Name, args[0]) {
+	commandIndex := managerCommandIndex(mgr, args)
+	if commandIndex < 0 {
+		return nil, false
+	}
+	return interceptCommandArgs(mgr, args[commandIndex], args[commandIndex+1:])
+}
+
+func interceptCommandArgs(mgr *manager.Manager, command string, args []string) ([]string, bool) {
+	if slices.Contains(mgr.InstallCmds, command) {
+		isGoRemoval := mgr.Name == "go" && command == "get" && goRemovesOnly(mgr, args)
+		if isGoRemoval {
+			return nil, false
+		}
+		if isManifestInstall(mgr.Name, command) {
 			return nil, true
 		}
+		return args, true
+	}
+	isUVPipInstall := mgr.Name == "uv" && command == "pip" && len(args) > 0 && args[0] == "install"
+	if isUVPipInstall {
 		return args[1:], true
 	}
-	isUVPipInstall := mgr.Name == "uv" && len(args) > 1 && args[0] == "pip" && args[1] == "install"
-	if isUVPipInstall {
-		return args[2:], true
-	}
 	return nil, false
+}
+
+func managerCommandIndex(mgr *manager.Manager, args []string) int {
+	for index := 0; index < len(args); index++ {
+		known, consumesNext := managerGlobalFlag(mgr, args[index])
+		if known {
+			if consumesNext {
+				index++
+			}
+			continue
+		}
+		if !strings.HasPrefix(args[index], "-") {
+			return index
+		}
+	}
+	return -1
+}
+
+func managerGlobalFlag(mgr *manager.Manager, arg string) (bool, bool) {
+	for _, flag := range managerGlobalValueFlags(mgr) {
+		isAttachedLong := strings.HasPrefix(arg, flag+"=")
+		isAttachedShort := len(flag) == 2 && strings.HasPrefix(arg, flag) && len(arg) > 2
+		switch {
+		case arg == flag:
+			return true, true
+		case isAttachedLong || isAttachedShort:
+			return true, false
+		}
+	}
+	return false, false
+}
+
+func managerGlobalValueFlags(mgr *manager.Manager) []string {
+	flags := projectDirectoryFlags(mgr)
+	if mgr == nil {
+		return flags
+	}
+	switch mgr.Name {
+	case "npm":
+		return append(flags, "--workspace", "-w")
+	case "pnpm":
+		return append(flags, "--filter")
+	case "go":
+		return []string{"-C"}
+	default:
+		return flags
+	}
+}
+
+func goRemovesOnly(mgr *manager.Manager, args []string) bool {
+	packages := extractPackages(mgr, args)
+	if len(packages) == 0 {
+		return false
+	}
+	for _, spec := range packages {
+		if !isGoRemoval(mgr, spec) {
+			return false
+		}
+	}
+	return true
+}
+
+func isGoRemoval(mgr *manager.Manager, spec string) bool {
+	_, version := manager.ParseSpec(mgr.Ecosystem, spec)
+	return strings.EqualFold(version, "none")
 }
 
 func isManifestInstall(managerName, command string) bool {
@@ -532,6 +609,7 @@ func cargoUpdateTargets(mgr *manager.Manager, args []string) []string {
 
 func installPackages(mgr *manager.Manager, args []string) ([]string, error) {
 	packages := extractPackages(mgr, args)
+	packages = withoutGoRemovals(mgr, packages)
 	for _, path := range requirementFilePaths(mgr, args) {
 		fromFile, err := readRequirementsFileFn(path)
 		if err != nil {
@@ -540,6 +618,19 @@ func installPackages(mgr *manager.Manager, args []string) ([]string, error) {
 		packages = append(packages, fromFile...)
 	}
 	return uniquePackages(packages), nil
+}
+
+func withoutGoRemovals(mgr *manager.Manager, packages []string) []string {
+	if mgr == nil || mgr.Ecosystem != "Go" {
+		return packages
+	}
+	result := make([]string, 0, len(packages))
+	for _, spec := range packages {
+		if !isGoRemoval(mgr, spec) {
+			result = append(result, spec)
+		}
+	}
+	return result
 }
 
 func requirementFilePaths(mgr *manager.Manager, args []string) []string {

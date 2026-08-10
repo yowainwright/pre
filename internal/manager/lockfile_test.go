@@ -334,14 +334,17 @@ packages:
     resolution: {integrity: sha512-abc}
   react@18.2.0:
     resolution: {integrity: sha512-xyz}
+  '@scope/pkg@1.0.0':
+    resolution: {integrity: sha512-def}
 `), 0644)
 
 	pkgs := readPNPMLock(dir)
-	if len(pkgs) != 2 {
-		t.Fatalf("expected 2, got %d: %v", len(pkgs), pkgs)
+	if len(pkgs) != 3 {
+		t.Fatalf("expected 3, got %d: %v", len(pkgs), pkgs)
 	}
 	m := toSet(pkgs)
-	if !m["lodash@4.17.21"] || !m["react@18.2.0"] {
+	hasAllPackages := m["lodash@4.17.21"] && m["react@18.2.0"] && m["@scope/pkg@1.0.0"]
+	if !hasAllPackages {
 		t.Errorf("unexpected packages: %v", pkgs)
 	}
 }

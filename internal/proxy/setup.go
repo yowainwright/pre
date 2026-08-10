@@ -58,6 +58,44 @@ const cargoShellHookText = "function " + "cargo() {\n" + `  case "${PRE_DISABLE:
 }
 `
 
+const managerShellHookText = `function %s() {
+  case "${PRE_DISABLE:-}" in
+    1|true|TRUE|True|yes|YES|Yes|on|ON|On)
+      command %s "$@"
+      return
+      ;;
+  esac
+%s  if %s; then
+    command pre %s "$@"
+  else
+    command %s "$@"
+  fi
+}
+`
+
+const shellCommandParserText = `  local _pre_arg
+  local _pre_command=""
+  local _pre_subcommand=""
+  local _pre_skip=0
+  for _pre_arg in "$@"; do
+    if [[ "$_pre_skip" == "1" ]]; then
+      _pre_skip=0
+      continue
+    fi
+    case "$_pre_arg" in
+%s      -*) ;;
+      *)
+        if [[ -z "$_pre_command" ]]; then
+          _pre_command="$_pre_arg"
+        else
+          _pre_subcommand="$_pre_arg"
+          break
+        fi
+        ;;
+    esac
+  done
+`
+
 func Setup() {
 	rcFile := detectRCFile()
 
@@ -118,37 +156,62 @@ func buildShellHook() string {
 }
 
 func managerShellHook(m manager.Manager) string {
+	parser := shellCommandParser(m)
 	condition := shellInstallCondition(m)
-	return fmt.Sprintf(
-		"function %s() {\n  case \"${PRE_DISABLE:-}\" in\n    1|true|TRUE|True|yes|YES|Yes|on|ON|On)\n      command %s \"$@\"\n      return\n      ;;\n  esac\n  if %s; then\n    command pre %s \"$@\"\n  else\n    command %s \"$@\"\n  fi\n}\n",
-		m.Name, m.Name, condition, m.Name, m.Name,
-	)
+	return fmt.Sprintf(managerShellHookText, m.Name, m.Name, parser, condition, m.Name, m.Name)
+}
+
+func shellCommandParser(m manager.Manager) string {
+	cases := shellGlobalValueCases(m)
+	return fmt.Sprintf(shellCommandParserText, cases)
+}
+
+func shellGlobalValueCases(m manager.Manager) string {
+	flags := managerGlobalValueFlags(&m)
+	if len(flags) == 0 {
+		return ""
+	}
+	attached := make([]string, 0, len(flags))
+	for _, flag := range flags {
+		pattern := flag + "=*"
+		if len(flag) == 2 {
+			pattern = flag + "?*"
+		}
+		attached = append(attached, pattern)
+	}
+	valueFlags := strings.Join(flags, "|")
+	attachedFlags := strings.Join(attached, "|")
+	return fmt.Sprintf("      %s) _pre_skip=1 ;;\n      %s) ;;\n", valueFlags, attachedFlags)
 }
 
 func shellInstallCondition(m manager.Manager) string {
 	conditions := make([]string, len(m.InstallCmds))
 	for i, command := range m.InstallCmds {
-		conditions[i] = fmt.Sprintf(`"$1" == "%s"`, command)
+		conditions[i] = fmt.Sprintf(`"$_pre_command" == "%s"`, command)
 	}
-	condition := "[[ " + strings.Join(conditions, ` || `) + " ]]"
+	condition := "false"
+	if len(conditions) > 0 {
+		condition = "[[ " + strings.Join(conditions, ` || `) + " ]]"
+	}
 	if m.Name == "uv" {
-		condition += ` || [[ "$1" == "pip" && "$2" == "install" ]]`
+		condition += ` || [[ "$_pre_command" == "pip" && "$_pre_subcommand" == "install" ]]`
 	}
 	return condition
 }
 
-func Teardown() {
+func Teardown() error {
 	rcFile, removed, err := RemoveShellHooks()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pre teardown: %v\n", err)
-		return
+		return err
 	}
 	if !removed {
 		fmt.Println("pre: no hooks found in", rcFile)
-		return
+		return nil
 	}
 	fmt.Println("pre: removed hooks from", rcFile)
 	fmt.Println("pre: restart your shell or run: source", rcFile)
+	return nil
 }
 
 func ShellHookStatus() (string, bool) {

@@ -326,7 +326,8 @@ func resolveScanVersion(mgr *manager.Manager, name, version string, allowMissing
 		return version, label, false, true, nil
 	case canResolveConstraint(mgr.Ecosystem, version):
 		target := name
-		if mgr.Ecosystem == "crates.io" {
+		usesRequirement := mgr.Ecosystem == "npm" || mgr.Ecosystem == "crates.io"
+		if usesRequirement {
 			target = label
 		}
 		resolved, err := resolveVersionFn(mgr, target)
@@ -364,6 +365,8 @@ func isExactVersion(ecosystem, version string) bool {
 		return npmExactVersionRE.MatchString(version)
 	case "Go":
 		return goExactVersionRE.MatchString(version)
+	case "PyPI":
+		return !strings.ContainsAny(version, "<>=~*,@ ")
 	case "crates.io":
 		return crateExactVersionRE.MatchString(version)
 	}

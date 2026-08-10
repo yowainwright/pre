@@ -1,8 +1,16 @@
 package manager
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
-const brewLockVersionSeparator = "@@"
+const (
+	brewLockVersionSeparator = "@@"
+	unsupportedPyRequirement = "<unsupported>"
+)
+
+var pyRequirementRE = regexp.MustCompile(`^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)(?:\[[A-Za-z0-9._,-]+\])?\s*(.*)$`)
 
 func ParseSpec(ecosystem, spec string) (name, version string) {
 	switch ecosystem {
@@ -34,13 +42,31 @@ func parseHomebrewSpec(spec string) (string, string) {
 }
 
 func parsePySpec(spec string) (string, string) {
-	for _, sep := range []string{"==", ">=", "<=", ">", "<", "!=", "~="} {
-		if idx := strings.Index(spec, sep); idx != -1 {
-			if sep == "==" {
-				return spec[:idx], spec[idx+2:]
-			}
-			return spec[:idx], ""
-		}
+	requirement, _, _ := strings.Cut(spec, ";")
+	matches := pyRequirementRE.FindStringSubmatch(strings.TrimSpace(requirement))
+	if len(matches) != 3 {
+		return "", unsupportedPyRequirement
 	}
-	return spec, ""
+	name := matches[1]
+	constraint := strings.TrimSpace(matches[2])
+	return parsePyConstraint(name, constraint)
+}
+
+func parsePyConstraint(name, constraint string) (string, string) {
+	if constraint == "" {
+		return name, ""
+	}
+	isSupportedConstraint := strings.ContainsAny(constraint[:1], "<>=!~@")
+	if !isSupportedConstraint {
+		return name, unsupportedPyRequirement
+	}
+	if !strings.HasPrefix(constraint, "==") {
+		return name, constraint
+	}
+	version := strings.TrimSpace(strings.TrimPrefix(constraint, "=="))
+	isExactPin := version != "" && !strings.ContainsAny(version, "*,")
+	if !isExactPin {
+		return name, constraint
+	}
+	return name, version
 }
