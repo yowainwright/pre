@@ -1,6 +1,6 @@
 # pre≋≈~∿
 
-Security guardrail for package managers. Sits between your shell and `npm`, `pip`, `brew`, and friends, checking requested versions and existing lockfiles against the [OSV vulnerability database](https://osv.dev) before the package manager runs.
+Security guardrail for package managers. `pre` sits between your shell and `npm`, `pip`, `brew`, and friends. It checks requested versions and existing lockfiles against the [OSV vulnerability database](https://osv.dev) before the package manager runs.
 
 [![CI](https://github.com/yowainwright/pre/actions/workflows/test.yml/badge.svg)](https://github.com/yowainwright/pre/actions/workflows/test.yml)
 [![Release](https://img.shields.io/github/v/release/yowainwright/pre)](https://github.com/yowainwright/pre/releases)
@@ -20,7 +20,7 @@ brew install --cask yowainwright/tap/pre
 curl -fsSL https://raw.githubusercontent.com/yowainwright/pre/main/install.sh | sh
 ```
 
-Every release ships with SHA256 checksums and a cosign signature. The curl installer requires `cosign` and verifies both before writing the binary. A missing bundle, missing `cosign` binary, or failed signature blocks installation.
+Every release includes SHA-256 checksums and a Cosign signature. The curl installer requires `cosign` and verifies both before writing the binary. A missing bundle, missing `cosign` binary, or failed signature blocks installation.
 
 The macOS cask is checksum-verified but not notarized; its install hook removes quarantine only from the staged `pre` binary.
 
@@ -54,7 +54,7 @@ Runtime switches:
 | `PRE_NO_BACKGROUND=1` | Disables detached background scans after installs |
 | `PRE_MAX_PACKAGES=N` | Skips scanning when a manifest/lockfile expands beyond `N` packages |
 
-## Package Manager
+## Package manager UI
 
 ```sh
 pre manage
@@ -62,7 +62,22 @@ pre manage
 pre m
 ```
 
-The manager opens a full-screen, keyboard-driven terminal UI for installed packages from available managers. It supports themed rows, arrow or `j`/`k` navigation, live `/` search with no enter-to-apply step, `m` manager toggles, `enter`/`o` action dialogs, `x`/`esc` dialog close, and `q` or `ctrl+c` exit. The default theme uses Catppuccin Mocha truecolor values; set `PRE_MANAGE_THEME=contrast` for a brighter theme or `PRE_MANAGE_THEME=mono` for no color. Package actions run back through `pre <manager> ...`, so install and downgrade flows still use the vulnerability scan before the package manager runs. `uv` actions target the active environment with `uv pip ...`; Cargo actions edit project dependencies with `cargo add`, `cargo update`, and `cargo remove`.
+`pre manage` opens a full-screen view of installed packages across detected managers.
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` or `j` / `k` | Move between packages |
+| `/` | Search as you type |
+| `m` | Toggle managers |
+| `enter` or `o` | Open package actions |
+| `x` or `esc` | Close a dialog |
+| `q` or `ctrl+c` | Exit |
+
+The default theme uses Catppuccin Mocha colors. Set `PRE_MANAGE_THEME=contrast` for a brighter theme or `PRE_MANAGE_THEME=mono` for no color.
+
+Actions run through `pre <manager> ...`, so installs and downgrades are scanned first.
+
+`uv` targets the active environment with `uv pip`. Cargo edits project dependencies with `cargo add`, `cargo update`, and `cargo remove`.
 
 Non-interactive package commands are available too:
 
@@ -85,29 +100,54 @@ make test-e2e-docker E2E_TEST=npm
 make test-e2e-docker E2E_TEST=pip
 ```
 
-Requires Docker. Each scenario builds the same E2E container with `pre` installed
-and shell hooks active, then covers clean scanning, CVE detection, and a
-blocked install for one package manager.
+Requires Docker. Each scenario builds the same E2E container with `pre` installed and shell hooks active, then covers clean scanning, CVE detection, and a blocked install for one package manager.
 
 ## How it works
 
 ```mermaid
-flowchart TD
-    A["npm install lodash"] --> B["shell hook (~/.zshrc)"]
-    B --> C["pre intercept"]
-    C --> D["lockfile\n(exact versions)"]
-    C --> E["manifest\n(fallback)"]
-    D --> F["package list"]
-    E --> F
-    F --> G{"cache check"}
-    G -->|hit| H["proceed silently"]
-    G -->|miss| I["OSV API (parallel)"]
-    I --> J{"result?"}
-    J -->|scan error| O["block install"]
-    J -->|clean| K["proceed + cache"]
-    J -->|CVE found| L{"severity?"}
-    L -->|low / medium| M["warn, proceed"]
-    L -->|high / critical| N["block + prompt Y/N"]
+sequenceDiagram
+    autonumber
+    actor User
+    participant Pre as pre
+    participant Project as Project files
+    participant OSV
+    participant Manager
+
+    User->>Pre: Install command via shell hook
+
+    rect rgba(137, 180, 250, 0.18)
+        Pre->>Project: Read exact lockfile versions
+        alt No usable lockfile
+            Pre->>Project: Read manifest requirements
+        end
+    end
+
+    rect rgba(203, 166, 247, 0.18)
+        Pre->>Pre: Reuse trusted cache entries
+        opt Uncached packages
+            Pre->>OSV: Query names and versions in parallel
+            OSV-->>Pre: Findings or scan errors
+        end
+    end
+
+    rect rgba(243, 139, 168, 0.18)
+        alt Scan error
+            Pre-->>User: Block command
+        else Vulnerability found
+            Pre-->>User: Warn or ask based on severity
+        else Clean
+            Pre-->>User: Approve command
+        end
+    end
+
+    opt Approved
+        Pre->>Manager: Run original command
+        Manager-->>Pre: Return exit status
+        Pre-->>User: Return result
+        opt Successful install changed the lockfile
+            Pre->>OSV: Start background scan of transitive versions
+        end
+    end
 ```
 
 ### What you'll see
@@ -120,48 +160,47 @@ flowchart TD
 | High/critical CVE | CVE detail box shown, Y/N prompt |
 | OSV or version-resolution error | Install blocked; `PRE_DISABLE=1` is the explicit bypass |
 
-### Lockfile-first scanning
+### Supported managers
 
 <!-- lockfile support and source restrictions from internal/manager -->
 
-`pre` reads existing lockfiles for exact pinned versions, including transitive dependencies, before falling back to manifests:
+`pre` reads existing lockfiles first because they contain exact direct and transitive versions. Without a usable lockfile, it falls back to the project manifest.
 
-| Manager | Lockfiles |
-|---------|-----------|
-| npm | `package-lock.json` |
-| bun | `bun.lock` |
-| pnpm | `pnpm-lock.yaml` |
-| go | `go.sum` |
-| cargo | `Cargo.lock` |
-| pip / pip3 | `Pipfile.lock` |
-| uv | `uv.lock` |
-| poetry | `poetry.lock` |
-| brew | `Brewfile.lock.json` |
+| Manager | Lockfile | Intercepted commands |
+|---------|----------|----------------------|
+| brew | `Brewfile.lock.json` | `install`, `reinstall`, `upgrade` |
+| npm | `package-lock.json` | `install`, `add`, `i`, `update`, `ci` |
+| pnpm | `pnpm-lock.yaml` | `install`, `add`, `i`, `update` |
+| bun | `bun.lock` | `install`, `add`, `i`, `update` |
+| go | `go.sum` | `get`, `install` |
+| cargo | `Cargo.lock` | `add`, `install`, `update`, `fetch` |
+| pip / pip3 | `Pipfile.lock` | `install` |
+| uv | `uv.lock` | `add`, `sync`, `pip install` |
+| poetry | `poetry.lock` | `add`, `update`, `install` |
 
-Supported managers: `brew`, `npm`, `pnpm`, `bun`, `go`, `cargo`, `pip`, `pip3`, `uv`, `poetry`
+If a command creates or changes a lockfile, `pre` checks the requested packages before the install. It scans the resolved lockfile in the background afterward unless `PRE_NO_BACKGROUND=1` is set.
 
-Intercepted commands:
+### Commands that require exact resolution
 
-| Manager | Commands |
-|---------|----------|
-| brew | `install`, `reinstall`, `upgrade` |
-| npm | `install`, `add`, `i`, `update`, `ci` |
-| pnpm / bun | `install`, `add`, `i`, `update` |
-| go | `get`, `install` |
-| cargo | `add`, `install`, `update`, `fetch` |
-| pip / pip3 | `install` |
-| uv | `add`, `sync`, `pip install` |
-| poetry | `add`, `update`, `install` |
+`pre` blocks commands when it cannot map a dependency to an exact package and version.
 
-When an install creates or changes a lockfile, newly resolved transitive dependencies are not knowable in advance. The requested packages are checked first and the resulting lockfile is scanned in the background after a successful install unless `PRE_NO_BACKGROUND=1` is set.
+Cargo scans crates.io dependencies from `Cargo.lock` or `Cargo.toml`. It resolves version requirements against non-yanked crates.io releases.
 
 npm lockfile entries must match their `node_modules` package identity and resolve from `https://registry.npmjs.org`. Aliases, links, local files, tarball URLs, and custom registries block the command because OSV cannot identify their contents reliably; `PRE_DISABLE=1` is the explicit bypass.
 
-Cargo scans crates.io dependencies from `Cargo.lock` or `Cargo.toml` and resolves version requirements against non-yanked crates.io releases. Path, Git, custom-registry, alternate-default-registry, offline resolution, resolution-changing unstable options, `--config`, `--lockfile-path`, and resolution-changing Cargo config block the command because OSV cannot identify them reliably as crates.io packages; `PRE_DISABLE=1` is the explicit bypass.
+Cargo commands are blocked for:
+
+- Local path or Git dependencies
+- Custom registries or an alternate default registry
+- Offline resolution
+- Resolution-changing unstable options or Cargo configuration
+- `--config` or `--lockfile-path`
 
 Workspace-wide `cargo fetch` requires the shared `Cargo.lock`; run `cargo generate-lockfile` first when creating a workspace lockfile.
 
 `uv sync` and lockfile-wide Poetry commands require an existing `uv.lock` or `poetry.lock`. Run `uv lock` or `poetry lock` first so the pre-install scan has exact versions.
+
+`PRE_DISABLE=1` is the explicit bypass.
 
 ## Commands
 
@@ -226,15 +265,15 @@ Entries matching a built-in `name` replace it; new names extend the list.
 
 <!-- security behavior from internal/proxy, internal/manager, and install.sh -->
 
-- Queries [OSV.dev](https://osv.dev) — Google-operated, free, open
-- Only package name + version leave your machine — no code uploaded
-- Existing lockfiles provide exact pre-install checks for transitive dependencies
-- OSV, version-resolution, and detected project-read errors block the package manager; `PRE_DISABLE=1` is an explicit fail-open override
-- Newly resolved transitive dependencies are checked after installation
-- Curl installs require successful cosign verification of the release checksums
-- SHA256 checksums for all platforms
+- Queries [OSV.dev](https://osv.dev), a free service operated by Google
+- Sends only the package name and version; no code leaves your machine
+- Uses existing lockfiles to check exact transitive versions before installation
+- Blocks the package manager if OSV, version resolution, or project reading fails; `PRE_DISABLE=1` is the explicit bypass
+- Checks newly resolved transitive dependencies after installation
+- Publishes SHA-256 checksums signed with keyless Cosign for every platform
+- Curl installs require successful Cosign verification of the release checksums
 
-`pre` is a vulnerability guardrail, not a sandbox or a complete software-supply-chain policy. Keep lockfiles, review dependency changes, and run ecosystem-native audit tooling in CI.
+`pre` is a vulnerability guardrail, not a sandbox or full supply-chain policy. Keep lockfiles, review dependency changes, and run ecosystem-native audit tools in CI.
 
 ## Update pre
 
@@ -258,39 +297,35 @@ Homebrew installs run `brew uninstall --cask pre`. Manual installs remove the cu
 ## Runtime architecture
 
 ```mermaid
-graph TD
-    CMD["cmd/pre\nentry point"] --> PROXY
+flowchart LR
+    CLI["cmd/pre<br/>CLI entry point"]
+    PROXY["internal/proxy<br/>interception and orchestration"]
+    CONFIG["internal/config<br/>user settings"]
+    MANAGER["internal/manager<br/>package parsing and resolution"]
+    SECURITY["internal/security<br/>OSV queries and CVSS scoring"]
+    CACHE["internal/cache<br/>trusted scan results"]
+    DISPLAY["internal/display<br/>terminal output"]
 
-    subgraph PROXY["internal/proxy"]
-        I["intercept.go\ncore loop"]
-        SC["scan.go\nbackground scans"]
-        ST["setup.go\nshell hooks"]
-        SS["stats.go\nscan scheduling"]
-        R["render.go\nterminal output"]
-    end
+    CLI --> PROXY
+    CLI --> CONFIG
+    PROXY --> MANAGER
+    PROXY --> SECURITY
+    PROXY --> CACHE
+    PROXY --> DISPLAY
 
-    subgraph MGR["internal/manager"]
-        REG["registry.go\nbuilt-in managers"]
-        LF["lockfile.go\nlockfile readers"]
-        MF["manifest.go\nmanifest readers"]
-        PA["spec.go\nspec parsing"]
-        VR["version.go\nversion resolution"]
-    end
+    classDef entry fill:#89b4fa,stroke:#2563eb,color:#111827,stroke-width:2px
+    classDef core fill:#cba6f7,stroke:#9333ea,color:#111827,stroke-width:2px
+    classDef manager fill:#94e2d5,stroke:#0f766e,color:#111827,stroke-width:2px
+    classDef security fill:#f38ba8,stroke:#be123c,color:#111827,stroke-width:2px
+    classDef state fill:#f9e2af,stroke:#b45309,color:#111827,stroke-width:2px
+    classDef output fill:#a6e3a1,stroke:#15803d,color:#111827,stroke-width:2px
 
-    subgraph SEC["internal/security"]
-        OSV["osv.go\nOSV API client"]
-        CV["cvss.go\nseverity scoring"]
-    end
-
-    CACHE["internal/cache\n~/.cache/pre/cache.json"]
-    CONFIG["internal/config\n~/.config/pre/config.json"]
-    DISPLAY["internal/display\nterminal helpers"]
-
-    I --> MGR
-    I --> SEC
-    I --> CACHE
-    I --> DISPLAY
-    CMD --> CONFIG
+    class CLI entry
+    class PROXY core
+    class MANAGER manager
+    class SECURITY security
+    class CONFIG,CACHE state
+    class DISPLAY output
 ```
 
 ## Repository layout
