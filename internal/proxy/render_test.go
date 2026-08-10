@@ -149,3 +149,14 @@ func TestNodeChildrenWithScore(t *testing.T) {
 		t.Errorf("expected score in child, got %q", children[0])
 	}
 }
+
+func TestRenderTreeSanitizesTerminalControls(t *testing.T) {
+	vulnerability := security.Vulnerability{
+		ID: "CVE\x1b[H-1234", Summary: "fake clean\nsummary", Severity: security.SeverityCritical,
+	}
+	result := scanResult{label: "lodash\x1b[2J@1.0.0", vulns: []security.Vulnerability{vulnerability}}
+	output := renderTree("npm\x1b[2J", []scanResult{result})
+	if strings.Contains(output, "\x1b") || strings.Contains(output, "fake clean\nsummary") {
+		t.Fatalf("expected untrusted terminal controls to be replaced, got %q", output)
+	}
+}

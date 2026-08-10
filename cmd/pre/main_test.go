@@ -387,8 +387,8 @@ func TestRunManageSearchDialog(t *testing.T) {
 	}
 }
 
-func TestRunManageSearchQuitsWithoutEnter(t *testing.T) {
-	defer withPackageInput("/reaq")()
+func TestRunManageSearchAcceptsQ(t *testing.T) {
+	defer withPackageInput("/reaq\nq")()
 	defer withLookPath(func(name string) (string, error) {
 		if name == "npm" {
 			return "/usr/bin/npm", nil
@@ -404,7 +404,7 @@ func TestRunManageSearchQuitsWithoutEnter(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "/rea") {
+	if !strings.Contains(out.String(), "/reaq") {
 		t.Errorf("expected live search text in output, got: %q", out.String())
 	}
 }

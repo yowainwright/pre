@@ -30,9 +30,16 @@ func All() []Manager {
 }
 
 func Get(name string) *Manager {
-	for _, m := range All() {
-		if m.Name == name {
-			return &m
+	for index := len(extraManagers) - 1; index >= 0; index-- {
+		if extraManagers[index].Name == name {
+			manager := extraManagers[index]
+			return &manager
+		}
+	}
+	for index := range builtins {
+		if builtins[index].Name == name {
+			manager := builtins[index]
+			return &manager
 		}
 	}
 	return nil

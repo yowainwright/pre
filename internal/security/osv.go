@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -17,13 +18,44 @@ var (
 )
 
 const (
-	SeverityCritical = "CRITICAL"
-	SeverityHigh     = "HIGH"
-	SeverityMedium   = "MEDIUM"
-	SeverityLow      = "LOW"
-	cvssTypeV3       = "CVSS_V3"
-	cvssTypeV4       = "CVSS_V4"
+	maxOSVResponseBytes      = 4 << 20
+	maxOSVBatchResponseBytes = 64 << 20
+	maxOSVBatchQueries       = 1000
+	SeverityCritical         = "CRITICAL"
+	SeverityHigh             = "HIGH"
+	SeverityMedium           = "MEDIUM"
+	SeverityLow              = "LOW"
+	cvssTypeV3               = "CVSS_V3"
+	cvssTypeV4               = "CVSS_V4"
 )
+
+type Query struct {
+	Ecosystem string
+	Name      string
+	Version   string
+}
+
+type osvPackage struct {
+	Name      string `json:"name"`
+	Ecosystem string `json:"ecosystem"`
+}
+
+type osvQuery struct {
+	Version string     `json:"version,omitempty"`
+	Package osvPackage `json:"package"`
+}
+
+type osvResponse struct {
+	Vulns []osvVulnerability `json:"vulns"`
+}
+
+type osvBatchRequest struct {
+	Queries []osvQuery `json:"queries"`
+}
+
+type osvBatchResponse struct {
+	Results []osvResponse `json:"results"`
+}
 
 type severityEntry struct {
 	Type  string `json:"type"`
@@ -47,52 +79,141 @@ type Vulnerability struct {
 }
 
 func Check(ecosystem, name, version string) ([]Vulnerability, error) {
-	type pkg struct {
-		Name      string `json:"name"`
-		Ecosystem string `json:"ecosystem"`
+	query := Query{Ecosystem: ecosystem, Name: name, Version: version}
+	request := osvQueryFrom(query)
+	var response osvResponse
+	if err := postOSV(Endpoint, request, &response, maxOSVResponseBytes); err != nil {
+		return nil, err
 	}
-	type query struct {
-		Version string `json:"version,omitempty"`
-		Package pkg    `json:"package"`
-	}
-	type response struct {
-		Vulns []osvVulnerability `json:"vulns"`
-	}
+	return vulnerabilitiesFrom(response.Vulns), nil
+}
 
-	body, _ := json.Marshal(query{
-		Version: version,
-		Package: pkg{Name: name, Ecosystem: ecosystem},
-	})
+func CheckBatch(queries []Query) ([][]Vulnerability, error) {
+	if len(queries) == 0 {
+		return nil, nil
+	}
+	endpoint, ok := osvBatchEndpoint(Endpoint)
+	if !ok {
+		return checkIndividually(queries)
+	}
+	results := make([][]Vulnerability, 0, len(queries))
+	for start := 0; start < len(queries); start += maxOSVBatchQueries {
+		end := min(start+maxOSVBatchQueries, len(queries))
+		batch, err := checkBatchChunk(endpoint, queries[start:end])
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, batch...)
+	}
+	return results, nil
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func checkBatchChunk(endpoint string, queries []Query) ([][]Vulnerability, error) {
+	requestQueries := make([]osvQuery, len(queries))
+	for index, query := range queries {
+		requestQueries[index] = osvQueryFrom(query)
+	}
+	request := osvBatchRequest{Queries: requestQueries}
+	var response osvBatchResponse
+	if err := postOSV(endpoint, request, &response, maxOSVBatchResponseBytes); err != nil {
+		return nil, err
+	}
+	if len(response.Results) != len(queries) {
+		return nil, fmt.Errorf("decode: expected %d batch results, got %d", len(queries), len(response.Results))
+	}
+	results := make([][]Vulnerability, len(response.Results))
+	for index, result := range response.Results {
+		results[index] = vulnerabilitiesFrom(result.Vulns)
+	}
+	return results, nil
+}
+
+func checkIndividually(queries []Query) ([][]Vulnerability, error) {
+	results := make([][]Vulnerability, len(queries))
+	for index, query := range queries {
+		vulnerabilities, err := Check(query.Ecosystem, query.Name, query.Version)
+		if err != nil {
+			return nil, err
+		}
+		results[index] = vulnerabilities
+	}
+	return results, nil
+}
+
+func osvQueryFrom(query Query) osvQuery {
+	packageInfo := osvPackage{Name: query.Name, Ecosystem: query.Ecosystem}
+	return osvQuery{Version: query.Version, Package: packageInfo}
+}
+
+func osvBatchEndpoint(endpoint string) (string, bool) {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || !strings.HasSuffix(parsed.Path, "/query") {
+		return "", false
+	}
+	parsed.Path = strings.TrimSuffix(parsed.Path, "/query") + "/querybatch"
+	return parsed.String(), true
+}
+
+func postOSV(endpoint string, payload, target any, limit int64) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("request: %w", err)
+	}
+	request, cancel, err := newOSVRequest(endpoint, body)
+	if err != nil {
+		return err
+	}
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "POST", Endpoint, bytes.NewReader(body))
+	response, err := httpClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("request: %w", err)
+		return fmt.Errorf("request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	defer response.Body.Close()
+	return decodeOSVHTTPResponse(response, target, limit)
+}
 
-	resp, err := httpClient.Do(req)
+func newOSVRequest(endpoint string, body []byte) (*http.Request, context.CancelFunc, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("request: %w", err)
+		cancel()
+		return nil, nil, fmt.Errorf("request: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("request: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
+	request.Header.Set("Content-Type", "application/json")
+	return request, cancel, nil
+}
 
-	var result response
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode: %w", err)
+func decodeOSVHTTPResponse(response *http.Response, target any, limit int64) error {
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
+		return fmt.Errorf("request: status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
 	}
+	if err := decodeOSVResponse(response.Body, target, limit); err != nil {
+		return fmt.Errorf("decode: %w", err)
+	}
+	return nil
+}
 
-	vulns := make([]Vulnerability, len(result.Vulns))
-	for i, v := range result.Vulns {
-		rating, score := extractSeverity(v.DatabaseSpecific.Severity, v.Severity)
-		vulns[i] = Vulnerability{ID: v.ID, Summary: v.Summary, Severity: rating, Score: score}
+func vulnerabilitiesFrom(source []osvVulnerability) []Vulnerability {
+	vulnerabilities := make([]Vulnerability, len(source))
+	for index, vulnerability := range source {
+		rating, score := extractSeverity(vulnerability.DatabaseSpecific.Severity, vulnerability.Severity)
+		vulnerabilities[index] = Vulnerability{
+			ID: vulnerability.ID, Summary: vulnerability.Summary, Severity: rating, Score: score,
+		}
 	}
-	return vulns, nil
+	return vulnerabilities
+}
+
+func decodeOSVResponse(body io.Reader, target any, limit int64) error {
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) > limit {
+		return fmt.Errorf("response exceeds %d bytes", limit)
+	}
+	return json.Unmarshal(data, target)
 }
 
 func extractSeverity(dbSeverity string, cvssEntries []severityEntry) (string, float64) {

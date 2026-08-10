@@ -118,7 +118,10 @@ func writeShellFixture(t *testing.T, path, content string) {
 func TestDetectRCFileZsh(t *testing.T) {
 	t.Setenv("SHELL", "/bin/zsh")
 	t.Setenv("HOME", t.TempDir())
-	rc := detectRCFile()
+	rc, err := detectRCFile()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.HasSuffix(rc, ".zshrc") {
 		t.Errorf("expected .zshrc, got %s", rc)
 	}
@@ -127,9 +130,19 @@ func TestDetectRCFileZsh(t *testing.T) {
 func TestDetectRCFileBash(t *testing.T) {
 	t.Setenv("SHELL", "/bin/bash")
 	t.Setenv("HOME", t.TempDir())
-	rc := detectRCFile()
+	rc, err := detectRCFile()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.HasSuffix(rc, ".bashrc") {
 		t.Errorf("expected .bashrc, got %s", rc)
+	}
+}
+
+func TestDetectRCFileRequiresHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	if _, err := detectRCFile(); err == nil {
+		t.Fatal("expected missing home directory to fail")
 	}
 }
 
@@ -315,6 +328,41 @@ func TestSetupWriteError(t *testing.T) {
 	}()
 
 	Setup()
+}
+
+func TestSetupPreservesUnreadableRCFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read files without read permission")
+	}
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+	rcPath := filepath.Join(dir, ".zshrc")
+	original := []byte("export IMPORTANT=value\n")
+	if err := os.WriteFile(rcPath, original, 0o200); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(rcPath, 0o600)
+
+	exitCode := 0
+	origExit := processExit
+	processExit = func(code int) { exitCode = code }
+	defer func() { processExit = origExit }()
+
+	Setup()
+	if exitCode != 1 {
+		t.Fatalf("expected setup to fail, got exit code %d", exitCode)
+	}
+	if err := os.Chmod(rcPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(rcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(original) {
+		t.Fatalf("expected RC file to remain unchanged, got %q", content)
+	}
 }
 
 func TestSetupDeclinesSystemScan(t *testing.T) {

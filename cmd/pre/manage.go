@@ -588,7 +588,7 @@ func searchDialogLines(ui manageUI, width int) []string {
 	return []string{
 		themed(theme.dialogTitle, fitLine(" search", width)),
 		themed(theme.dialog, fitLine(" /"+ui.search, width)),
-		themed(theme.dialogHelp, fitLine(" live filter   / or esc close   backspace edit   q quit", width)),
+		themed(theme.dialogHelp, fitLine(" live filter   / or esc close   backspace edit", width)),
 	}
 }
 
@@ -699,8 +699,6 @@ func handleListKey(key int, ui *manageUI, term manageTerminal, stdout, stderr io
 
 func handleSearchKey(key int, ui *manageUI) bool {
 	switch key {
-	case 'q':
-		return true
 	case keyEsc, keyEnter, '/':
 		ui.mode = modeList
 	case keyBackspace:
@@ -708,9 +706,9 @@ func handleSearchKey(key int, ui *manageUI) bool {
 			ui.search = ui.search[:len(ui.search)-1]
 			ui.applyFilter()
 		}
-	case keyUp, 'k':
+	case keyUp:
 		ui.moveSelection(-1)
-	case keyDown, 'j':
+	case keyDown:
 		ui.moveSelection(1)
 	default:
 		if key >= 32 && key < 127 {
@@ -1533,10 +1531,6 @@ func packageWithVersion(mgr *manager.Manager, spec, version string) string {
 	default:
 		return name + "@" + version
 	}
-}
-
-func runPreManagerCommand(mgr *manager.Manager, args []string, stdout, stderr io.Writer) error {
-	return runPreManagerCommandWithInput(mgr, args, nil, stdout, stderr)
 }
 
 func runPreManagerCommandWithInput(mgr *manager.Manager, args []string, stdin io.Reader, stdout, stderr io.Writer) error {

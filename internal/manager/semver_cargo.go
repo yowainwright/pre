@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+var cargoWildcardReplacer = strings.NewReplacer("X", "*", "x", "*")
+
 type crateVersionInfo struct {
 	Num    string `json:"num"`
 	Yanked bool   `json:"yanked"`
@@ -281,7 +283,7 @@ func cargoPartialUpperBound(partial cargoPartialVersion) cargoSemver {
 }
 
 func cargoWildcardMatches(comparator string, version cargoSemver) bool {
-	normalized := strings.NewReplacer("X", "*", "x", "*").Replace(comparator)
+	normalized := cargoWildcardReplacer.Replace(comparator)
 	prefix := strings.TrimSuffix(normalized, ".*")
 	if prefix == "*" || prefix == "" {
 		return true

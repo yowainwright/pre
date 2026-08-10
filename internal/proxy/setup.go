@@ -97,9 +97,19 @@ const shellCommandParserText = `  local _pre_arg
 `
 
 func Setup() {
-	rcFile := detectRCFile()
+	rcFile, err := detectRCFile()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pre setup: %v\n", err)
+		processExit(1)
+		return
+	}
 
-	content, _ := os.ReadFile(rcFile)
+	content, err := os.ReadFile(rcFile)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "pre setup: %v\n", err)
+		processExit(1)
+		return
+	}
 	alreadyInstalled := strings.Contains(string(content), shellHookStart)
 	if alreadyInstalled {
 		cleaned, removed := removeShellHookBlock(string(content))
@@ -215,7 +225,10 @@ func Teardown() error {
 }
 
 func ShellHookStatus() (string, bool) {
-	rcFile := detectRCFile()
+	rcFile, err := detectRCFile()
+	if err != nil {
+		return "", false
+	}
 	content, err := os.ReadFile(rcFile)
 	if err != nil {
 		return rcFile, false
@@ -224,7 +237,10 @@ func ShellHookStatus() (string, bool) {
 }
 
 func RemoveShellHooks() (string, bool, error) {
-	rcFile := detectRCFile()
+	rcFile, err := detectRCFile()
+	if err != nil {
+		return "", false, err
+	}
 	content, err := os.ReadFile(rcFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -320,11 +336,14 @@ func joinShellHookParts(before, after string) string {
 	}
 }
 
-func detectRCFile() string {
-	home, _ := os.UserHomeDir()
+func detectRCFile() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
+	}
 	isZsh := strings.Contains(os.Getenv("SHELL"), "zsh")
 	if isZsh {
-		return filepath.Join(home, ".zshrc")
+		return filepath.Join(home, ".zshrc"), nil
 	}
-	return filepath.Join(home, ".bashrc")
+	return filepath.Join(home, ".bashrc"), nil
 }

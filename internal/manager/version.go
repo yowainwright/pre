@@ -108,7 +108,7 @@ func decodeCrateVersion(resp *http.Response, name, requirement string) (string, 
 }
 
 func brewVersion(name string) (string, error) {
-	out, err := runCmd("brew", "info", "--json=v2", name)
+	out, err := runCmd("brew", "info", "--json=v2", "--", name)
 	if err != nil {
 		return "", fmt.Errorf("brew info: %w", err)
 	}
@@ -134,7 +134,7 @@ func brewPackageVersion(info brewInfo) string {
 }
 
 func npmVersion(pkg string) (string, error) {
-	out, err := runCmd("npm", "view", pkg, "version", "--json")
+	out, err := runCmd("npm", "view", "--json", "--", pkg, "version")
 	if err != nil {
 		return "", fmt.Errorf("npm: version unavailable")
 	}

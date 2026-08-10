@@ -62,6 +62,20 @@ func TestReadPackageLockJSONPreservesMultipleVersions(t *testing.T) {
 	}
 }
 
+func TestReadPackageLockJSONUsesDeclaredPackageName(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/package-lock.json", []byte(`{
+		"packages": {
+			"node_modules/lodash": {"name": "evil-pkg", "version": "4.17.21"}
+		}
+	}`), 0o644)
+
+	packages := readPackageLockJSON(dir)
+	if len(packages) != 1 || packages[0] != "evil-pkg@4.17.21" {
+		t.Fatalf("unexpected package-lock packages: %v", packages)
+	}
+}
+
 func TestReadPackageLockJSONV1Dependencies(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(dir+"/package-lock.json", []byte(`{
@@ -294,6 +308,22 @@ func TestReadBunLockNewFormat(t *testing.T) {
 	}
 }
 
+func TestReadBunLockNestedScopedPackage(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/bun.lock", []byte(`{
+  "lockfileVersion": 1,
+  "packages": {
+    "next/@babel/core": ["@babel/core@7.26.10", {}, "sha512-abc"]
+  }
+}
+`), 0o644)
+
+	packages := readBunLock(dir)
+	if len(packages) != 1 || packages[0] != "@babel/core@7.26.10" {
+		t.Fatalf("unexpected Bun packages: %v", packages)
+	}
+}
+
 func TestReadBunLockMissing(t *testing.T) {
 	if readBunLock(t.TempDir()) != nil {
 		t.Error("expected nil for missing file")
@@ -370,6 +400,23 @@ packages:
 	m := toSet(pkgs)
 	if !m["lodash@4.17.21"] || !m["lodash@4.17.20"] {
 		t.Errorf("expected both lodash versions, got %v", pkgs)
+	}
+}
+
+func TestReadPNPMLockStripsPeerDependencySuffix(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/pnpm-lock.yaml", []byte(`lockfileVersion: '9.0'
+
+packages:
+  react-dom@18.2.0(react@18.2.0):
+    resolution: {integrity: sha512-a}
+  '@scope/pkg@1.0.0(react@18.2.0)':
+    resolution: {integrity: sha512-b}
+`), 0o644)
+
+	packages := toSet(readPNPMLock(dir))
+	if len(packages) != 2 || !packages["react-dom@18.2.0"] || !packages["@scope/pkg@1.0.0"] {
+		t.Fatalf("unexpected pnpm packages: %v", packages)
 	}
 }
 

@@ -3,6 +3,8 @@ package proxy
 import (
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/yowainwright/pre/internal/display"
 )
@@ -10,7 +12,8 @@ import (
 func renderTree(ecosystem string, results []scanResult) string {
 	maxLen := 0
 	for _, r := range results {
-		if n := len(r.label); n > maxLen {
+		label := terminalText(r.label)
+		if n := utf8.RuneCountInString(label); n > maxLen {
 			maxLen = n
 		}
 	}
@@ -24,7 +27,9 @@ func renderTree(ecosystem string, results []scanResult) string {
 	}
 
 	logo := display.Logo()
-	header := display.Cyan(display.IconInfo) + " " + display.Cyan(fmt.Sprintf("checking %d package(s) (%s)", len(results), ecosystem))
+	safeEcosystem := terminalText(ecosystem)
+	headerText := fmt.Sprintf("checking %d package(s) (%s)", len(results), safeEcosystem)
+	header := display.Cyan(display.IconInfo) + " " + display.Cyan(headerText)
 	sys := loadSystemStatsFn()
 	return logo + "\n" + header + "\n" + display.Tree(nodes) + display.HRule(20) + "\n" + renderSummary(results) + "\n" + renderSystemLine(sys) + "\n"
 }
@@ -44,27 +49,40 @@ func renderCriticalDetail(results []scanResult) string {
 			if v.Score > 0 {
 				score = fmt.Sprintf(" %.1f", v.Score)
 			}
-			lines = append(lines, fmt.Sprintf("%-30s %s%s  %s", r.label, v.ID, score, v.Severity))
+			label := terminalText(r.label)
+			id := terminalText(v.ID)
+			severity := terminalText(v.Severity)
+			line := fmt.Sprintf("%-30s %s%s  %s", label, id, score, severity)
+			lines = append(lines, line)
 		}
 	}
 	return display.Box(display.Red("Critical"), lines) + "\n"
 }
 
 func nodeLabel(r scanResult, maxLen int) string {
-	padded := display.Pad(r.label, maxLen)
+	label := terminalText(r.label)
+	padded := display.Pad(label, maxLen)
 	return display.Bold(padded) + "  " + nodeStatus(r)
 }
 
 func nodeStatus(r scanResult) string {
 	switch {
 	case r.err != nil:
-		return display.Yellow(display.IconWarning) + " " + r.err.Error()
+		icon := display.Yellow(display.IconWarning)
+		message := terminalText(r.err.Error())
+		return icon + " " + message
 	case len(r.vulns) > 0:
-		return display.Red(display.IconError) + " " + display.Red(fmt.Sprintf("%d vulnerabilit(ies)", len(r.vulns)))
+		icon := display.Red(display.IconError)
+		count := fmt.Sprintf("%d vulnerabilit(ies)", len(r.vulns))
+		message := display.Red(count)
+		return icon + " " + message
 	case r.cached:
-		return display.Green(display.IconSuccess) + " " + display.Dim("clean (cached)")
+		icon := display.Green(display.IconSuccess)
+		message := display.Dim("clean (cached)")
+		return icon + " " + message
 	default:
-		return display.Green(display.IconSuccess) + " clean"
+		icon := display.Green(display.IconSuccess)
+		return icon + " clean"
 	}
 }
 
@@ -112,7 +130,20 @@ func nodeChildren(r scanResult) []string {
 		if v.Score > 0 {
 			score = fmt.Sprintf(" %.1f", v.Score)
 		}
-		children[i] = fmt.Sprintf("%-20s%s  %s", v.ID, score, v.Summary)
+		id := terminalText(v.ID)
+		summary := terminalText(v.Summary)
+		children[i] = fmt.Sprintf("%-20s%s  %s", id, score, summary)
 	}
 	return children
+}
+
+func terminalText(value string) string {
+	return strings.Map(terminalRune, value)
+}
+
+func terminalRune(char rune) rune {
+	if unicode.IsControl(char) || unicode.In(char, unicode.Cf) {
+		return '�'
+	}
+	return char
 }

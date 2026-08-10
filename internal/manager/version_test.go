@@ -11,7 +11,9 @@ import (
 
 func TestBrewVersionSuccess(t *testing.T) {
 	orig := runCmd
+	var requested []string
 	runCmd = func(name string, args ...string) ([]byte, error) {
+		requested = args
 		return []byte(`{"formulae":[{"versions":{"stable":"1.25.0"}}]}`), nil
 	}
 	defer func() { runCmd = orig }()
@@ -22,6 +24,10 @@ func TestBrewVersionSuccess(t *testing.T) {
 	}
 	if ver != "1.25.0" {
 		t.Errorf("expected '1.25.0', got %q", ver)
+	}
+	wantArgs := []string{"info", "--json=v2", "--", "nginx"}
+	if !slices.Equal(requested, wantArgs) {
+		t.Errorf("expected safe brew arguments %v, got %v", wantArgs, requested)
 	}
 }
 
@@ -109,7 +115,7 @@ func TestNpmVersionSelectsHighestMatchingVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	wantArgs := []string{"view", "example@^1", "version", "--json"}
+	wantArgs := []string{"view", "--json", "--", "example@^1", "version"}
 	if ver != "1.9.0" || !slices.Equal(requested, wantArgs) {
 		t.Errorf("expected range query to resolve 1.9.0, got version=%q args=%v", ver, requested)
 	}

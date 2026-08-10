@@ -119,5 +119,10 @@ check "check_hooks installs pre-commit"  "0" "$(exit_code test -f "$tmp_dir/.git
 check "check_hooks installs post-merge"  "0" "$(exit_code test -f "$tmp_dir/.git/hooks/post-merge")"
 rm -rf "$tmp_dir"
 
+# secrets target
+check "secrets requires a token" "0" "$(exit_code grep -Fq 'test -n "$$HOMEBREW_TAP_TOKEN"' Makefile)"
+check "secrets passes token through stdin" "0" "$(exit_code grep -Fq "printf '%s'" Makefile)"
+check "secrets avoids --body argv" "1" "$(exit_code grep -Fq 'gh secret set --body' Makefile)"
+
 printf "\n%d passed, %d failed\n" "$passed" "$failed"
 [ "$failed" -eq 0 ]

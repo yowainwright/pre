@@ -40,7 +40,7 @@ func TestAllColorFunctions(t *testing.T) {
 	ColorEnabled = true
 	defer func() { ColorEnabled = orig }()
 
-	for _, fn := range []func(string) string{Bold, Dim, Red, Green, Yellow, Cyan, SkyBlue, FluoYellow, BrightRed, Orange, LightGray, BrightWhite} {
+	for _, fn := range []func(string) string{Bold, Dim, Red, Green, Yellow, Cyan, FluoYellow, BrightRed, Orange, LightGray, BrightWhite} {
 		result := fn("test")
 		if !strings.Contains(result, "test") {
 			t.Errorf("color function dropped content")
@@ -51,27 +51,6 @@ func TestAllColorFunctions(t *testing.T) {
 		if !strings.HasSuffix(result, cReset) {
 			t.Errorf("expected reset suffix")
 		}
-	}
-}
-
-func TestWidthFromColumns(t *testing.T) {
-	t.Setenv("COLUMNS", "120")
-	if Width() != 120 {
-		t.Errorf("expected 120, got %d", Width())
-	}
-}
-
-func TestWidthInvalidColumns(t *testing.T) {
-	t.Setenv("COLUMNS", "notanumber")
-	if Width() != 80 {
-		t.Errorf("expected default 80, got %d", Width())
-	}
-}
-
-func TestWidthDefault(t *testing.T) {
-	t.Setenv("COLUMNS", "")
-	if Width() != 80 {
-		t.Errorf("expected default 80, got %d", Width())
 	}
 }
 

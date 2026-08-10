@@ -158,7 +158,8 @@ test-e2e-docker: verify-e2e-test test-e2e-build
 	docker run --rm -it $(E2E_IMAGE) "$(E2E_TEST)"
 
 secrets:
-	gh secret set HOMEBREW_TAP_TOKEN --body "$$HOMEBREW_TAP_TOKEN"
+	@test -n "$$HOMEBREW_TAP_TOKEN"
+	@printf '%s' "$$HOMEBREW_TAP_TOKEN" | gh secret set HOMEBREW_TAP_TOKEN
 
 setup:
 	mise install

@@ -6,19 +6,21 @@ Security guardrail for package managers. Sits between your shell and `npm`, `pip
 [![Release](https://img.shields.io/github/v/release/yowainwright/pre)](https://github.com/yowainwright/pre/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Zero config. Zero dependencies. One binary.
+Zero config. One runtime binary.
 
 ## Install
+
+<!-- install methods and verification behavior from install.sh and release configuration -->
 
 ```sh
 # Homebrew
 brew install --cask yowainwright/tap/pre
 
-# or curl (macOS + Linux)
+# or curl (macOS + Linux; requires cosign on PATH)
 curl -fsSL https://raw.githubusercontent.com/yowainwright/pre/main/install.sh | sh
 ```
 
-Every release ships with SHA256 checksums and a cosign signature. The install script verifies the checksum automatically; if `cosign` is on your PATH, signature verification must pass too.
+Every release ships with SHA256 checksums and a cosign signature. The curl installer requires `cosign` and verifies both before writing the binary. A missing bundle, missing `cosign` binary, or failed signature blocks installation.
 
 The macOS cask is checksum-verified but not notarized; its install hook removes quarantine only from the staged `pre` binary.
 
@@ -120,6 +122,8 @@ flowchart TD
 
 ### Lockfile-first scanning
 
+<!-- lockfile support and source restrictions from internal/manager -->
+
 `pre` reads existing lockfiles for exact pinned versions, including transitive dependencies, before falling back to manifests:
 
 | Manager | Lockfiles |
@@ -150,6 +154,8 @@ Intercepted commands:
 | poetry | `add`, `update`, `install` |
 
 When an install creates or changes a lockfile, newly resolved transitive dependencies are not knowable in advance. The requested packages are checked first and the resulting lockfile is scanned in the background after a successful install unless `PRE_NO_BACKGROUND=1` is set.
+
+npm lockfile entries must match their `node_modules` package identity and resolve from `https://registry.npmjs.org`. Aliases, links, local files, tarball URLs, and custom registries block the command because OSV cannot identify their contents reliably; `PRE_DISABLE=1` is the explicit bypass.
 
 Cargo scans crates.io dependencies from `Cargo.lock` or `Cargo.toml` and resolves version requirements against non-yanked crates.io releases. Path, Git, custom-registry, alternate-default-registry, offline resolution, resolution-changing unstable options, `--config`, `--lockfile-path`, and resolution-changing Cargo config block the command because OSV cannot identify them reliably as crates.io packages; `PRE_DISABLE=1` is the explicit bypass.
 
@@ -218,23 +224,27 @@ Entries matching a built-in `name` replace it; new names extend the list.
 
 ## Security model
 
+<!-- security behavior from internal/proxy, internal/manager, and install.sh -->
+
 - Queries [OSV.dev](https://osv.dev) — Google-operated, free, open
 - Only package name + version leave your machine — no code uploaded
 - Existing lockfiles provide exact pre-install checks for transitive dependencies
 - OSV, version-resolution, and detected project-read errors block the package manager; `PRE_DISABLE=1` is an explicit fail-open override
 - Newly resolved transitive dependencies are checked after installation
-- Release checksums signed with cosign (Sigstore keyless) on every release
+- Curl installs require successful cosign verification of the release checksums
 - SHA256 checksums for all platforms
 
 `pre` is a vulnerability guardrail, not a sandbox or a complete software-supply-chain policy. Keep lockfiles, review dependency changes, and run ecosystem-native audit tooling in CI.
 
 ## Update pre
 
+<!-- self-update behavior from cmd/pre and install.sh -->
+
 ```sh
 pre self update
 ```
 
-Homebrew installs run `brew upgrade --cask pre`. Curl/manual installs rerun the checksum-verifying installer into the current binary directory.
+Homebrew installs run `brew upgrade --cask pre`. Curl/manual installs rerun the checksum-and-signature-verifying installer into the current binary directory and require `cosign` on `PATH`.
 
 ## Uninstall pre
 

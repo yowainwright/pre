@@ -53,6 +53,11 @@ func cargoMgr() *manager.Manager {
 	return &manager.Manager{Name: "cargo", Ecosystem: "crates.io", InstallCmds: commands}
 }
 
+func scanSingleResult(mgr *manager.Manager, spec string, c cache.Cache, allowMissing bool) scanResult {
+	results := scanAllWithPolicy(mgr, []string{spec}, c, allowMissing)
+	return results[0]
+}
+
 func withExecFn(fn func(string, []string)) func() {
 	orig := ExecFn
 	ExecFn = fn
@@ -61,8 +66,29 @@ func withExecFn(fn func(string, []string)) func() {
 
 func withSecurityCheck(fn func(string, string, string) ([]security.Vulnerability, error)) func() {
 	orig := securityCheckFn
+	origBatch := securityBatchCheckFn
 	securityCheckFn = fn
-	return func() { securityCheckFn = orig }
+	securityBatchCheckFn = func(queries []security.Query) ([][]security.Vulnerability, error) {
+		results := make([][]security.Vulnerability, len(queries))
+		for index, query := range queries {
+			vulnerabilities, err := fn(query.Ecosystem, query.Name, query.Version)
+			if err != nil {
+				return nil, err
+			}
+			results[index] = vulnerabilities
+		}
+		return results, nil
+	}
+	return func() {
+		securityCheckFn = orig
+		securityBatchCheckFn = origBatch
+	}
+}
+
+func withSecurityBatchCheck(fn func([]security.Query) ([][]security.Vulnerability, error)) func() {
+	orig := securityBatchCheckFn
+	securityBatchCheckFn = fn
+	return func() { securityBatchCheckFn = orig }
 }
 
 func withResolveVersion(fn func(*manager.Manager, string) (string, error)) func() {
@@ -75,12 +101,6 @@ func withLoadCache(fn func() cache.Cache) func() {
 	orig := loadCacheFn
 	loadCacheFn = fn
 	return func() { loadCacheFn = orig }
-}
-
-func withSaveCache(fn func(cache.Cache)) func() {
-	orig := saveCacheFn
-	saveCacheFn = fn
-	return func() { saveCacheFn = orig }
 }
 
 func withUpdateCache(fn func(func(cache.Cache))) func() {
@@ -160,7 +180,6 @@ func withWorkingDir(t *testing.T, dir string) func() {
 }
 
 func emptyCache() cache.Cache      { return make(cache.Cache) }
-func noopSave(cache.Cache)         {}
 func noopUpdate(func(cache.Cache)) {}
 
 func captureStdout(t *testing.T, fn func()) string {
@@ -281,6 +300,24 @@ func TestInterceptInvalidManifestBlocks(t *testing.T) {
 	})
 	if execCalled {
 		t.Error("expected invalid manifest to block npm ci")
+	}
+}
+
+func TestInterceptUnsafePackageLockBlocks(t *testing.T) {
+	dir := t.TempDir()
+	lockfile := `{"packages":{"node_modules/lodash":{"name":"evil-pkg","version":"4.17.21","resolved":"https://attacker.example/evil.tgz"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte(lockfile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer withWorkingDir(t, dir)()
+	execCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
+
+	expectProcessExit(t, 1, func() {
+		Intercept(npmMgr(), []string{"ci"})
+	})
+	if execCalled {
+		t.Error("expected unsafe package lock to block npm ci")
 	}
 }
 
@@ -1362,7 +1399,7 @@ func TestScanPackageVersionInSpec(t *testing.T) {
 		return nil, nil
 	})()
 
-	r := scanPackage(npmMgr(), "react@18.0.0", make(cache.Cache))
+	r := scanSingleResult(npmMgr(), "react@18.0.0", make(cache.Cache), true)
 	if r.err != nil || len(r.vulns) != 0 {
 		t.Errorf("expected clean result, got err=%v vulns=%d", r.err, len(r.vulns))
 	}
@@ -1376,7 +1413,7 @@ func TestScanPackageResolvesVersion(t *testing.T) {
 		return "17.0.0", nil
 	})()
 
-	r := scanPackage(npmMgr(), "react", make(cache.Cache))
+	r := scanSingleResult(npmMgr(), "react", make(cache.Cache), true)
 	if r.version != "17.0.0" {
 		t.Errorf("expected resolved version 17.0.0, got %q", r.version)
 	}
@@ -1396,7 +1433,7 @@ func TestScanPackageResolvesLatestVersionTag(t *testing.T) {
 		return "18.3.1", nil
 	})()
 
-	r := scanPackage(npmMgr(), "react@latest", make(cache.Cache))
+	r := scanSingleResult(npmMgr(), "react@latest", make(cache.Cache), true)
 	if !r.updated {
 		t.Error("expected latest tag to trigger version resolution")
 	}
@@ -1419,7 +1456,7 @@ func TestScanPackageResolvesNPMDistTag(t *testing.T) {
 		return "19.0.0-rc.1", nil
 	})()
 
-	r := scanPackage(npmMgr(), "react@next", make(cache.Cache))
+	r := scanSingleResult(npmMgr(), "react@next", make(cache.Cache), true)
 	if !r.updated {
 		t.Error("expected dist-tag to trigger version resolution")
 	}
@@ -1442,7 +1479,7 @@ func TestScanPackageGoBranchDoesNotResolveAsLatest(t *testing.T) {
 	})()
 
 	c := make(cache.Cache)
-	r := scanPackage(goMgr(), "golang.org/x/tools/gopls@master", c)
+	r := scanSingleResult(goMgr(), "golang.org/x/tools/gopls@master", c, true)
 	if resolveCalled {
 		t.Error("expected floating Go branch to avoid latest-version resolution")
 	}
@@ -1471,7 +1508,7 @@ func TestScanPackageResolvesHomebrewVersionedFormula(t *testing.T) {
 		return "3.3.1", nil
 	})()
 
-	r := scanPackage(brewMgr(), "openssl@3", make(cache.Cache))
+	r := scanSingleResult(brewMgr(), "openssl@3", make(cache.Cache), true)
 	if !r.updated {
 		t.Error("expected versioned formula name to resolve via brew info")
 	}
@@ -1485,7 +1522,7 @@ func TestScanPackageResolutionError(t *testing.T) {
 		return "", errors.New("resolution failed")
 	})()
 
-	r := scanPackage(npmMgr(), "react", make(cache.Cache))
+	r := scanSingleResult(npmMgr(), "react", make(cache.Cache), true)
 	if r.err == nil {
 		t.Error("expected error on resolution failure")
 	}
@@ -1501,28 +1538,12 @@ func TestScanPackageCacheHit(t *testing.T) {
 	c := make(cache.Cache)
 	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
 
-	r := scanPackage(npmMgr(), "react@18.0.0", c)
+	r := scanSingleResult(npmMgr(), "react@18.0.0", c, true)
 	if !r.cached {
 		t.Error("expected cached=true on cache hit")
 	}
 	if securityCalled {
 		t.Error("expected security check skipped on cache hit")
-	}
-}
-
-func TestScanPackageSetsCache(t *testing.T) {
-	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
-		return nil, nil
-	})()
-	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
-		return "18.0.0", nil
-	})()
-
-	c := make(cache.Cache)
-	scanPackage(npmMgr(), "react", c)
-
-	if !cache.Hit(c, cache.Key("npm", "react", "18.0.0")) {
-		t.Error("expected cache populated after clean scan")
 	}
 }
 
@@ -1537,7 +1558,7 @@ func TestScanPackageEmptyResolvedVersion(t *testing.T) {
 	})()
 
 	c := make(cache.Cache)
-	r := scanPackage(npmMgr(), "react", c)
+	r := scanSingleResult(npmMgr(), "react", c, true)
 	if !errors.Is(r.err, errMissingVersion) {
 		t.Errorf("expected missing-version error, got %v", r.err)
 	}
@@ -1558,10 +1579,10 @@ func TestScanPackageVulnsNotCached(t *testing.T) {
 	})()
 
 	c := make(cache.Cache)
-	scanPackage(npmMgr(), "lodash", c)
+	r := scanSingleResult(npmMgr(), "lodash", c, true)
 
-	if cache.Hit(c, cache.Key("npm", "lodash", "4.17.4")) {
-		t.Error("expected vulnerable package NOT cached")
+	if shouldCacheScanResult(r) {
+		t.Error("expected vulnerable package to remain uncacheable")
 	}
 }
 

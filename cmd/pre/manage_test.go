@@ -87,6 +87,19 @@ func TestManageUIStateTransitions(t *testing.T) {
 	}
 }
 
+func TestManageSearchAcceptsCommandKeys(t *testing.T) {
+	ui := newManageUI(testPackageInventory())
+	ui.toggleSearch()
+	for _, key := range []int{'j', 'q', 'k'} {
+		if quit := handleSearchKey(key, &ui); quit {
+			t.Fatal("search input should not quit")
+		}
+	}
+	if ui.search != "jqk" {
+		t.Fatalf("expected search input jqk, got %q", ui.search)
+	}
+}
+
 func TestManageUIInputValidationAndDialogs(t *testing.T) {
 	ui := newManageUI(testPackageInventory())
 
@@ -609,7 +622,7 @@ func TestTerminalSizeAndTimeoutHelpers(t *testing.T) {
 	}
 }
 
-func TestRunPreManagerCommandFallbackExecutable(t *testing.T) {
+func TestExecutePackageActionFallbackExecutable(t *testing.T) {
 	defer withExecutablePath(func() (string, error) { return "", errors.New("no executable") })()
 	var gotName string
 	var gotArgs []string
@@ -619,7 +632,8 @@ func TestRunPreManagerCommandFallbackExecutable(t *testing.T) {
 		return nil
 	})()
 
-	if err := runPreManagerCommand(mustManager(t, "npm"), []string{"install", "react"}, io.Discard, io.Discard); err != nil {
+	req := packageActionReq{Action: actionInstall, Manager: mustManager(t, "npm"), Package: "react"}
+	if err := executePackageAction(req, io.Discard, io.Discard); err != nil {
 		t.Fatalf("unexpected command error: %v", err)
 	}
 	if gotName != "pre" || strings.Join(gotArgs, " ") != "npm install react" {
@@ -918,10 +932,13 @@ func TestEmptyDash(t *testing.T) {
 	}
 }
 
-func TestHandleSearchKeyQuit(t *testing.T) {
+func TestHandleSearchKeyAcceptsQ(t *testing.T) {
 	ui := newManageUI(testPackageInventory())
-	if !handleSearchKey('q', &ui) {
-		t.Fatal("expected q to return true (quit)")
+	if handleSearchKey('q', &ui) {
+		t.Fatal("expected q to update the search")
+	}
+	if ui.search != "q" {
+		t.Fatalf("expected q search, got %q", ui.search)
 	}
 }
 

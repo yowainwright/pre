@@ -18,6 +18,9 @@ are scanned automatically. Scripts and CI can call `pre <manager> ...`.
 Supported managers: brew, npm, pnpm, bun, go, cargo, pip, pip3, uv, poetry.
 Common lockfile installs include `npm ci`, `cargo fetch`, `cargo update`,
 `uv sync`, `uv pip install`, and `poetry install`.
+npm package-lock entries must match their package path and resolve from the
+official npm registry. Aliases, links, local sources, and custom registries
+require `PRE_DISABLE=1`.
 Cargo scanning supports crates.io only. Path, Git, alternate-registry,
 `--config`, `--lockfile-path`, and resolution-changing config require
 `PRE_DISABLE=1`.

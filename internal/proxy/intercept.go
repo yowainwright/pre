@@ -19,9 +19,9 @@ var (
 	stdinReader               io.Reader = os.Stdin
 	ExecFn                              = execReal
 	securityCheckFn                     = security.Check
+	securityBatchCheckFn                = security.CheckBatch
 	resolveVersionFn                    = manager.ResolveVersion
 	loadCacheFn                         = cache.Load
-	saveCacheFn                         = cache.Save
 	updateCacheFn                       = cache.Update
 	readManifestFn                      = manager.ReadManifest
 	readManifestDirFn                   = manager.ReadManifestDir
@@ -93,17 +93,11 @@ func Intercept(mgr *manager.Manager, args []string) {
 
 	fresh := make(cache.Cache)
 	for _, r := range results {
-		if len(r.vulns) == 0 && r.version != "" && r.err == nil && r.cacheable && !r.cached {
+		if shouldCacheScanResult(r) {
 			cache.Set(fresh, cache.Key(mgr.Ecosystem, r.name, r.version))
 		}
 	}
-	if len(fresh) > 0 {
-		updateCacheFn(func(current cache.Cache) {
-			for key := range fresh {
-				cache.Set(current, key)
-			}
-		})
-	}
+	storeFreshScanResults(fresh)
 
 	level := outputLevel(results)
 	if quietEnabled() && level == outputQuiet {

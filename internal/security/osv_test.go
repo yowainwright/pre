@@ -1,7 +1,9 @@
 package security
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -202,6 +204,128 @@ func TestCheckInvalidJSON(t *testing.T) {
 	_, err := Check("npm", "react", "18.0.0")
 	if err == nil {
 		t.Error("expected error for invalid JSON response")
+	}
+}
+
+func TestCheckRejectsOversizedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprint(maxOSVResponseBytes+1))
+		_, _ = io.CopyN(w, zeroReader{}, maxOSVResponseBytes+1)
+	}))
+	defer srv.Close()
+	origEndpoint := Endpoint
+	Endpoint = srv.URL
+	defer func() { Endpoint = origEndpoint }()
+
+	if _, err := Check("npm", "react", "18.0.0"); err == nil {
+		t.Fatal("expected oversized OSV response to fail")
+	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(buffer []byte) (int, error) {
+	for index := range buffer {
+		buffer[index] = ' '
+	}
+	return len(buffer), nil
+}
+
+type osvBatchTestHandler struct {
+	requests             int
+	batchSizes           []int
+	includeVulnerability bool
+}
+
+func (handler *osvBatchTestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	handler.requests++
+	var payload osvBatchRequest
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+	handler.batchSizes = append(handler.batchSizes, len(payload.Queries))
+	results := make([]osvResponse, len(payload.Queries))
+	if handler.includeVulnerability && len(results) > 0 {
+		vulnerability := osvVulnerability{ID: "CVE-2026-1234", Summary: "batch test"}
+		results[0].Vulns = []osvVulnerability{vulnerability}
+	}
+	_ = json.NewEncoder(writer).Encode(osvBatchResponse{Results: results})
+}
+
+type osvSingleTestHandler struct {
+	requests int
+}
+
+func (handler *osvSingleTestHandler) ServeHTTP(writer http.ResponseWriter, _ *http.Request) {
+	handler.requests++
+	_, _ = fmt.Fprintln(writer, `{"vulns":null}`)
+}
+
+func TestCheckBatch(t *testing.T) {
+	handler := &osvBatchTestHandler{includeVulnerability: true}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	originalEndpoint := Endpoint
+	Endpoint = server.URL + "/v1/query"
+	defer func() { Endpoint = originalEndpoint }()
+
+	first := Query{Ecosystem: "npm", Name: "react", Version: "18.0.0"}
+	second := Query{Ecosystem: "PyPI", Name: "requests", Version: "2.31.0"}
+	results, err := CheckBatch([]Query{first, second})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if handler.requests != 1 || len(results) != 2 {
+		t.Fatalf("expected one request and two results, got %d and %d", handler.requests, len(results))
+	}
+	if len(results[0]) != 1 || results[0][0].ID != "CVE-2026-1234" {
+		t.Fatalf("unexpected first result: %+v", results[0])
+	}
+}
+
+func TestCheckBatchChunksQueries(t *testing.T) {
+	handler := &osvBatchTestHandler{}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	originalEndpoint := Endpoint
+	Endpoint = server.URL + "/v1/query"
+	defer func() { Endpoint = originalEndpoint }()
+
+	queries := make([]Query, maxOSVBatchQueries+1)
+	for index := range queries {
+		queries[index].Ecosystem = "npm"
+		queries[index].Name = fmt.Sprintf("package-%d", index)
+		queries[index].Version = "1.0.0"
+	}
+	results, err := CheckBatch(queries)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if handler.requests != 2 || len(results) != len(queries) {
+		t.Fatalf("expected two requests and %d results, got %d and %d", len(queries), handler.requests, len(results))
+	}
+	if handler.batchSizes[0] != maxOSVBatchQueries || handler.batchSizes[1] != 1 {
+		t.Fatalf("unexpected batch sizes: %v", handler.batchSizes)
+	}
+}
+
+func TestCheckBatchFallsBackForCustomEndpoint(t *testing.T) {
+	handler := &osvSingleTestHandler{}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	originalEndpoint := Endpoint
+	Endpoint = server.URL
+	defer func() { Endpoint = originalEndpoint }()
+
+	first := Query{Ecosystem: "npm", Name: "react", Version: "18.0.0"}
+	second := Query{Ecosystem: "npm", Name: "lodash", Version: "4.17.21"}
+	results, err := CheckBatch([]Query{first, second})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if handler.requests != 2 || len(results) != 2 {
+		t.Fatalf("expected two requests and results, got %d and %d", handler.requests, len(results))
 	}
 }
 

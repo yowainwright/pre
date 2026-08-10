@@ -44,6 +44,15 @@ check "detect_arch rejects unknown" "1"            "$(exit_code detect_arch "ris
 # resolve_version
 check "resolve_version pinned"       "1.2.3" "$(resolve_version "1.2.3" "any/repo")"
 check "resolve_version custom repo"  "0.9.0" "$(resolve_version "0.9.0" "other/repo")"
+check "fetch_latest_version propagates failure" "1" "$(
+  (curl() { return 1; }; exit_code_quiet fetch_latest_version "repo")
+)"
+check "fetch_latest_version rejects missing tag" "1" "$(
+  (curl() { printf '{"message":"rate limited"}'; }; exit_code_quiet fetch_latest_version "repo")
+)"
+check "fetch_latest_version parses tag" "1.2.3" "$(
+  (curl() { printf '{"tag_name":"v1.2.3"}'; }; fetch_latest_version "repo")
+)"
 
 # build_url
 check "build_url" \
@@ -71,7 +80,7 @@ rm -f "$tmp"
 tmp="$(mktemp)"
 printf "hello" > "$tmp"
 good_sum="$(shasum -a 256 "$tmp" | awk '{print $1}')"
-bad_sum="0000000000000000000000000000000000000000000000000000000000000000"
+bad_sum="$(printf '%064d' 0)"
 check "verify_checksum passes" "0" "$(exit_code verify_checksum "$tmp" "$good_sum")"
 check "verify_checksum fails"  "1" "$(exit_code verify_checksum "$tmp" "$bad_sum")"
 rm -f "$tmp"
@@ -94,6 +103,37 @@ chmod +x "${tmp_dir}/cosign"
 check "verify_cosign fails" "1" "$(exit_code_quiet verify_cosign "bundle" "file")"
 PATH="$orig_path"
 rm -rf "$tmp_dir"
+
+tmp_dir="$(mktemp -d)"
+PATH="$tmp_dir"
+check "verify_cosign requires cosign" "1" "$(exit_code_quiet verify_cosign "bundle" "file")"
+PATH="$orig_path"
+rm -rf "$tmp_dir"
+
+# download_signature_bundle
+tmp_bundle="$(mktemp)"
+check "download_signature_bundle rejects failed download" "1" "$(
+  (
+    download_file() { return 1; }
+    download_signature_bundle "bundle-url" "$tmp_bundle"
+  ) >/dev/null 2>&1
+  echo $?
+)"
+check "download_signature_bundle rejects empty bundle" "1" "$(
+  (
+    download_file() { : > "$2"; }
+    download_signature_bundle "bundle-url" "$tmp_bundle"
+  ) >/dev/null 2>&1
+  echo $?
+)"
+check "download_signature_bundle accepts bundle" "0" "$(
+  (
+    download_file() { printf "signature" > "$2"; }
+    download_signature_bundle "bundle-url" "$tmp_bundle"
+  ) >/dev/null 2>&1
+  echo $?
+)"
+rm -f "$tmp_bundle"
 
 # ensure_dir
 tmp_dir="$(mktemp -d)"
