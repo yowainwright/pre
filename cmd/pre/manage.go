@@ -69,7 +69,15 @@ const (
 	ansiReset      = "\033[0m"
 )
 
-const loadingManageMessage = "loading package inventory..."
+const (
+	loadingManageMessage = "loading package inventory..."
+	manageUsageMessage   = "usage: pre manage [--package <name> --manager <mgr> " +
+		"--install|--upgrade [version]|--downgrade <version>|--uninstall]"
+	manageTerminalMessage = "pre manage: interactive terminal required; " +
+		"run from a terminal or use `pre installed` / `pre manage --package ...`"
+	manageHelpText = "↑/k ↓/j navigate  / live filter  m managers  " +
+		"space/enter actions  i install  u upgrade  d downgrade  r remove  q quit"
+)
 
 type manageTheme struct {
 	title        string
@@ -223,10 +231,10 @@ func handlePackageInventory(stdout, stderr io.Writer) int {
 
 func handleManage(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return handlePackageTUI(stdout, stderr)
+		return handleManageUI(stdout, stderr)
 	}
 	if args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(stdout, "usage: pre manage [--package <name> --manager <mgr> --install|--upgrade [version]|--downgrade <version>|--uninstall]")
+		fmt.Fprintln(stdout, manageUsageMessage)
 		return 0
 	}
 	if args[0] == "--list" || args[0] == "list" {
@@ -243,7 +251,7 @@ func handleManage(args []string, stdout, stderr io.Writer) int {
 		case "uninstall", "remove":
 			return handlePackageAction(actionUninstall, args[1:], stdout, stderr)
 		default:
-			fmt.Fprintln(stderr, "usage: pre manage [--package <name> --manager <mgr> --install|--upgrade [version]|--downgrade <version>|--uninstall]")
+			fmt.Fprintln(stderr, manageUsageMessage)
 			return 1
 		}
 	}
@@ -260,10 +268,10 @@ func handleManage(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func handlePackageTUI(stdout, stderr io.Writer) int {
+func handleManageUI(stdout, stderr io.Writer) int {
 	input, closeInput, err := openManageInput()
 	if err != nil {
-		fmt.Fprintln(stderr, "pre manage: interactive terminal required; run from a terminal or use `pre installed` / `pre manage --package ...`")
+		fmt.Fprintln(stderr, manageTerminalMessage)
 		return 1
 	}
 	defer closeInput()
@@ -487,8 +495,7 @@ func renderManageUI(stdout io.Writer, ui *manageUI) {
 
 	fmt.Fprint(stdout, ansiClear)
 	printPadded(stdout, themed(theme.title, "pre manage")+" "+themed(theme.subtitle, "package lifecycle"), width)
-	help := "↑/k ↓/j navigate  / live filter  m managers  space/enter actions  i install  u upgrade  d downgrade  r remove  q quit"
-	printPadded(stdout, themed(theme.help, fitLine(help, width)), width)
+	printPadded(stdout, themed(theme.help, fitLine(manageHelpText, width)), width)
 	renderSearchLine(stdout, *ui, width)
 	printPadded(stdout, themed(theme.tableHeader, manageTableHeader(width)), width)
 

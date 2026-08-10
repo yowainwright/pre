@@ -15,7 +15,7 @@ import (
 	"github.com/yowainwright/pre/internal/manager"
 	"github.com/yowainwright/pre/internal/proxy"
 	"github.com/yowainwright/pre/internal/security"
-	"github.com/yowainwright/pre/skills"
+	"github.com/yowainwright/pre/internal/skills"
 )
 
 var version = "dev"

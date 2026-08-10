@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y python3-pip --no-install-recommends && 
 RUN useradd -m -s /bin/bash demo
 
 COPY --from=builder /pre /usr/local/bin/pre
-COPY opts/demo/ /home/demo/demo/
+COPY demo/demo.sh /home/demo/demo/demo.sh
 
 RUN echo '{"name":"pre-demo","version":"1.0.0","private":true,"dependencies":{"lodash":"^4.17.21"}}' \
     > /home/demo/demo/package.json

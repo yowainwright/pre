@@ -241,7 +241,7 @@ pre self uninstall --purge # also removes config/cache data
 
 Homebrew installs run `brew uninstall --cask pre`. Manual installs remove the current `pre` binary after removing shell hooks.
 
-## Project layout
+## Runtime architecture
 
 ```mermaid
 graph TD
@@ -259,7 +259,7 @@ graph TD
         REG["registry.go\nbuilt-in managers"]
         LF["lockfile.go\nlockfile readers"]
         MF["manifest.go\nmanifest readers"]
-        PA["parse.go\nspec parsing"]
+        PA["spec.go\nspec parsing"]
         VR["version.go\nversion resolution"]
     end
 
@@ -279,23 +279,43 @@ graph TD
     CMD --> CONFIG
 ```
 
+## Repository layout
+
+```text
+cmd/pre/           CLI dispatch, lifecycle, package management, and screenshots
+internal/manager/  Package-manager definitions, manifests, lockfiles, and versions
+internal/proxy/    Command interception, scanning, shell hooks, and rendering
+internal/security/ OSV client and severity scoring
+internal/skills/   Embedded pre skill
+demo/              Docker demo
+scripts/           Setup and release automation
+tests/             Integration, end-to-end, and shell tests
+```
+
+Ecosystem-specific files use `<capability>_<ecosystem>.go`. Unit tests live beside
+their source and use matching filenames; `tests/` is reserved for cross-process
+and live-service coverage. The root `install.sh` remains the public curl-install
+entry point packaged with each release.
+
 ## Development
 
 ```sh
-make setup       # install deps, verify secrets, install git hooks
-mise install     # install the pinned release versioning tool
-make test        # unit tests
-make e2e         # end-to-end (requires npm)
-make integration # live API calls (requires network)
-make lint        # format check + vet
-make gosec       # static security checks (requires Go 1.26+)
-make vuln        # govulncheck scan (requires network)
-make security    # govulncheck + gosec
-make screenshots # generate TUI SVG screenshots in dist/screenshots
-make snapshot    # local release dry-run (all 4 binaries, no publish)
-make release-preview # full beta release validation, no publish
-make release     # interactive version prompt, validation, tag, and CI release
-make demo        # run in Docker
+make setup            # install deps, verify secrets, install git hooks
+mise install          # install the pinned release versioning tool
+make test             # unit tests
+make test-race        # unit tests with the race detector
+make test-e2e         # end-to-end (requires npm)
+make test-integration # live API calls (requires network)
+make test-scripts     # shell script tests
+make lint             # format check + vet
+make gosec            # static security checks (requires Go 1.26+)
+make vuln             # govulncheck scan (requires network)
+make security         # govulncheck + gosec
+make screenshots      # generate TUI SVG screenshots in dist/screenshots
+make snapshot         # local release dry-run (all 4 binaries, no publish)
+make release-preview  # full beta release validation, no publish
+make release          # interactive version prompt, validation, tag, and CI release
+make demo             # run in Docker
 ```
 
 ## License
