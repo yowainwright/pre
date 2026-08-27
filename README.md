@@ -53,6 +53,8 @@ Runtime switches:
 | `PRE_QUIET=1` | Hides scan progress and clean summaries; vulnerabilities and errors still print |
 | `PRE_NO_BACKGROUND=1` | Disables detached background scans after installs |
 | `PRE_MAX_PACKAGES=N` | Skips scanning when a manifest/lockfile expands beyond `N` packages |
+| `PRE_DIAGNOSTICS=0` | Disables local diagnostics event recording |
+| `PRE_DIAGNOSTICS_DIR=PATH` | Writes diagnostics to an alternate local state directory |
 
 ## Package manager UI
 
@@ -220,6 +222,10 @@ pre downgrade <mgr> <pkg> <v> # install an older package version
 pre uninstall <mgr> <pkg>     # remove a package
 pre config                    # show current config
 pre config set <key> <value>  # update a config value
+pre diagnostics status        # local event count, size, and rotation state
+pre diagnostics events        # recent sanitized JSONL events
+pre diagnostics export        # write a shareable sanitized report
+pre diagnostics clear         # remove local diagnostic event logs
 pre skills add [--global]     # install the agent skill to .claude/skills (~/.claude with --global)
 pre skills show               # print the agent skill to stdout
 pre scan system               # scan all cached packages now
@@ -249,6 +255,27 @@ PRE_QUIET=1 npm install        # hide clean scan output
 PRE_DISABLE=1 npm install      # emergency bypass
 ```
 
+## Diagnostics
+
+`pre` records local diagnostic events so developers can see and share what the
+tool decided without exposing private work:
+
+```sh
+pre diagnostics status
+pre diagnostics events --since 24h --limit 50
+pre diagnostics export --since 24h
+pre diagnostics clear
+```
+
+Diagnostics stay on your machine unless you explicitly export and share a
+report. Events include manager names, command categories, decision reasons,
+package counts, cache sizes, durations, exit codes, and Go runtime memory /
+goroutine samples.
+
+Diagnostics do not record command text, full arguments, paths, environment
+variables, package names by default, OSV response bodies, prompts, completions,
+or plugin contents. Event logs are bounded and rotated locally.
+
 **Custom manager** (add to `managers` array in config):
 
 ```json
@@ -270,6 +297,7 @@ Entries matching a built-in `name` replace it; new names extend the list.
 - Uses existing lockfiles to check exact transitive versions before installation
 - Blocks the package manager if OSV, version resolution, or project reading fails; `PRE_DISABLE=1` is the explicit bypass
 - Checks newly resolved transitive dependencies after installation
+- Records local diagnostics for developer-owned troubleshooting; diagnostics are never uploaded automatically
 - Publishes SHA-256 checksums signed with keyless Cosign for every platform
 - Curl installs require successful Cosign verification of the release checksums
 

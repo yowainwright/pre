@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/yowainwright/pre/internal/diagnostics"
 	"github.com/yowainwright/pre/internal/fileutil"
 )
 
@@ -45,15 +46,21 @@ func Load() *Config {
 	cfg := defaults()
 	p, err := configPath()
 	if err != nil {
+		recordConfigEvent("pre.config.load_failed", err, 0)
 		return cfg
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			recordConfigEvent("pre.config.load_failed", err, 0)
+		}
 		return cfg
 	}
 	if err := json.Unmarshal(data, cfg); err != nil {
+		recordConfigEvent("pre.config.load_failed", err, len(data))
 		return cfg
 	}
+	diagnostics.Record("pre.config.loaded", map[string]any{"config_bytes": len(data)})
 	return cfg
 }
 
@@ -68,16 +75,24 @@ func defaults() *Config {
 func Save(cfg *Config) error {
 	p, err := configPath()
 	if err != nil {
+		recordConfigEvent("pre.config.write_failed", err, 0)
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+		recordConfigEvent("pre.config.write_failed", err, 0)
 		return err
 	}
 	data, err := marshalIndentFn(cfg, "", "  ")
 	if err != nil {
+		recordConfigEvent("pre.config.write_failed", err, 0)
 		return err
 	}
-	return fileutil.AtomicWriteFile(p, data, 0600)
+	if err := fileutil.AtomicWriteFile(p, data, 0600); err != nil {
+		recordConfigEvent("pre.config.write_failed", err, len(data))
+		return err
+	}
+	diagnostics.Record("pre.config.written", map[string]any{"config_bytes": len(data)})
+	return nil
 }
 
 func Path() (string, error) {
@@ -90,4 +105,11 @@ func configPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "pre", "config.json"), nil
+}
+
+func recordConfigEvent(name string, err error, bytes int) {
+	diagnostics.Record(name, map[string]any{
+		"config_bytes": bytes,
+		"error_type":   diagnostics.ErrorType(err),
+	})
 }

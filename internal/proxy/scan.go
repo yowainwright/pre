@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/yowainwright/pre/internal/cache"
+	"github.com/yowainwright/pre/internal/diagnostics"
 	"github.com/yowainwright/pre/internal/manager"
 	"github.com/yowainwright/pre/internal/security"
 )
@@ -67,25 +68,54 @@ func SetSystemScanEnabled(v bool) {
 }
 
 func spawnBackgroundScan(mgrName string) {
+	diagnostics.Record("pre.background_scan.spawn_requested", map[string]any{"manager": mgrName})
 	self, err := executableFn()
 	if err != nil {
+		diagnostics.Record("pre.background_scan.spawn_failed", map[string]any{
+			"manager":    mgrName,
+			"error_type": diagnostics.ErrorType(err),
+		})
 		return
 	}
 	cmd := exec.Command(self, "scan", mgrName) // #nosec G204 -- self is the current pre executable path.
-	_ = cmd.Start()
+	if err := cmd.Start(); err != nil {
+		diagnostics.Record("pre.background_scan.spawn_failed", map[string]any{
+			"manager":    mgrName,
+			"error_type": diagnostics.ErrorType(err),
+		})
+	}
 }
 
 func spawnSystemScan() {
+	diagnostics.Record("pre.system_scan.spawn_requested", nil)
 	self, err := executableFn()
 	if err != nil {
+		diagnostics.Record("pre.system_scan.spawn_failed", map[string]any{
+			"error_type": diagnostics.ErrorType(err),
+		})
 		return
 	}
 	cmd := exec.Command(self, "scan", "system") // #nosec G204 -- self is the current pre executable path.
-	_ = cmd.Start()
+	if err := cmd.Start(); err != nil {
+		diagnostics.Record("pre.system_scan.spawn_failed", map[string]any{
+			"error_type": diagnostics.ErrorType(err),
+		})
+	}
 }
 
 func RunBackgroundScan(mgr *manager.Manager) {
+	start := time.Now()
+	diagnostics.Record("pre.background_scan.started", map[string]any{
+		"manager":   mgr.Name,
+		"ecosystem": mgr.Ecosystem,
+	})
 	if disableEnabled() {
+		diagnostics.Record("pre.background_scan.skipped", map[string]any{
+			"manager":     mgr.Name,
+			"ecosystem":   mgr.Ecosystem,
+			"reason":      "env_disabled",
+			"duration_ms": durationMillis(start),
+		})
 		return
 	}
 	packages, ok := backgroundScanPackages(mgr)
@@ -98,19 +128,46 @@ func RunBackgroundScan(mgr *manager.Manager) {
 	stats.Total = len(packages)
 	storeFreshScanResults(fresh)
 	saveSystemStatsFn(stats)
+	diagnostics.Record("pre.background_scan.completed", map[string]any{
+		"manager":        mgr.Name,
+		"ecosystem":      mgr.Ecosystem,
+		"package_count":  len(packages),
+		"critical_count": stats.Crit,
+		"warning_count":  stats.Warn,
+		"error_count":    stats.Errors,
+		"duration_ms":    durationMillis(start),
+	})
 }
 
 func backgroundScanPackages(mgr *manager.Manager) ([]string, bool) {
 	validationErr := validateManifestFn(mgr, ".")
 	if validationErr != nil {
+		diagnostics.Record("pre.background_scan.blocked", map[string]any{
+			"manager":    mgr.Name,
+			"ecosystem":  mgr.Ecosystem,
+			"reason":     "manifest_validation",
+			"error_type": diagnostics.ErrorType(validationErr),
+		})
 		saveSystemStatsFn(SystemStats{Errors: 1})
 		return nil, false
 	}
 	packages := readManifestFn(mgr)
 	if len(packages) == 0 {
+		diagnostics.Record("pre.background_scan.skipped", map[string]any{
+			"manager":   mgr.Name,
+			"ecosystem": mgr.Ecosystem,
+			"reason":    "no_packages",
+		})
 		return nil, false
 	}
-	if _, exceeded := packageLimitExceeded(len(packages)); exceeded {
+	if limit, exceeded := packageLimitExceeded(len(packages)); exceeded {
+		diagnostics.Record("pre.background_scan.skipped", map[string]any{
+			"manager":       mgr.Name,
+			"ecosystem":     mgr.Ecosystem,
+			"reason":        "package_limit",
+			"package_count": len(packages),
+			"package_limit": limit,
+		})
 		return nil, false
 	}
 	return packages, true
@@ -152,11 +209,21 @@ func shouldCacheScanResult(result scanResult) bool {
 }
 
 func RunSystemScan() {
+	start := time.Now()
+	diagnostics.Record("pre.system_scan.started", nil)
 	if disableEnabled() {
+		diagnostics.Record("pre.system_scan.skipped", map[string]any{
+			"reason":      "env_disabled",
+			"duration_ms": durationMillis(start),
+		})
 		return
 	}
 	release, ok := acquireSystemScanLock()
 	if !ok {
+		diagnostics.Record("pre.system_scan.skipped", map[string]any{
+			"reason":      "locked",
+			"duration_ms": durationMillis(start),
+		})
 		return
 	}
 	if release != nil {
@@ -164,7 +231,13 @@ func RunSystemScan() {
 	}
 
 	c := loadCacheFn()
-	if _, exceeded := packageLimitExceeded(len(c)); exceeded {
+	if limit, exceeded := packageLimitExceeded(len(c)); exceeded {
+		diagnostics.Record("pre.system_scan.skipped", map[string]any{
+			"reason":        "package_limit",
+			"package_count": len(c),
+			"package_limit": limit,
+			"duration_ms":   durationMillis(start),
+		})
 		return
 	}
 	pending, total := pendingSystemScans(c)
@@ -173,6 +246,14 @@ func RunSystemScan() {
 	stats.Total = total
 	applySystemScanChanges(changes)
 	saveSystemStatsFn(stats)
+	diagnostics.Record("pre.system_scan.completed", map[string]any{
+		"package_count":  total,
+		"pending_count":  len(pending),
+		"critical_count": stats.Crit,
+		"warning_count":  stats.Warn,
+		"error_count":    stats.Errors,
+		"duration_ms":    durationMillis(start),
+	})
 }
 
 func scanBatchWithPolicy(mgr *manager.Manager, packages []string, c cache.Cache, allowMissingVersionResolution bool) []scanResult {

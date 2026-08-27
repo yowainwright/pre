@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	prediagnostics "github.com/yowainwright/pre/internal/diagnostics"
 )
 
 func withConfigDir(dir string) func() {
@@ -20,6 +23,27 @@ func writeConfig(t *testing.T, dir string, cfg *Config) {
 	os.MkdirAll(p, 0755)
 	data, _ := json.Marshal(cfg)
 	os.WriteFile(filepath.Join(p, "config.json"), data, 0644)
+}
+
+func withDiagnosticsDir(t *testing.T) {
+	t.Helper()
+	t.Setenv("PRE_DIAGNOSTICS_DIR", t.TempDir())
+	t.Setenv("PRE_DIAGNOSTICS", "1")
+}
+
+func requireDiagnosticEvent(t *testing.T, name string) prediagnostics.Event {
+	t.Helper()
+	events, _, err := prediagnostics.Events(time.Time{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event["event.name"] == name {
+			return event
+		}
+	}
+	t.Fatalf("missing diagnostic event %q in %#v", name, events)
+	return nil
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -116,7 +140,25 @@ func TestSaveAndReload(t *testing.T) {
 	}
 }
 
+func TestSaveAndLoadRecordDiagnostics(t *testing.T) {
+	withDiagnosticsDir(t)
+	dir := t.TempDir()
+	defer withConfigDir(dir)()
+
+	if err := Save(defaults()); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	Load()
+
+	written := requireDiagnosticEvent(t, "pre.config.written")
+	loaded := requireDiagnosticEvent(t, "pre.config.loaded")
+	if written["config_bytes"] == float64(0) || loaded["config_bytes"] == float64(0) {
+		t.Fatalf("expected config byte counts, got written=%#v loaded=%#v", written, loaded)
+	}
+}
+
 func TestLoadConfigDirError(t *testing.T) {
+	withDiagnosticsDir(t)
 	orig := configDirFn
 	configDirFn = func() (string, error) { return "", errors.New("no dir") }
 	defer func() { configDirFn = orig }()
@@ -125,9 +167,14 @@ func TestLoadConfigDirError(t *testing.T) {
 	if cfg.API.Endpoint != DefaultEndpoint {
 		t.Error("expected defaults when config dir fn errors")
 	}
+	event := requireDiagnosticEvent(t, "pre.config.load_failed")
+	if event["error_type"] == "" {
+		t.Fatalf("expected error type, got %#v", event)
+	}
 }
 
 func TestSaveConfigDirError(t *testing.T) {
+	withDiagnosticsDir(t)
 	orig := configDirFn
 	configDirFn = func() (string, error) { return "", errors.New("no dir") }
 	defer func() { configDirFn = orig }()
@@ -135,6 +182,10 @@ func TestSaveConfigDirError(t *testing.T) {
 	err := Save(defaults())
 	if err == nil {
 		t.Error("expected error when config dir fn errors")
+	}
+	event := requireDiagnosticEvent(t, "pre.config.write_failed")
+	if event["error_type"] == "" {
+		t.Fatalf("expected error type, got %#v", event)
 	}
 }
 

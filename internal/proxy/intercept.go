@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/yowainwright/pre/internal/cache"
 	"github.com/yowainwright/pre/internal/display"
@@ -32,7 +33,14 @@ var (
 )
 
 func Intercept(mgr *manager.Manager, args []string) {
+	start := time.Now()
+	recordProxyEvent("pre.command.started", mgr, args, nil)
 	if disableEnabled() {
+		recordProxyEvent("pre.command.bypassed", mgr, args, map[string]any{
+			"decision":    "bypassed",
+			"reason":      "env_disabled",
+			"duration_ms": durationMillis(start),
+		})
 		ExecFn(mgr.Name, args)
 		return
 	}
@@ -40,14 +48,21 @@ func Intercept(mgr *manager.Manager, args []string) {
 	packageArgs, isInstall := installPackageArgs(mgr, args)
 	isPassthrough := !isInstall
 	if isPassthrough {
+		recordProxyEvent("pre.command.passthrough", mgr, args, map[string]any{
+			"decision":    "passthrough",
+			"reason":      "not_install_command",
+			"duration_ms": durationMillis(start),
+		})
 		ExecFn(mgr.Name, args)
 		return
 	}
 	if err := cargoInstallError(mgr, args); err != nil {
+		recordProxyBlock(mgr, args, start, "cargo_policy", err)
 		blockIncompleteInstall(err)
 		return
 	}
 	if err := npmInstallError(mgr, packageArgs); err != nil {
+		recordProxyBlock(mgr, args, start, "npm_policy", err)
 		blockIncompleteInstall(err)
 		return
 	}
@@ -55,10 +70,12 @@ func Intercept(mgr *manager.Manager, args []string) {
 	fromProject := len(requirementFilePaths(mgr, packageArgs)) > 0
 	packages, err := installPackages(mgr, packageArgs)
 	if err != nil {
+		recordProxyBlock(mgr, args, start, "package_resolution", err)
 		blockIncompleteInstall(err)
 		return
 	}
 	if err = validateCargoDirectPackages(mgr, args, packages); err != nil {
+		recordProxyBlock(mgr, args, start, "cargo_direct_package", err)
 		blockIncompleteInstall(err)
 		return
 	}
@@ -67,14 +84,27 @@ func Intercept(mgr *manager.Manager, args []string) {
 		packages, err = installFallbackPackages(mgr, args)
 	}
 	if err != nil {
+		recordProxyBlock(mgr, args, start, "project_resolution", err)
 		blockIncompleteInstall(err)
 		return
 	}
 	if len(packages) == 0 {
+		recordProxyEvent("pre.command.approved", mgr, args, map[string]any{
+			"decision":    "approved",
+			"reason":      "no_packages",
+			"duration_ms": durationMillis(start),
+		})
 		ExecFn(mgr.Name, args)
 		return
 	}
 	if limit, exceeded := packageLimitExceeded(len(packages)); exceeded {
+		recordProxyEvent("pre.scan.skipped", mgr, args, map[string]any{
+			"decision":      "approved",
+			"reason":        "package_limit",
+			"package_count": len(packages),
+			"package_limit": limit,
+			"duration_ms":   durationMillis(start),
+		})
 		if !quietEnabled() {
 			fmt.Print(display.Dim(fmt.Sprintf("pre: skipping scan for %d packages (PRE_MAX_PACKAGES=%d)\n", len(packages), limit)))
 		}
@@ -88,8 +118,16 @@ func Intercept(mgr *manager.Manager, args []string) {
 	if uncachedCount > 0 && !quietEnabled() {
 		fmt.Print(display.Dim(fmt.Sprintf("scanning %d package(s)...\n", uncachedCount)))
 	}
+	recordProxyEvent("pre.scan.started", mgr, args, map[string]any{
+		"package_count":  len(packages),
+		"uncached_count": uncachedCount,
+		"from_project":   fromProject,
+	})
 
 	results := scanAllWithPolicy(mgr, packages, c, !fromProject)
+	attrs := scanResultAttrs(results)
+	attrs["duration_ms"] = durationMillis(start)
+	recordProxyEvent("pre.scan.completed", mgr, args, attrs)
 
 	fresh := make(cache.Cache)
 	for _, r := range results {
@@ -111,6 +149,12 @@ func Intercept(mgr *manager.Manager, args []string) {
 		fmt.Print(renderTree(mgr.Ecosystem, results))
 	}
 	if hasScanErrors(results) {
+		recordProxyEvent("pre.scan.blocked", mgr, args, map[string]any{
+			"decision":    "blocked",
+			"reason":      "scan_error",
+			"error_count": countScanErrors(results),
+			"duration_ms": durationMillis(start),
+		})
 		fmt.Print(display.Red("pre: scan incomplete; install blocked (use PRE_DISABLE=1 to bypass)\n"))
 		processExit(1)
 		return
@@ -123,11 +167,35 @@ func Intercept(mgr *manager.Manager, args []string) {
 		}
 	}
 	if len(criticals) > 0 {
+		recordProxyEvent("pre.scan.prompted", mgr, args, map[string]any{
+			"decision":       "prompted",
+			"reason":         "high_or_critical",
+			"critical_count": len(criticals),
+			"duration_ms":    durationMillis(start),
+		})
 		fmt.Print(renderCriticalDetail(criticals))
 		if !confirm("Proceed with install?") {
+			recordProxyEvent("pre.scan.denied", mgr, args, map[string]any{
+				"decision":       "denied",
+				"reason":         "user_denied",
+				"critical_count": len(criticals),
+				"duration_ms":    durationMillis(start),
+			})
 			processExit(1)
 			return
 		}
+		recordProxyEvent("pre.scan.approved", mgr, args, map[string]any{
+			"decision":       "approved",
+			"reason":         "user_confirmed_high_or_critical",
+			"critical_count": len(criticals),
+			"duration_ms":    durationMillis(start),
+		})
+	} else {
+		recordProxyEvent("pre.scan.approved", mgr, args, map[string]any{
+			"decision":    "approved",
+			"reason":      scanApprovalReason(results),
+			"duration_ms": durationMillis(start),
+		})
 	}
 
 	ExecFn(mgr.Name, args)
@@ -145,6 +213,24 @@ func blockIncompleteInstall(err error) {
 	styled := display.Red(message)
 	fmt.Print(styled)
 	processExit(1)
+}
+
+func recordProxyBlock(mgr *manager.Manager, args []string, start time.Time, reason string, err error) {
+	recordProxyEvent("pre.scan.blocked", mgr, args, map[string]any{
+		"decision":    "blocked",
+		"reason":      reason,
+		"error_type":  diagnosticsErrorType(err),
+		"duration_ms": durationMillis(start),
+	})
+}
+
+func scanApprovalReason(results []scanResult) string {
+	for _, result := range results {
+		if len(result.vulns) > 0 {
+			return "warning_only"
+		}
+	}
+	return "clean"
 }
 
 func hasScanErrors(results []scanResult) bool {
@@ -224,16 +310,22 @@ func confirm(prompt string) bool {
 }
 
 func execReal(name string, args []string) {
+	start := time.Now()
+	recordManagerExecStarted(name, args)
 	c := exec.Command(name, args...) // #nosec G204 -- proxy intentionally execs the requested package manager.
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	if err := c.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			processExit(exitErr.ExitCode())
+			code := exitErr.ExitCode()
+			recordManagerExec(name, args, start, code)
+			processExit(code)
 			return
 		}
+		recordManagerExec(name, args, start, 1)
 		processExit(1)
 		return
 	}
+	recordManagerExec(name, args, start, 0)
 }

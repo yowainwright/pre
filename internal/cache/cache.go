@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yowainwright/pre/internal/diagnostics"
 	"github.com/yowainwright/pre/internal/fileutil"
 )
 
@@ -57,6 +58,7 @@ func cacheFile() (string, error) {
 func Load() Cache {
 	p, err := cacheFile()
 	if err != nil {
+		recordCacheEvent("pre.cache.load_failed", nil, err)
 		return make(Cache)
 	}
 	return loadFromPath(p)
@@ -69,13 +71,16 @@ func Path() (string, error) {
 func Save(c Cache) {
 	p, err := cacheFile()
 	if err != nil {
+		recordCacheEvent("pre.cache.write_failed", c, err)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+		recordCacheEvent("pre.cache.write_failed", c, err)
 		return
 	}
 	release, err := acquireLock(filepath.Join(filepath.Dir(p), "versions.lock"))
 	if err != nil {
+		recordCacheEvent("pre.cache.write_failed", c, err)
 		return
 	}
 	defer release()
@@ -89,14 +94,17 @@ func Update(fn func(Cache)) {
 
 	p, err := cacheFile()
 	if err != nil {
+		recordCacheEvent("pre.cache.write_failed", nil, err)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+		recordCacheEvent("pre.cache.write_failed", nil, err)
 		return
 	}
 
 	release, err := acquireLock(filepath.Join(filepath.Dir(p), "versions.lock"))
 	if err != nil {
+		recordCacheEvent("pre.cache.write_failed", nil, err)
 		return
 	}
 	defer release()
@@ -185,18 +193,47 @@ func migrate(c Cache) Cache {
 func loadFromPath(path string) Cache {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			recordCacheEvent("pre.cache.load_failed", nil, err)
+		}
 		return make(Cache)
 	}
 	var c Cache
 	if err := json.Unmarshal(data, &c); err != nil {
+		recordCacheEvent("pre.cache.load_failed", nil, err)
 		return make(Cache)
 	}
-	return migrate(c)
+	c = migrate(c)
+	diagnostics.Record("pre.cache.loaded", map[string]any{
+		"cache_entries": len(c),
+		"cache_bytes":   len(data),
+	})
+	return c
 }
 
 func writeCache(path string, c Cache) {
-	data, _ := json.Marshal(migrate(c))
-	_ = fileutil.AtomicWriteFile(path, data, 0600)
+	c = migrate(c)
+	data, err := json.Marshal(c)
+	if err != nil {
+		recordCacheEvent("pre.cache.write_failed", c, err)
+		return
+	}
+	if err := fileutil.AtomicWriteFile(path, data, 0600); err != nil {
+		recordCacheEvent("pre.cache.write_failed", c, err)
+		return
+	}
+	diagnostics.Record("pre.cache.written", map[string]any{
+		"cache_entries": len(c),
+		"cache_bytes":   len(data),
+	})
+}
+
+func recordCacheEvent(name string, c Cache, err error) {
+	attrs := map[string]any{"error_type": diagnostics.ErrorType(err)}
+	if c != nil {
+		attrs["cache_entries"] = len(c)
+	}
+	diagnostics.Record(name, attrs)
 }
 
 func acquireLock(path string) (func(), error) {

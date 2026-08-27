@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	prediagnostics "github.com/yowainwright/pre/internal/diagnostics"
 )
 
 func withCacheDir(dir string) func() {
@@ -22,6 +24,27 @@ func resetConfiguredTTL() func() {
 func resetConfiguredSource() func() {
 	orig := configuredSource
 	return func() { configuredSource = orig }
+}
+
+func withDiagnosticsDir(t *testing.T) {
+	t.Helper()
+	t.Setenv("PRE_DIAGNOSTICS_DIR", t.TempDir())
+	t.Setenv("PRE_DIAGNOSTICS", "1")
+}
+
+func requireDiagnosticEvent(t *testing.T, name string) prediagnostics.Event {
+	t.Helper()
+	events, _, err := prediagnostics.Events(time.Time{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event["event.name"] == name {
+			return event
+		}
+	}
+	t.Fatalf("missing diagnostic event %q in %#v", name, events)
+	return nil
 }
 
 func TestTTLDefault(t *testing.T) {
@@ -251,6 +274,22 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestSaveAndLoadRecordDiagnostics(t *testing.T) {
+	withDiagnosticsDir(t)
+	defer withCacheDir(t.TempDir())()
+
+	c := make(Cache)
+	Set(c, Key("npm", "react", "18.0.0"))
+	Save(c)
+	Load()
+
+	written := requireDiagnosticEvent(t, "pre.cache.written")
+	loaded := requireDiagnosticEvent(t, "pre.cache.loaded")
+	if written["cache_entries"] != float64(1) || loaded["cache_entries"] != float64(1) {
+		t.Fatalf("expected cache entry counts, got written=%#v loaded=%#v", written, loaded)
+	}
+}
+
 func TestUpdateAddsToExistingCache(t *testing.T) {
 	defer withCacheDir(t.TempDir())()
 
@@ -308,6 +347,7 @@ func TestParseKeyNoSlash(t *testing.T) {
 }
 
 func TestLoadCacheDirError(t *testing.T) {
+	withDiagnosticsDir(t)
 	orig := cacheDirFn
 	cacheDirFn = func() (string, error) { return "", errors.New("no dir") }
 	defer func() { cacheDirFn = orig }()
@@ -316,15 +356,24 @@ func TestLoadCacheDirError(t *testing.T) {
 	if len(c) != 0 {
 		t.Error("expected empty cache when dir fn errors")
 	}
+	event := requireDiagnosticEvent(t, "pre.cache.load_failed")
+	if event["error_type"] == "" {
+		t.Fatalf("expected error type, got %#v", event)
+	}
 }
 
 func TestSaveCacheDirError(t *testing.T) {
+	withDiagnosticsDir(t)
 	orig := cacheDirFn
 	cacheDirFn = func() (string, error) { return "", errors.New("no dir") }
 	defer func() { cacheDirFn = orig }()
 
 	c := make(Cache)
 	Save(c)
+	event := requireDiagnosticEvent(t, "pre.cache.write_failed")
+	if event["error_type"] == "" {
+		t.Fatalf("expected error type, got %#v", event)
+	}
 }
 
 func TestSaveMkdirAllError(t *testing.T) {

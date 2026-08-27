@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -8,8 +9,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yowainwright/pre/internal/cache"
+	prediagnostics "github.com/yowainwright/pre/internal/diagnostics"
 	"github.com/yowainwright/pre/internal/manager"
 	"github.com/yowainwright/pre/internal/security"
 )
@@ -246,6 +249,220 @@ func TestInterceptDisabledBypassesScan(t *testing.T) {
 	}
 	if loadCalled || securityCalled {
 		t.Error("expected disabled intercept to bypass cache loading and security checks")
+	}
+}
+
+func TestInterceptRecordsScanDecisionWithoutPackageName(t *testing.T) {
+	t.Setenv("PRE_DIAGNOSTICS_DIR", t.TempDir())
+	t.Setenv("PRE_DIAGNOSTICS", "1")
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		return "18.2.0", nil
+	})()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return nil, nil
+	})()
+
+	Intercept(npmMgr(), []string{"install", "react"})
+
+	events, _, err := prediagnostics.Events(time.Time{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := eventNames(events)
+	for _, want := range []string{"pre.scan.started", "pre.scan.completed", "pre.scan.approved"} {
+		if !slices.Contains(names, want) {
+			t.Fatalf("missing %s in %#v", want, names)
+		}
+	}
+	data, _ := json.Marshal(events)
+	if strings.Contains(string(data), "react") {
+		t.Fatalf("diagnostics leaked package name: %s", string(data))
+	}
+}
+
+func eventNames(events []prediagnostics.Event) []string {
+	names := make([]string, 0, len(events))
+	for _, event := range events {
+		if name, ok := event["event.name"].(string); ok {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func withProxyDiagnostics(t *testing.T) {
+	t.Helper()
+	t.Setenv("PRE_DIAGNOSTICS_DIR", t.TempDir())
+	t.Setenv("PRE_DIAGNOSTICS", "1")
+}
+
+func diagnosticsEvents(t *testing.T) []prediagnostics.Event {
+	t.Helper()
+	events, _, err := prediagnostics.Events(time.Time{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return events
+}
+
+func requireProxyDiagnosticEvent(t *testing.T, name string) prediagnostics.Event {
+	t.Helper()
+	events := diagnosticsEvents(t)
+	for _, event := range events {
+		if event["event.name"] == name {
+			return event
+		}
+	}
+	t.Fatalf("missing diagnostic event %q in %#v", name, eventNames(events))
+	return nil
+}
+
+func requireNoDiagnosticLeak(t *testing.T, secret string) {
+	t.Helper()
+	data, _ := json.Marshal(diagnosticsEvents(t))
+	if strings.Contains(string(data), secret) {
+		t.Fatalf("diagnostics leaked %q: %s", secret, string(data))
+	}
+}
+
+func TestInterceptRecordsDisabledBypass(t *testing.T) {
+	withProxyDiagnostics(t)
+	t.Setenv(envDisable, "1")
+	defer withExecFn(noopExec)()
+
+	Intercept(npmMgr(), []string{"install", "react"})
+
+	started := requireProxyDiagnosticEvent(t, "pre.command.started")
+	bypassed := requireProxyDiagnosticEvent(t, "pre.command.bypassed")
+	if started["manager_command"] != "install" || bypassed["reason"] != "env_disabled" {
+		t.Fatalf("unexpected bypass diagnostics: started=%#v bypassed=%#v", started, bypassed)
+	}
+	requireNoDiagnosticLeak(t, "react")
+}
+
+func TestInterceptRecordsPassthrough(t *testing.T) {
+	withProxyDiagnostics(t)
+	defer withExecFn(noopExec)()
+
+	Intercept(npmMgr(), []string{"run", "build"})
+
+	event := requireProxyDiagnosticEvent(t, "pre.command.passthrough")
+	if event["reason"] != "not_install_command" || event["manager_command"] != "run" {
+		t.Fatalf("unexpected passthrough event: %#v", event)
+	}
+	requireNoDiagnosticLeak(t, "build")
+}
+
+func TestInterceptRecordsPolicyBlock(t *testing.T) {
+	withProxyDiagnostics(t)
+	execCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
+
+	expectProcessExit(t, 1, func() {
+		Intercept(npmMgr(), []string{"install", "private@file:../private"})
+	})
+
+	event := requireProxyDiagnosticEvent(t, "pre.scan.blocked")
+	if event["reason"] != "npm_policy" || event["error_type"] == "" {
+		t.Fatalf("unexpected block event: %#v", event)
+	}
+	if execCalled {
+		t.Fatal("expected blocked install not to execute")
+	}
+	requireNoDiagnosticLeak(t, "private")
+}
+
+func TestInterceptRecordsPackageLimitSkip(t *testing.T) {
+	withProxyDiagnostics(t)
+	t.Setenv(envMaxPackages, "1")
+	defer withExecFn(noopExec)()
+
+	Intercept(npmMgr(), []string{"install", "react", "lodash"})
+
+	event := requireProxyDiagnosticEvent(t, "pre.scan.skipped")
+	if event["reason"] != "package_limit" {
+		t.Fatalf("unexpected skip reason: %#v", event)
+	}
+	if event["package_count"] != float64(2) || event["package_limit"] != float64(1) {
+		t.Fatalf("unexpected package counts: %#v", event)
+	}
+	requireNoDiagnosticLeak(t, "react")
+}
+
+func TestInterceptRecordsScanErrorBlock(t *testing.T) {
+	withProxyDiagnostics(t)
+	execCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		return "18.0.0", nil
+	})()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return nil, errors.New("check failed")
+	})()
+
+	expectProcessExit(t, 1, func() {
+		Intercept(npmMgr(), []string{"install", "react"})
+	})
+
+	completed := requireProxyDiagnosticEvent(t, "pre.scan.completed")
+	blocked := requireProxyDiagnosticEvent(t, "pre.scan.blocked")
+	if completed["error_count"] != float64(1) || blocked["reason"] != "scan_error" {
+		t.Fatalf("unexpected scan error diagnostics: completed=%#v blocked=%#v", completed, blocked)
+	}
+	if execCalled {
+		t.Fatal("expected scan error not to execute")
+	}
+}
+
+func TestInterceptRecordsCriticalPromptDenied(t *testing.T) {
+	withProxyDiagnostics(t)
+	defer withStdinInput("n\n")()
+	defer withExecFn(noopExec)()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		return "18.0.0", nil
+	})()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return []security.Vulnerability{{ID: "CVE-1234", Severity: security.SeverityCritical}}, nil
+	})()
+
+	expectProcessExit(t, 1, func() {
+		Intercept(npmMgr(), []string{"install", "react"})
+	})
+
+	prompted := requireProxyDiagnosticEvent(t, "pre.scan.prompted")
+	denied := requireProxyDiagnosticEvent(t, "pre.scan.denied")
+	if prompted["critical_count"] != float64(1) || denied["reason"] != "user_denied" {
+		t.Fatalf("unexpected denied diagnostics: prompted=%#v denied=%#v", prompted, denied)
+	}
+}
+
+func TestInterceptRecordsCriticalPromptApproved(t *testing.T) {
+	withProxyDiagnostics(t)
+	execCalled := false
+	defer withStdinInput("y\n")()
+	defer withExecFn(func(string, []string) { execCalled = true })()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+		return "18.0.0", nil
+	})()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		return []security.Vulnerability{{ID: "CVE-1234", Severity: security.SeverityHigh}}, nil
+	})()
+	defer withSpawnBackgroundScan(func(string) {})()
+
+	Intercept(npmMgr(), []string{"install", "react"})
+
+	event := requireProxyDiagnosticEvent(t, "pre.scan.approved")
+	if event["reason"] != "user_confirmed_high_or_critical" || !execCalled {
+		t.Fatalf("unexpected approved diagnostics: event=%#v exec=%t", event, execCalled)
 	}
 }
 
@@ -1925,6 +2142,7 @@ func TestConfirmEmpty(t *testing.T) {
 }
 
 func TestExecRealSuccess(t *testing.T) {
+	withProxyDiagnostics(t)
 	exited := false
 	origExit := processExit
 	processExit = func(code int) { exited = true }
@@ -1934,34 +2152,35 @@ func TestExecRealSuccess(t *testing.T) {
 	if exited {
 		t.Error("expected no exit for successful command")
 	}
+	completed := requireProxyDiagnosticEvent(t, "pre.manager.exec.completed")
+	if completed["exit_code"] != float64(0) || completed["success"] != true {
+		t.Fatalf("unexpected exec completion event: %#v", completed)
+	}
+	requireNoDiagnosticLeak(t, "hello")
 }
 
 func TestExecRealExitError(t *testing.T) {
-	exitCode := -1
-	origExit := processExit
-	processExit = func(code int) { exitCode = code; panic("exit") }
-	defer func() {
-		recover()
-		processExit = origExit
-		if exitCode != 2 {
-			t.Errorf("expected exit code 2, got %d", exitCode)
-		}
-	}()
+	withProxyDiagnostics(t)
 
-	execReal("sh", []string{"-c", "exit 2"})
+	expectProcessExit(t, 2, func() {
+		execReal("sh", []string{"-c", "exit 2"})
+	})
+
+	completed := requireProxyDiagnosticEvent(t, "pre.manager.exec.completed")
+	if completed["exit_code"] != float64(2) || completed["success"] != false {
+		t.Fatalf("unexpected exec failure event: %#v", completed)
+	}
 }
 
 func TestExecRealNonexistentCommand(t *testing.T) {
-	exitCode := -1
-	origExit := processExit
-	processExit = func(code int) { exitCode = code; panic("exit") }
-	defer func() {
-		recover()
-		processExit = origExit
-		if exitCode != 1 {
-			t.Errorf("expected exit code 1, got %d", exitCode)
-		}
-	}()
+	withProxyDiagnostics(t)
 
-	execReal("nonexistent-command-xyz-abc", []string{})
+	expectProcessExit(t, 1, func() {
+		execReal("nonexistent-command-xyz-abc", []string{})
+	})
+
+	completed := requireProxyDiagnosticEvent(t, "pre.manager.exec.completed")
+	if completed["exit_code"] != float64(1) || completed["success"] != false {
+		t.Fatalf("unexpected exec command error event: %#v", completed)
+	}
 }

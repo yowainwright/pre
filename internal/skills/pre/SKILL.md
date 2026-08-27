@@ -45,6 +45,7 @@ pre teardown                      # remove hooks entirely
 | `PRE_NO_BACKGROUND=1` | Disable detached background scans |
 | `PRE_MAX_PACKAGES=N` | Skip scanning past N packages |
 | `PRE_CACHE_TTL=0s` | Bypass cache for one install |
+| `PRE_DIAGNOSTICS=0` | Disable local diagnostics recording |
 
 ## Package commands
 
@@ -55,6 +56,9 @@ pre update <mgr> [pkg]            # update one or all
 pre downgrade <mgr> <pkg> <ver>   # install an older version
 pre uninstall <mgr> <pkg>         # remove a package
 pre scan system                   # scan all cached packages now
+pre diagnostics status            # local event count and size
+pre diagnostics events            # recent sanitized JSONL events
+pre diagnostics export            # shareable sanitized report
 ```
 
 `pre manage` opens an interactive TUI — avoid it in non-interactive agent
@@ -88,3 +92,8 @@ Keys: `api.endpoint`, `cache.ttl`, `systemScan`, `systemTTL`, `managers`.
    background scan; existing lockfiles are checked before installation.
 6. In non-interactive sessions, inspect failures and choose a safe version.
 7. Report scan results and any bypasses used.
+8. For confusing plugin behavior, run `pre diagnostics export --since 24h`.
+
+Diagnostics are local-only until the developer exports a report. They do not
+record command text, full arguments, paths, environment variables, package
+names by default, prompts, completions, or plugin contents.

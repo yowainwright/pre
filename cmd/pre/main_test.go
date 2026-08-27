@@ -15,6 +15,7 @@ import (
 
 	precache "github.com/yowainwright/pre/internal/cache"
 	preconfig "github.com/yowainwright/pre/internal/config"
+	prediagnostics "github.com/yowainwright/pre/internal/diagnostics"
 	"github.com/yowainwright/pre/internal/manager"
 	"github.com/yowainwright/pre/internal/proxy"
 )
@@ -198,6 +199,101 @@ func TestRunStatus(t *testing.T) {
 	o := out.String()
 	if !strings.Contains(o, "managers") || !strings.Contains(o, "cached") {
 		t.Errorf("expected managers and cached in status output, got: %s", o)
+	}
+}
+
+func TestRunDiagnosticsStatus(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PRE_DIAGNOSTICS_DIR", dir)
+	t.Setenv("PRE_DIAGNOSTICS", "1")
+	prediagnostics.Record("pre.scan.completed", map[string]any{"manager": "npm"})
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"diagnostics", "status"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+	o := out.String()
+	if !strings.Contains(o, "diagnostics: enabled") || !strings.Contains(o, "events: 1") {
+		t.Fatalf("unexpected diagnostics status: %s", o)
+	}
+}
+
+func TestRunDiagnosticsEvents(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PRE_DIAGNOSTICS_DIR", dir)
+	t.Setenv("PRE_DIAGNOSTICS", "1")
+	prediagnostics.Record("pre.scan.completed", map[string]any{"manager": "npm"})
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"diag", "events", "--since", "all", "--limit", "1"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"event.name":"pre.scan.completed"`) {
+		t.Fatalf("expected event JSON, got: %s", out.String())
+	}
+}
+
+func TestRunDiagnosticsExport(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PRE_DIAGNOSTICS_DIR", dir)
+	t.Setenv("PRE_DIAGNOSTICS", "1")
+	prediagnostics.Record("pre.scan.completed", map[string]any{"manager": "npm"})
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"diagnostics", "export", "--since=all"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "diagnostics report:") {
+		t.Fatalf("expected report path, got: %s", out.String())
+	}
+}
+
+func TestRunDiagnosticsClear(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PRE_DIAGNOSTICS_DIR", dir)
+	t.Setenv("PRE_DIAGNOSTICS", "1")
+	prediagnostics.Record("pre.scan.completed", nil)
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"diagnostics", "clear"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "diagnostics cleared") {
+		t.Fatalf("expected clear output, got: %s", out.String())
+	}
+}
+
+func TestRunDiagnosticsRejectsInvalidOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "missing command", args: []string{"diagnostics"}, want: "usage:"},
+		{name: "unknown command", args: []string{"diagnostics", "unknown"}, want: "usage:"},
+		{name: "missing since value", args: []string{"diagnostics", "events", "--since"}, want: "usage:"},
+		{name: "invalid since value", args: []string{"diagnostics", "events", "--since", "soon"}, want: "invalid --since"},
+		{name: "invalid since duration", args: []string{"diagnostics", "events", "--since=-1h"}, want: "invalid --since"},
+		{name: "missing limit value", args: []string{"diagnostics", "events", "--limit"}, want: "usage:"},
+		{name: "invalid limit value", args: []string{"diagnostics", "events", "--limit", "many"}, want: "invalid --limit"},
+		{name: "negative limit", args: []string{"diagnostics", "events", "--limit=-1"}, want: "invalid --limit"},
+		{name: "unknown option", args: []string{"diagnostics", "events", "--format", "text"}, want: "usage:"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := run(test.args, &out, &errOut)
+			if code != 1 {
+				t.Fatalf("expected exit 1, got %d", code)
+			}
+			if !strings.Contains(errOut.String(), test.want) {
+				t.Fatalf("expected %q, got: %s", test.want, errOut.String())
+			}
+		})
 	}
 }
 

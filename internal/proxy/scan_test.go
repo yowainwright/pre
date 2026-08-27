@@ -49,8 +49,14 @@ func TestSpawnBackgroundScan(t *testing.T) {
 }
 
 func TestSpawnBackgroundScanError(t *testing.T) {
+	withProxyDiagnostics(t)
 	defer withExecutableFn(func() (string, error) { return "", errors.New("no exec") })()
 	spawnBackgroundScan("npm")
+
+	failed := requireProxyDiagnosticEvent(t, "pre.background_scan.spawn_failed")
+	if failed["error_type"] == "" {
+		t.Fatalf("expected spawn failure error type, got %#v", failed)
+	}
 }
 
 func TestSpawnSystemScan(t *testing.T) {
@@ -58,8 +64,14 @@ func TestSpawnSystemScan(t *testing.T) {
 }
 
 func TestSpawnSystemScanError(t *testing.T) {
+	withProxyDiagnostics(t)
 	defer withExecutableFn(func() (string, error) { return "", errors.New("no exec") })()
 	spawnSystemScan()
+
+	failed := requireProxyDiagnosticEvent(t, "pre.system_scan.spawn_failed")
+	if failed["error_type"] == "" {
+		t.Fatalf("expected spawn failure error type, got %#v", failed)
+	}
 }
 
 func TestRunBackgroundScanEmpty(t *testing.T) {
@@ -91,6 +103,7 @@ func TestRunBackgroundScanUnsafePackageLockSkipsScan(t *testing.T) {
 }
 
 func TestRunBackgroundScanDisabledSkipsWork(t *testing.T) {
+	withProxyDiagnostics(t)
 	t.Setenv(envDisable, "1")
 
 	readCalled := false
@@ -104,9 +117,14 @@ func TestRunBackgroundScanDisabledSkipsWork(t *testing.T) {
 	if readCalled {
 		t.Error("expected disabled background scan to skip manifest reading")
 	}
+	skipped := requireProxyDiagnosticEvent(t, "pre.background_scan.skipped")
+	if skipped["reason"] != "env_disabled" {
+		t.Fatalf("unexpected skip event: %#v", skipped)
+	}
 }
 
 func TestRunBackgroundScan(t *testing.T) {
+	withProxyDiagnostics(t)
 	var savedStats SystemStats
 	savedCache := make(cache.Cache)
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
@@ -131,6 +149,10 @@ func TestRunBackgroundScan(t *testing.T) {
 	if !cache.Hit(savedCache, cache.Key("npm", "lodash", "4.17.21")) {
 		t.Error("expected background scan to persist cache")
 	}
+	completed := requireProxyDiagnosticEvent(t, "pre.background_scan.completed")
+	if completed["package_count"] != float64(1) || completed["error_count"] != float64(0) {
+		t.Fatalf("unexpected background scan event: %#v", completed)
+	}
 }
 
 func TestRunBackgroundScanUsesBatch(t *testing.T) {
@@ -154,6 +176,7 @@ func TestRunBackgroundScanUsesBatch(t *testing.T) {
 }
 
 func TestRunBackgroundScanPackageLimitSkipsWork(t *testing.T) {
+	withProxyDiagnostics(t)
 	t.Setenv(envMaxPackages, "1")
 
 	loadCalled := false
@@ -176,6 +199,10 @@ func TestRunBackgroundScanPackageLimitSkipsWork(t *testing.T) {
 
 	if loadCalled || securityCalled || statsSaved {
 		t.Error("expected package limit to skip background scan work")
+	}
+	skipped := requireProxyDiagnosticEvent(t, "pre.background_scan.skipped")
+	if skipped["reason"] != "package_limit" {
+		t.Fatalf("unexpected package limit event: %#v", skipped)
 	}
 }
 
@@ -218,6 +245,7 @@ func TestRunBackgroundScanWarn(t *testing.T) {
 }
 
 func TestRunSystemScan(t *testing.T) {
+	withProxyDiagnostics(t)
 	var savedStats SystemStats
 	securityCalled := false
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
@@ -240,9 +268,14 @@ func TestRunSystemScan(t *testing.T) {
 	if securityCalled {
 		t.Error("expected fresh cache entry to skip OSV")
 	}
+	completed := requireProxyDiagnosticEvent(t, "pre.system_scan.completed")
+	if completed["package_count"] != float64(1) || completed["pending_count"] != float64(0) {
+		t.Fatalf("unexpected system scan event: %#v", completed)
+	}
 }
 
 func TestRunSystemScanDisabledSkipsWork(t *testing.T) {
+	withProxyDiagnostics(t)
 	t.Setenv(envDisable, "1")
 
 	lockCalled := false
@@ -256,9 +289,14 @@ func TestRunSystemScanDisabledSkipsWork(t *testing.T) {
 	if lockCalled {
 		t.Error("expected disabled system scan to skip lock acquisition")
 	}
+	skipped := requireProxyDiagnosticEvent(t, "pre.system_scan.skipped")
+	if skipped["reason"] != "env_disabled" {
+		t.Fatalf("unexpected system scan skip event: %#v", skipped)
+	}
 }
 
 func TestRunSystemScanPackageLimitSkipsWork(t *testing.T) {
+	withProxyDiagnostics(t)
 	t.Setenv(envMaxPackages, "1")
 
 	securityCalled := false
@@ -280,6 +318,10 @@ func TestRunSystemScanPackageLimitSkipsWork(t *testing.T) {
 
 	if securityCalled || statsSaved {
 		t.Error("expected package limit to skip system scan work")
+	}
+	skipped := requireProxyDiagnosticEvent(t, "pre.system_scan.skipped")
+	if skipped["reason"] != "package_limit" {
+		t.Fatalf("unexpected package limit event: %#v", skipped)
 	}
 }
 
@@ -722,6 +764,7 @@ func TestScanPackageWithoutVersionDoesNotResolveWhenDisabled(t *testing.T) {
 }
 
 func TestRunSystemScanSkipsWhenLocked(t *testing.T) {
+	withProxyDiagnostics(t)
 	called := false
 	defer withSystemScanLock(func() (func(), bool) { return nil, false })()
 	defer withSaveSystemStats(func(SystemStats) { called = true })()
@@ -730,6 +773,10 @@ func TestRunSystemScanSkipsWhenLocked(t *testing.T) {
 
 	if called {
 		t.Error("expected locked system scan to skip work")
+	}
+	skipped := requireProxyDiagnosticEvent(t, "pre.system_scan.skipped")
+	if skipped["reason"] != "locked" {
+		t.Fatalf("unexpected locked skip event: %#v", skipped)
 	}
 }
 
