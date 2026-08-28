@@ -66,6 +66,50 @@ sh scripts/setup.sh
 HOOK
 }
 
+claude_settings_content() {
+  cat <<'HOOK'
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/scripts/agent-lint-hook.sh\"",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
+HOOK
+}
+
+codex_hooks_content() {
+  cat <<'HOOK'
+{
+  "description": "Local generated strict Go legibility lint for agent edits.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch|Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$(git rev-parse --show-toplevel)/scripts/agent-lint-hook.sh\"",
+            "timeout": 120,
+            "statusMessage": "Checking Go legibility"
+          }
+        ]
+      }
+    ]
+  }
+}
+HOOK
+}
+
 hook_content() {
   name="${1:-pre-commit}"
   case "$name" in
@@ -79,6 +123,55 @@ install_hook() {
   name="${2:-pre-commit}"
   hook_content "$name" > "$hook"
   chmod +x "$hook"
+}
+
+agent_lint_hook_path() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  echo "${root}/scripts/agent-lint-hook.sh"
+}
+
+codex_hooks_path() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  echo "${root}/.codex/hooks.json"
+}
+
+claude_settings_path() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  echo "${root}/.claude/settings.json"
+}
+
+codex_agent_hook_installed() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  hook="$(agent_lint_hook_path "$root")"
+  settings="$(codex_hooks_path "$root")"
+  [ -x "$hook" ] && [ -f "$settings" ] && grep -Fq "scripts/agent-lint-hook.sh" "$settings"
+}
+
+claude_agent_hook_installed() {
+  settings="$(claude_settings_path "$1")"
+  [ -f "$settings" ] && grep -Fq "scripts/agent-lint-hook.sh" "$settings"
+}
+
+install_codex_agent_hook() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  settings="$(codex_hooks_path "$root")"
+  if [ -f "$settings" ]; then
+    codex_agent_hook_installed "$root"
+    return
+  fi
+  mkdir -p "$(dirname "$settings")"
+  codex_hooks_content > "$settings"
+}
+
+install_claude_agent_hook() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  settings="$(claude_settings_path "$root")"
+  if [ -f "$settings" ]; then
+    claude_agent_hook_installed "$root"
+    return
+  fi
+  mkdir -p "$(dirname "$settings")"
+  claude_settings_content > "$settings"
 }
 
 check_deps() {
@@ -132,12 +225,24 @@ check_hooks() {
   done
 }
 
+check_agent_hooks() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  echo "--- agent hooks"
+  install_codex_agent_hook "$root" &&
+    ok "Codex agent lint hook installed" ||
+    fail "Codex agent lint hook" "merge scripts/agent-lint-hook.sh into .codex/hooks.json PostToolUse"
+  install_claude_agent_hook "$root" &&
+    ok "Claude agent lint hook installed" ||
+    fail "Claude agent lint hook" "merge scripts/agent-lint-hook.sh into .claude/settings.json PostToolUse"
+}
+
 main() {
   check_deps
   echo ""; check_auth
   echo ""; check_env
   echo ""; check_secrets
   echo ""; check_hooks
+  echo ""; check_agent_hooks
   echo ""
   printf "%d ok  %d warned  %d failed\n" "$passed" "$warned" "$failed"
   [ "$failed" -eq 0 ]

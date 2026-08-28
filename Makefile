@@ -44,7 +44,7 @@ E2E_TEST_SCRIPT := $(E2E_ROOT)/$(E2E_TEST)_test.sh
 HOST_OS := $(shell uname -s)
 
 .PHONY: build clean
-.PHONY: e2e fmt fmt-check gosec integration lint
+.PHONY: e2e fmt fmt-check gosec integration lint lint-agent lint-agent-all lint-all lint-legibility-setup
 .PHONY: release release-check release-preview
 .PHONY: screenshots script-test secrets security setup snapshot tag
 .PHONY: test test-e2e test-e2e-build test-e2e-docker test-e2e-list
@@ -113,8 +113,20 @@ fmt:
 fmt-check:
 	@test -z "$$(gofmt -l .)" || (echo "run 'make fmt' to fix formatting"; exit 1)
 
-lint: fmt-check
-	go vet ./...
+lint:
+	sh scripts/lint.sh
+
+lint-agent:
+	sh scripts/lint.sh --agent
+
+lint-all:
+	sh scripts/lint.sh --all
+
+lint-agent-all:
+	sh scripts/lint.sh --agent --all
+
+lint-legibility-setup:
+	sh scripts/lint.sh --setup-only
 
 vuln:
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
@@ -131,6 +143,7 @@ integration: test-integration
 
 test-scripts:
 	sh tests/scripts/install_test.sh
+	sh tests/scripts/lint_test.sh
 	sh tests/scripts/setup_test.sh
 	sh tests/scripts/tag_test.sh
 

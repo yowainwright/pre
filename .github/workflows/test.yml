@@ -27,6 +27,9 @@ jobs:
       - name: Lint
         run: make lint
 
+      - name: Legibility report
+        run: make lint-all
+
       - name: Unit tests
         run: go test -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
 

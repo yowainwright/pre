@@ -39,6 +39,9 @@ jobs:
       - name: Lint
         run: make lint
 
+      - name: Legibility report
+        run: make lint-all
+
       - name: Unit tests
         run: make test-race
 

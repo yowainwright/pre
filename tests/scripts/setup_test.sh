@@ -59,6 +59,13 @@ check "hook_path defaults to pre-commit"  "$tmp_dir/.git/hooks/pre-commit" "$(ho
 check "hook_path accepts second arg"      "$tmp_dir/.git/hooks/post-merge"  "$(hook_path "$tmp_dir" "post-merge")"
 rm -rf "$tmp_dir"
 
+# agent hook paths
+tmp_dir="$(mktemp -d)"
+check "agent_lint_hook_path" "$tmp_dir/scripts/agent-lint-hook.sh" "$(agent_lint_hook_path "$tmp_dir")"
+check "codex_hooks_path" "$tmp_dir/.codex/hooks.json" "$(codex_hooks_path "$tmp_dir")"
+check "claude_settings_path" "$tmp_dir/.claude/settings.json" "$(claude_settings_path "$tmp_dir")"
+rm -rf "$tmp_dir"
+
 # pre_commit_content
 tmp_content="$(mktemp)"
 pre_commit_content > "$tmp_content"
@@ -73,6 +80,18 @@ rm -f "$tmp_content"
 tmp_content="$(mktemp)"
 post_merge_content > "$tmp_content"
 check "post_merge_content contains setup.sh"   "0" "$(exit_code grep -q "setup.sh" "$tmp_content")"
+rm -f "$tmp_content"
+
+# claude_settings_content
+tmp_content="$(mktemp)"
+claude_settings_content > "$tmp_content"
+check "claude_settings_content contains lint hook" "0" "$(exit_code grep -q "scripts/agent-lint-hook.sh" "$tmp_content")"
+rm -f "$tmp_content"
+
+# codex_hooks_content
+tmp_content="$(mktemp)"
+codex_hooks_content > "$tmp_content"
+check "codex_hooks_content contains lint hook" "0" "$(exit_code grep -q "scripts/agent-lint-hook.sh" "$tmp_content")"
 rm -f "$tmp_content"
 
 # hook_content dispatches by name
@@ -119,10 +138,37 @@ check "check_hooks installs pre-commit"  "0" "$(exit_code test -f "$tmp_dir/.git
 check "check_hooks installs post-merge"  "0" "$(exit_code test -f "$tmp_dir/.git/hooks/post-merge")"
 rm -rf "$tmp_dir"
 
+# check_agent_hooks installs ignored agent configs and verifies tracked hook
+tmp_dir="$(mktemp -d)"
+mkdir -p "$tmp_dir/scripts"
+printf '#!/usr/bin/env sh\n' > "$tmp_dir/scripts/agent-lint-hook.sh"
+chmod +x "$tmp_dir/scripts/agent-lint-hook.sh"
+check_agent_hooks "$tmp_dir" >/dev/null
+check "check_agent_hooks installs Codex hooks" "0" "$(exit_code grep -q "scripts/agent-lint-hook.sh" "$tmp_dir/.codex/hooks.json")"
+check "check_agent_hooks installs Claude settings" "0" "$(exit_code grep -q "scripts/agent-lint-hook.sh" "$tmp_dir/.claude/settings.json")"
+rm -rf "$tmp_dir"
+
+tmp_dir="$(mktemp -d)"
+mkdir -p "$tmp_dir/scripts"
+printf '#!/usr/bin/env sh\n' > "$tmp_dir/scripts/agent-lint-hook.sh"
+chmod +x "$tmp_dir/scripts/agent-lint-hook.sh"
+mkdir -p "$tmp_dir/.codex"
+printf '%s\n' '{}' > "$tmp_dir/.codex/hooks.json"
+check "install_codex_agent_hook rejects config without hook" "1" "$(exit_code install_codex_agent_hook "$tmp_dir")"
+rm -rf "$tmp_dir"
+
+tmp_dir="$(mktemp -d)"
+mkdir -p "$tmp_dir/.claude"
+printf '%s\n' '{}' > "$tmp_dir/.claude/settings.json"
+check "install_claude_agent_hook rejects config without hook" "1" "$(exit_code install_claude_agent_hook "$tmp_dir")"
+rm -rf "$tmp_dir"
+
 # secrets target
 check "secrets requires a token" "0" "$(exit_code grep -Fq 'test -n "$$HOMEBREW_TAP_TOKEN"' Makefile)"
 check "secrets passes token through stdin" "0" "$(exit_code grep -Fq "printf '%s'" Makefile)"
 check "secrets avoids --body argv" "1" "$(exit_code grep -Fq 'gh secret set --body' Makefile)"
+check "Makefile exposes lint-agent" "0" "$(exit_code grep -Fq "lint-agent:" Makefile)"
+check "Makefile exposes lint-agent-all" "0" "$(exit_code grep -Fq "lint-agent-all:" Makefile)"
 
 printf "\n%d passed, %d failed\n" "$passed" "$failed"
 [ "$failed" -eq 0 ]
