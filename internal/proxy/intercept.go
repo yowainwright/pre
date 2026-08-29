@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"time"
 
@@ -34,13 +33,10 @@ var (
 
 func Intercept(mgr *manager.Manager, args []string) {
 	start := time.Now()
-	recordProxyEvent("pre.command.started", mgr, args, nil)
+	run := proxyRun{mgr: mgr, args: args, start: start}
+	run.record("pre.command.started", nil)
 	if disableEnabled() {
-		recordProxyEvent("pre.command.bypassed", mgr, args, map[string]any{
-			"decision":    "bypassed",
-			"reason":      "env_disabled",
-			"duration_ms": durationMillis(start),
-		})
+		run.recordDecision("pre.command.bypassed", "bypassed", "env_disabled", nil)
 		ExecFn(mgr.Name, args)
 		return
 	}
@@ -48,21 +44,17 @@ func Intercept(mgr *manager.Manager, args []string) {
 	packageArgs, isInstall := installPackageArgs(mgr, args)
 	isPassthrough := !isInstall
 	if isPassthrough {
-		recordProxyEvent("pre.command.passthrough", mgr, args, map[string]any{
-			"decision":    "passthrough",
-			"reason":      "not_install_command",
-			"duration_ms": durationMillis(start),
-		})
+		run.recordDecision("pre.command.passthrough", "passthrough", "not_install_command", nil)
 		ExecFn(mgr.Name, args)
 		return
 	}
 	if err := cargoInstallError(mgr, args); err != nil {
-		recordProxyBlock(mgr, args, start, "cargo_policy", err)
+		run.recordBlock("cargo_policy", err)
 		blockIncompleteInstall(err)
 		return
 	}
 	if err := npmInstallError(mgr, packageArgs); err != nil {
-		recordProxyBlock(mgr, args, start, "npm_policy", err)
+		run.recordBlock("npm_policy", err)
 		blockIncompleteInstall(err)
 		return
 	}
@@ -70,12 +62,12 @@ func Intercept(mgr *manager.Manager, args []string) {
 	fromProject := len(requirementFilePaths(mgr, packageArgs)) > 0
 	packages, err := installPackages(mgr, packageArgs)
 	if err != nil {
-		recordProxyBlock(mgr, args, start, "package_resolution", err)
+		run.recordBlock("package_resolution", err)
 		blockIncompleteInstall(err)
 		return
 	}
 	if err = validateCargoDirectPackages(mgr, args, packages); err != nil {
-		recordProxyBlock(mgr, args, start, "cargo_direct_package", err)
+		run.recordBlock("cargo_direct_package", err)
 		blockIncompleteInstall(err)
 		return
 	}
@@ -84,26 +76,19 @@ func Intercept(mgr *manager.Manager, args []string) {
 		packages, err = installFallbackPackages(mgr, args)
 	}
 	if err != nil {
-		recordProxyBlock(mgr, args, start, "project_resolution", err)
+		run.recordBlock("project_resolution", err)
 		blockIncompleteInstall(err)
 		return
 	}
 	if len(packages) == 0 {
-		recordProxyEvent("pre.command.approved", mgr, args, map[string]any{
-			"decision":    "approved",
-			"reason":      "no_packages",
-			"duration_ms": durationMillis(start),
-		})
+		run.recordDecision("pre.command.approved", "approved", "no_packages", nil)
 		ExecFn(mgr.Name, args)
 		return
 	}
 	if limit, exceeded := packageLimitExceeded(len(packages)); exceeded {
-		recordProxyEvent("pre.scan.skipped", mgr, args, map[string]any{
-			"decision":      "approved",
-			"reason":        "package_limit",
+		run.recordDecision("pre.scan.skipped", "approved", "package_limit", map[string]any{
 			"package_count": len(packages),
 			"package_limit": limit,
-			"duration_ms":   durationMillis(start),
 		})
 		if !quietEnabled() {
 			fmt.Print(display.Dim(fmt.Sprintf("pre: skipping scan for %d packages (PRE_MAX_PACKAGES=%d)\n", len(packages), limit)))
@@ -118,26 +103,25 @@ func Intercept(mgr *manager.Manager, args []string) {
 	if uncachedCount > 0 && !quietEnabled() {
 		fmt.Print(display.Dim(fmt.Sprintf("scanning %d package(s)...\n", uncachedCount)))
 	}
-	recordProxyEvent("pre.scan.started", mgr, args, map[string]any{
+	run.record("pre.scan.started", map[string]any{
 		"package_count":  len(packages),
 		"uncached_count": uncachedCount,
 		"from_project":   fromProject,
 	})
 
-	results := scanAllWithPolicy(mgr, packages, c, !fromProject)
-	attrs := scanResultAttrs(results)
+	results := scanBatchWithPolicy(mgr, packages, c, !fromProject)
+	counts := countScanResults(results)
+	attrs := scanResultAttrs(results, counts)
 	attrs["duration_ms"] = durationMillis(start)
-	recordProxyEvent("pre.scan.completed", mgr, args, attrs)
+	run.record("pre.scan.completed", attrs)
 
-	fresh := make(cache.Cache)
-	for _, r := range results {
-		if shouldCacheScanResult(r) {
-			cache.Set(fresh, cache.Key(mgr.Ecosystem, r.name, r.version))
+	approvalRequired := needsApproval(results)
+	level := outputLevel(results)
+	if approvalRequired {
+		if level == outputQuiet {
+			level = outputFull
 		}
 	}
-	storeFreshScanResults(fresh)
-
-	level := outputLevel(results)
 	if quietEnabled() && level == outputQuiet {
 		level = outputSilent
 	}
@@ -148,63 +132,34 @@ func Intercept(mgr *manager.Manager, args []string) {
 	default:
 		fmt.Print(renderTree(mgr.Ecosystem, results))
 	}
-	if hasScanErrors(results) {
-		recordProxyEvent("pre.scan.blocked", mgr, args, map[string]any{
-			"decision":    "blocked",
-			"reason":      "scan_error",
-			"error_count": countScanErrors(results),
-			"duration_ms": durationMillis(start),
+	if counts.errors > 0 {
+		run.recordDecision("pre.scan.blocked", "blocked", "scan_error", map[string]any{
+			"error_count": counts.errors,
 		})
 		fmt.Print(display.Red("pre: scan incomplete; install blocked (use PRE_DISABLE=1 to bypass)\n"))
 		processExit(1)
 		return
 	}
 
-	var criticals []scanResult
-	for _, r := range results {
-		if hasCriticalVulns(r) {
-			criticals = append(criticals, r)
+	if approvalRequired {
+		criticalAttrs := approvalAttrs(results)
+		run.recordDecision("pre.scan.prompted", "prompted", "approval_required", criticalAttrs)
+		criticals := criticalResults(results)
+		if len(criticals) > 0 {
+			fmt.Print(renderCriticalDetail(criticals))
 		}
-	}
-	if len(criticals) > 0 {
-		recordProxyEvent("pre.scan.prompted", mgr, args, map[string]any{
-			"decision":       "prompted",
-			"reason":         "high_or_critical",
-			"critical_count": len(criticals),
-			"duration_ms":    durationMillis(start),
-		})
-		fmt.Print(renderCriticalDetail(criticals))
-		if !confirm("Proceed with install?") {
-			recordProxyEvent("pre.scan.denied", mgr, args, map[string]any{
-				"decision":       "denied",
-				"reason":         "user_denied",
-				"critical_count": len(criticals),
-				"duration_ms":    durationMillis(start),
-			})
+		if !confirm("Approve install?") {
+			run.recordDecision("pre.scan.denied", "denied", "user_denied", criticalAttrs)
 			processExit(1)
 			return
 		}
-		recordProxyEvent("pre.scan.approved", mgr, args, map[string]any{
-			"decision":       "approved",
-			"reason":         "user_confirmed_high_or_critical",
-			"critical_count": len(criticals),
-			"duration_ms":    durationMillis(start),
-		})
+		run.recordDecision("pre.scan.approved", "approved", scanApprovalReason(results), criticalAttrs)
+		storeApprovedScanResults(mgr, results)
 	} else {
-		recordProxyEvent("pre.scan.approved", mgr, args, map[string]any{
-			"decision":    "approved",
-			"reason":      scanApprovalReason(results),
-			"duration_ms": durationMillis(start),
-		})
+		run.recordDecision("pre.scan.approved", "approved", "cache_hit", nil)
 	}
 
 	ExecFn(mgr.Name, args)
-	if !backgroundDisabled() {
-		spawnBackgroundScanFn(mgr.Name)
-		if systemScanEnabled && shouldRunSystemScan() {
-			spawnSystemScanFn()
-		}
-	}
 }
 
 func blockIncompleteInstall(err error) {
@@ -215,28 +170,72 @@ func blockIncompleteInstall(err error) {
 	processExit(1)
 }
 
-func recordProxyBlock(mgr *manager.Manager, args []string, start time.Time, reason string, err error) {
-	recordProxyEvent("pre.scan.blocked", mgr, args, map[string]any{
-		"decision":    "blocked",
-		"reason":      reason,
-		"error_type":  diagnosticsErrorType(err),
-		"duration_ms": durationMillis(start),
-	})
-}
-
 func scanApprovalReason(results []scanResult) string {
+	if hasCriticalResults(results) {
+		return "user_approved_high_or_critical"
+	}
 	for _, result := range results {
 		if len(result.vulns) > 0 {
-			return "warning_only"
+			return "user_approved_warning"
 		}
 	}
-	return "clean"
+	return "user_approved_clean"
 }
 
-func hasScanErrors(results []scanResult) bool {
-	return slices.ContainsFunc(results, func(result scanResult) bool {
-		return result.err != nil
-	})
+func needsApproval(results []scanResult) bool {
+	for _, result := range results {
+		if !result.cached {
+			return true
+		}
+	}
+	return false
+}
+
+func approvalAttrs(results []scanResult) map[string]any {
+	counts := countScanResults(results)
+	return map[string]any{
+		"package_count":       len(results),
+		"cached_count":        counts.cached,
+		"critical_count":      counts.criticals,
+		"vulnerability_count": counts.vulnerabilities,
+	}
+}
+
+func hasCriticalResults(results []scanResult) bool {
+	return len(criticalResults(results)) > 0
+}
+
+func criticalResults(results []scanResult) []scanResult {
+	criticals := make([]scanResult, 0)
+	for _, result := range results {
+		if hasCriticalVulns(result) {
+			criticals = append(criticals, result)
+		}
+	}
+	return criticals
+}
+
+func storeApprovedScanResults(mgr *manager.Manager, results []scanResult) {
+	fresh := make(cache.Cache)
+	for _, result := range results {
+		if shouldCacheApprovedResult(result) {
+			cache.Set(fresh, cache.Key(mgr.Ecosystem, result.name, result.version))
+		}
+	}
+	storeFreshScanResults(fresh)
+}
+
+func shouldCacheApprovedResult(result scanResult) bool {
+	if result.err != nil {
+		return false
+	}
+	if result.version == "" {
+		return false
+	}
+	if !result.cacheable {
+		return false
+	}
+	return !result.cached
 }
 
 type outputMode int

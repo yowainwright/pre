@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/yowainwright/pre/internal/diagnostics"
 	"github.com/yowainwright/pre/internal/fileutil"
+	"github.com/yowainwright/pre/internal/obs"
 )
 
 const defaultSystemScanTTL = 7 * 24 * time.Hour
@@ -122,7 +122,7 @@ func recordSystemStatsEvent(name string, stats SystemStats, err error) {
 		"package_count":  stats.Total,
 	}
 	if err != nil {
-		attrs["error_type"] = diagnostics.ErrorType(err)
+		attrs["error_type"] = obs.ErrorType(err)
 	}
-	diagnostics.Record(name, attrs)
+	obs.Record(name, attrs)
 }

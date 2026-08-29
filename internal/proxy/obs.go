@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yowainwright/pre/internal/diagnostics"
 	"github.com/yowainwright/pre/internal/manager"
+	"github.com/yowainwright/pre/internal/obs"
 )
 
 func recordProxyEvent(name string, mgr *manager.Manager, args []string, attrs map[string]any) {
@@ -14,7 +14,35 @@ func recordProxyEvent(name string, mgr *manager.Manager, args []string, attrs ma
 	for key, value := range attrs {
 		base[key] = value
 	}
-	diagnostics.Record(name, base)
+	obs.Record(name, base)
+}
+
+type proxyRun struct {
+	mgr   *manager.Manager
+	args  []string
+	start time.Time
+}
+
+func (run proxyRun) record(name string, attrs map[string]any) {
+	recordProxyEvent(name, run.mgr, run.args, attrs)
+}
+
+func (run proxyRun) recordDecision(name, decision, reason string, extra map[string]any) {
+	attrs := map[string]any{
+		"decision":    decision,
+		"reason":      reason,
+		"duration_ms": durationMillis(run.start),
+	}
+	for key, value := range extra {
+		attrs[key] = value
+	}
+	run.record(name, attrs)
+}
+
+func (run proxyRun) recordBlock(reason string, err error) {
+	run.recordDecision("pre.scan.blocked", "blocked", reason, map[string]any{
+		"error_type": obs.ErrorType(err),
+	})
 }
 
 func baseProxyAttrs(mgr *manager.Manager, args []string) map[string]any {
@@ -49,55 +77,42 @@ func durationMillis(start time.Time) int64 {
 	return time.Since(start).Milliseconds()
 }
 
-func scanResultAttrs(results []scanResult) map[string]any {
-	attrs := map[string]any{"package_count": len(results)}
-	attrs["cached_count"] = countScanCached(results)
-	attrs["vulnerability_count"] = countScanVulnerabilities(results)
-	attrs["critical_count"] = countScanCriticals(results)
-	attrs["error_count"] = countScanErrors(results)
-	return attrs
+type scanCounts struct {
+	cached          int
+	vulnerabilities int
+	criticals       int
+	errors          int
 }
 
-func countScanCached(results []scanResult) int {
-	count := 0
+func countScanResults(results []scanResult) scanCounts {
+	counts := scanCounts{}
 	for _, result := range results {
 		if result.cached {
-			count++
+			counts.cached++
 		}
-	}
-	return count
-}
-
-func countScanVulnerabilities(results []scanResult) int {
-	count := 0
-	for _, result := range results {
-		count += len(result.vulns)
-	}
-	return count
-}
-
-func countScanCriticals(results []scanResult) int {
-	count := 0
-	for _, result := range results {
+		counts.vulnerabilities += len(result.vulns)
 		if hasCriticalVulns(result) {
-			count++
+			counts.criticals++
+		}
+		if result.err != nil {
+			counts.errors++
 		}
 	}
-	return count
+	return counts
 }
 
-func countScanErrors(results []scanResult) int {
-	count := 0
-	for _, result := range results {
-		if result.err != nil {
-			count++
-		}
+func scanResultAttrs(results []scanResult, counts scanCounts) map[string]any {
+	return map[string]any{
+		"package_count":       len(results),
+		"cached_count":        counts.cached,
+		"vulnerability_count": counts.vulnerabilities,
+		"critical_count":      counts.criticals,
+		"error_count":         counts.errors,
 	}
-	return count
 }
 
 func recordManagerExec(name string, args []string, start time.Time, exitCode int) {
-	diagnostics.Record("pre.manager.exec.completed", map[string]any{
+	obs.Record("pre.manager.exec.completed", map[string]any{
 		"manager":     name,
 		"arg_count":   len(args),
 		"duration_ms": durationMillis(start),
@@ -107,12 +122,8 @@ func recordManagerExec(name string, args []string, start time.Time, exitCode int
 }
 
 func recordManagerExecStarted(name string, args []string) {
-	diagnostics.Record("pre.manager.exec.started", map[string]any{
+	obs.Record("pre.manager.exec.started", map[string]any{
 		"manager":   name,
 		"arg_count": len(args),
 	})
-}
-
-func diagnosticsErrorType(err error) string {
-	return diagnostics.ErrorType(err)
 }

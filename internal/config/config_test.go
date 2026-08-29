@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	prediagnostics "github.com/yowainwright/pre/internal/diagnostics"
+	"github.com/yowainwright/pre/internal/obs"
 )
 
 func withConfigDir(dir string) func() {
@@ -17,23 +17,15 @@ func withConfigDir(dir string) func() {
 	return func() { configDirFn = orig }
 }
 
-func writeConfig(t *testing.T, dir string, cfg *Config) {
+func withObsDir(t *testing.T) {
 	t.Helper()
-	p := filepath.Join(dir, "pre")
-	os.MkdirAll(p, 0755)
-	data, _ := json.Marshal(cfg)
-	os.WriteFile(filepath.Join(p, "config.json"), data, 0644)
+	t.Setenv("PRE_OBS_DIR", t.TempDir())
+	t.Setenv("PRE_OBS", "1")
 }
 
-func withDiagnosticsDir(t *testing.T) {
+func requireObsEvent(t *testing.T, name string) obs.Event {
 	t.Helper()
-	t.Setenv("PRE_DIAGNOSTICS_DIR", t.TempDir())
-	t.Setenv("PRE_DIAGNOSTICS", "1")
-}
-
-func requireDiagnosticEvent(t *testing.T, name string) prediagnostics.Event {
-	t.Helper()
-	events, _, err := prediagnostics.Events(time.Time{}, 0)
+	events, _, err := obs.Events(time.Time{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,8 +34,16 @@ func requireDiagnosticEvent(t *testing.T, name string) prediagnostics.Event {
 			return event
 		}
 	}
-	t.Fatalf("missing diagnostic event %q in %#v", name, events)
+	t.Fatalf("missing obs event %q", name)
 	return nil
+}
+
+func writeConfig(t *testing.T, dir string, cfg *Config) {
+	t.Helper()
+	p := filepath.Join(dir, "pre")
+	os.MkdirAll(p, 0755)
+	data, _ := json.Marshal(cfg)
+	os.WriteFile(filepath.Join(p, "config.json"), data, 0644)
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -141,7 +141,7 @@ func TestSaveAndReload(t *testing.T) {
 }
 
 func TestSaveAndLoadRecordDiagnostics(t *testing.T) {
-	withDiagnosticsDir(t)
+	withObsDir(t)
 	dir := t.TempDir()
 	defer withConfigDir(dir)()
 
@@ -150,15 +150,15 @@ func TestSaveAndLoadRecordDiagnostics(t *testing.T) {
 	}
 	Load()
 
-	written := requireDiagnosticEvent(t, "pre.config.written")
-	loaded := requireDiagnosticEvent(t, "pre.config.loaded")
+	written := requireObsEvent(t, "pre.config.written")
+	loaded := requireObsEvent(t, "pre.config.loaded")
 	if written["config_bytes"] == float64(0) || loaded["config_bytes"] == float64(0) {
 		t.Fatalf("expected config byte counts, got written=%#v loaded=%#v", written, loaded)
 	}
 }
 
 func TestLoadConfigDirError(t *testing.T) {
-	withDiagnosticsDir(t)
+	withObsDir(t)
 	orig := configDirFn
 	configDirFn = func() (string, error) { return "", errors.New("no dir") }
 	defer func() { configDirFn = orig }()
@@ -167,14 +167,14 @@ func TestLoadConfigDirError(t *testing.T) {
 	if cfg.API.Endpoint != DefaultEndpoint {
 		t.Error("expected defaults when config dir fn errors")
 	}
-	event := requireDiagnosticEvent(t, "pre.config.load_failed")
+	event := requireObsEvent(t, "pre.config.load_failed")
 	if event["error_type"] == "" {
 		t.Fatalf("expected error type, got %#v", event)
 	}
 }
 
 func TestSaveConfigDirError(t *testing.T) {
-	withDiagnosticsDir(t)
+	withObsDir(t)
 	orig := configDirFn
 	configDirFn = func() (string, error) { return "", errors.New("no dir") }
 	defer func() { configDirFn = orig }()
@@ -183,7 +183,7 @@ func TestSaveConfigDirError(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when config dir fn errors")
 	}
-	event := requireDiagnosticEvent(t, "pre.config.write_failed")
+	event := requireObsEvent(t, "pre.config.write_failed")
 	if event["error_type"] == "" {
 		t.Fatalf("expected error type, got %#v", event)
 	}

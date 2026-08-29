@@ -47,13 +47,26 @@ run_fmt_check() { return 0; }
 run_vet() { return 0; }
 should_run_legibility() { return 0; }
 ensure_legibility() { ensured=1; }
-run_legibility() { return 1; }
+
+captured_args=""
+fake_legibility_status=0
+fake_legibility() {
+  captured_args="$*"
+  return "$fake_legibility_status"
+}
+LEGIBILITY_BIN=fake_legibility
 
 reset_lint_flags
-check "run_lint treats legibility findings as warnings for humans" "0" "$(exit_code run_lint)"
+fake_legibility_status=0
+check "run_lint passes legibility report mode" "0" "$(exit_code run_lint)"
+
+reset_lint_flags
+fake_legibility_status=2
+check "run_lint propagates legibility runner failures" "2" "$(exit_code run_lint)"
 
 reset_lint_flags
 strict=1
+fake_legibility_status=1
 check "run_lint fails legibility findings for agents" "1" "$(exit_code run_lint)"
 
 reset_lint_flags
@@ -61,6 +74,19 @@ setup_only=1
 ensured=0
 run_lint
 check "run_lint setup-only builds legibility binary" "1" "$ensured"
+
+fake_legibility_status=0
+
+reset_lint_flags
+captured_args=""
+run_legibility
+check "run_legibility uses non-strict issue exit code" "run --issues-exit-code=0 --new-from-rev=HEAD ./..." "$captured_args"
+
+reset_lint_flags
+strict=1
+captured_args=""
+run_legibility
+check "run_legibility keeps strict issue exit code" "run --new-from-rev=HEAD ./..." "$captured_args"
 
 printf "\n%d passed, %d failed\n" "$passed" "$failed"
 [ "$failed" -eq 0 ]

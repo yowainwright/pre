@@ -42,10 +42,11 @@ pre teardown                      # remove hooks entirely
 |---------|--------|
 | `PRE_DISABLE=1` | Skip all scans, run the package manager directly |
 | `PRE_QUIET=1` | Hide progress and clean summaries; CVEs still print |
-| `PRE_NO_BACKGROUND=1` | Disable detached background scans |
 | `PRE_MAX_PACKAGES=N` | Skip scanning past N packages |
 | `PRE_CACHE_TTL=0s` | Bypass cache for one install |
-| `PRE_DIAGNOSTICS=0` | Disable local diagnostics recording |
+| `PRE_CACHE_MAX_ENTRIES=N` | Prune the approval cache to at most N entries |
+| `PRE_CACHE_MAX_BYTES=N` | Prune the approval cache to at most N bytes |
+| `PRE_OBS=0` | Disable local obs recording |
 
 ## Package commands
 
@@ -56,9 +57,9 @@ pre update <mgr> [pkg]            # update one or all
 pre downgrade <mgr> <pkg> <ver>   # install an older version
 pre uninstall <mgr> <pkg>         # remove a package
 pre scan system                   # scan all cached packages now
-pre diagnostics status            # local event count and size
-pre diagnostics events            # recent sanitized JSONL events
-pre diagnostics export            # shareable sanitized report
+pre obs                           # local cache/process/scan summary plus events
+pre obs --json                    # same response as JSON
+pre obs --events [query]          # recent events, optionally filtered by text
 ```
 
 `pre manage` opens an interactive TUI — avoid it in non-interactive agent
@@ -85,15 +86,14 @@ Keys: `api.endpoint`, `cache.ttl`, `systemScan`, `systemTTL`, `managers`.
 
 1. Run `pre status` to check install state.
 2. If hooks are missing and interception is wanted, run `pre setup`.
-3. Run installs normally; high/critical CVEs require confirmation.
+3. Run installs normally; uncached exact versions require one approval prompt.
 4. Scan, version-resolution, or detected project-read errors fail closed. Use
    `PRE_DISABLE=1` only as an explicit, reported bypass.
-5. Newly resolved transitive dependencies are checked by the post-install
-   background scan; existing lockfiles are checked before installation.
+5. Batch/project installs are checked before installation and approved once.
 6. In non-interactive sessions, inspect failures and choose a safe version.
 7. Report scan results and any bypasses used.
-8. For confusing plugin behavior, run `pre diagnostics export --since 24h`.
+8. For confusing plugin behavior, run `pre obs --json`.
 
-Diagnostics are local-only until the developer exports a report. They do not
+Obs is local-only until the developer copies and shares command output. It does not
 record command text, full arguments, paths, environment variables, package
 names by default, prompts, completions, or plugin contents.

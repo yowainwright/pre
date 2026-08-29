@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,8 +11,8 @@ import (
 	"time"
 
 	"github.com/yowainwright/pre/internal/cache"
-	"github.com/yowainwright/pre/internal/diagnostics"
 	"github.com/yowainwright/pre/internal/manager"
+	"github.com/yowainwright/pre/internal/obs"
 	"github.com/yowainwright/pre/internal/security"
 )
 
@@ -68,49 +67,49 @@ func SetSystemScanEnabled(v bool) {
 }
 
 func spawnBackgroundScan(mgrName string) {
-	diagnostics.Record("pre.background_scan.spawn_requested", map[string]any{"manager": mgrName})
+	obs.Record("pre.background_scan.spawn_requested", map[string]any{"manager": mgrName})
 	self, err := executableFn()
 	if err != nil {
-		diagnostics.Record("pre.background_scan.spawn_failed", map[string]any{
+		obs.Record("pre.background_scan.spawn_failed", map[string]any{
 			"manager":    mgrName,
-			"error_type": diagnostics.ErrorType(err),
+			"error_type": obs.ErrorType(err),
 		})
 		return
 	}
 	cmd := exec.Command(self, "scan", mgrName) // #nosec G204 -- self is the current pre executable path.
 	if err := cmd.Start(); err != nil {
-		diagnostics.Record("pre.background_scan.spawn_failed", map[string]any{
+		obs.Record("pre.background_scan.spawn_failed", map[string]any{
 			"manager":    mgrName,
-			"error_type": diagnostics.ErrorType(err),
+			"error_type": obs.ErrorType(err),
 		})
 	}
 }
 
 func spawnSystemScan() {
-	diagnostics.Record("pre.system_scan.spawn_requested", nil)
+	obs.Record("pre.system_scan.spawn_requested", nil)
 	self, err := executableFn()
 	if err != nil {
-		diagnostics.Record("pre.system_scan.spawn_failed", map[string]any{
-			"error_type": diagnostics.ErrorType(err),
+		obs.Record("pre.system_scan.spawn_failed", map[string]any{
+			"error_type": obs.ErrorType(err),
 		})
 		return
 	}
 	cmd := exec.Command(self, "scan", "system") // #nosec G204 -- self is the current pre executable path.
 	if err := cmd.Start(); err != nil {
-		diagnostics.Record("pre.system_scan.spawn_failed", map[string]any{
-			"error_type": diagnostics.ErrorType(err),
+		obs.Record("pre.system_scan.spawn_failed", map[string]any{
+			"error_type": obs.ErrorType(err),
 		})
 	}
 }
 
 func RunBackgroundScan(mgr *manager.Manager) {
 	start := time.Now()
-	diagnostics.Record("pre.background_scan.started", map[string]any{
+	obs.Record("pre.background_scan.started", map[string]any{
 		"manager":   mgr.Name,
 		"ecosystem": mgr.Ecosystem,
 	})
 	if disableEnabled() {
-		diagnostics.Record("pre.background_scan.skipped", map[string]any{
+		obs.Record("pre.background_scan.skipped", map[string]any{
 			"manager":     mgr.Name,
 			"ecosystem":   mgr.Ecosystem,
 			"reason":      "env_disabled",
@@ -128,7 +127,7 @@ func RunBackgroundScan(mgr *manager.Manager) {
 	stats.Total = len(packages)
 	storeFreshScanResults(fresh)
 	saveSystemStatsFn(stats)
-	diagnostics.Record("pre.background_scan.completed", map[string]any{
+	obs.Record("pre.background_scan.completed", map[string]any{
 		"manager":        mgr.Name,
 		"ecosystem":      mgr.Ecosystem,
 		"package_count":  len(packages),
@@ -142,18 +141,18 @@ func RunBackgroundScan(mgr *manager.Manager) {
 func backgroundScanPackages(mgr *manager.Manager) ([]string, bool) {
 	validationErr := validateManifestFn(mgr, ".")
 	if validationErr != nil {
-		diagnostics.Record("pre.background_scan.blocked", map[string]any{
+		obs.Record("pre.background_scan.blocked", map[string]any{
 			"manager":    mgr.Name,
 			"ecosystem":  mgr.Ecosystem,
 			"reason":     "manifest_validation",
-			"error_type": diagnostics.ErrorType(validationErr),
+			"error_type": obs.ErrorType(validationErr),
 		})
 		saveSystemStatsFn(SystemStats{Errors: 1})
 		return nil, false
 	}
 	packages := readManifestFn(mgr)
 	if len(packages) == 0 {
-		diagnostics.Record("pre.background_scan.skipped", map[string]any{
+		obs.Record("pre.background_scan.skipped", map[string]any{
 			"manager":   mgr.Name,
 			"ecosystem": mgr.Ecosystem,
 			"reason":    "no_packages",
@@ -161,7 +160,7 @@ func backgroundScanPackages(mgr *manager.Manager) ([]string, bool) {
 		return nil, false
 	}
 	if limit, exceeded := packageLimitExceeded(len(packages)); exceeded {
-		diagnostics.Record("pre.background_scan.skipped", map[string]any{
+		obs.Record("pre.background_scan.skipped", map[string]any{
 			"manager":       mgr.Name,
 			"ecosystem":     mgr.Ecosystem,
 			"reason":        "package_limit",
@@ -210,9 +209,9 @@ func shouldCacheScanResult(result scanResult) bool {
 
 func RunSystemScan() {
 	start := time.Now()
-	diagnostics.Record("pre.system_scan.started", nil)
+	obs.Record("pre.system_scan.started", nil)
 	if disableEnabled() {
-		diagnostics.Record("pre.system_scan.skipped", map[string]any{
+		obs.Record("pre.system_scan.skipped", map[string]any{
 			"reason":      "env_disabled",
 			"duration_ms": durationMillis(start),
 		})
@@ -220,7 +219,7 @@ func RunSystemScan() {
 	}
 	release, ok := acquireSystemScanLock()
 	if !ok {
-		diagnostics.Record("pre.system_scan.skipped", map[string]any{
+		obs.Record("pre.system_scan.skipped", map[string]any{
 			"reason":      "locked",
 			"duration_ms": durationMillis(start),
 		})
@@ -232,7 +231,7 @@ func RunSystemScan() {
 
 	c := loadCacheFn()
 	if limit, exceeded := packageLimitExceeded(len(c)); exceeded {
-		diagnostics.Record("pre.system_scan.skipped", map[string]any{
+		obs.Record("pre.system_scan.skipped", map[string]any{
 			"reason":        "package_limit",
 			"package_count": len(c),
 			"package_limit": limit,
@@ -246,7 +245,7 @@ func RunSystemScan() {
 	stats.Total = total
 	applySystemScanChanges(changes)
 	saveSystemStatsFn(stats)
-	diagnostics.Record("pre.system_scan.completed", map[string]any{
+	obs.Record("pre.system_scan.completed", map[string]any{
 		"package_count":  total,
 		"pending_count":  len(pending),
 		"critical_count": stats.Crit,
@@ -288,7 +287,7 @@ func applyBatchScanResults(results []scanResult, pending []batchScanWork) {
 	for index, work := range pending {
 		queries[index] = work.query
 	}
-	vulnerabilities, err := checkBatchQueries(queries)
+	vulnerabilities, err := securityBatchCheckFn(queries)
 	for index, work := range pending {
 		results[work.index].err = err
 		if err == nil {
@@ -306,9 +305,7 @@ func pendingSystemScans(c cache.Cache) ([]systemScanWork, int) {
 			continue
 		}
 		total++
-		if !cache.Hit(c, work.canonicalKey) {
-			pending = append(pending, work)
-		}
+		pending = append(pending, work)
 	}
 	return pending, total
 }
@@ -338,18 +335,7 @@ func checkSystemScans(pending []systemScanWork) ([][]security.Vulnerability, err
 	for index, work := range pending {
 		queries[index] = work.query
 	}
-	return checkBatchQueries(queries)
-}
-
-func checkBatchQueries(queries []security.Query) ([][]security.Vulnerability, error) {
-	results, err := securityBatchCheckFn(queries)
-	if err != nil {
-		return nil, err
-	}
-	if len(results) != len(queries) {
-		return nil, fmt.Errorf("expected %d batch results, got %d", len(queries), len(results))
-	}
-	return results, nil
+	return securityBatchCheckFn(queries)
 }
 
 func systemScanOutcome(pending []systemScanWork, results [][]security.Vulnerability, batchErr error) (SystemStats, systemScanChanges) {

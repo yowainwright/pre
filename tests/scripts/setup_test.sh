@@ -82,18 +82,6 @@ post_merge_content > "$tmp_content"
 check "post_merge_content contains setup.sh"   "0" "$(exit_code grep -q "setup.sh" "$tmp_content")"
 rm -f "$tmp_content"
 
-# claude_settings_content
-tmp_content="$(mktemp)"
-claude_settings_content > "$tmp_content"
-check "claude_settings_content contains lint hook" "0" "$(exit_code grep -q "scripts/agent-lint-hook.sh" "$tmp_content")"
-rm -f "$tmp_content"
-
-# codex_hooks_content
-tmp_content="$(mktemp)"
-codex_hooks_content > "$tmp_content"
-check "codex_hooks_content contains lint hook" "0" "$(exit_code grep -q "scripts/agent-lint-hook.sh" "$tmp_content")"
-rm -f "$tmp_content"
-
 # hook_content dispatches by name
 tmp_content="$(mktemp)"
 hook_content "pre-commit" > "$tmp_content"
@@ -153,14 +141,21 @@ mkdir -p "$tmp_dir/scripts"
 printf '#!/usr/bin/env sh\n' > "$tmp_dir/scripts/agent-lint-hook.sh"
 chmod +x "$tmp_dir/scripts/agent-lint-hook.sh"
 mkdir -p "$tmp_dir/.codex"
-printf '%s\n' '{}' > "$tmp_dir/.codex/hooks.json"
-check "install_codex_agent_hook rejects config without hook" "1" "$(exit_code install_codex_agent_hook "$tmp_dir")"
+printf '%s\n' '{"hooks":{"PostToolUse":[{"matcher":"Read","hooks":[]}]}}' > "$tmp_dir/.codex/hooks.json"
+check "install_codex_agent_hook merges existing config" "0" "$(exit_code install_codex_agent_hook "$tmp_dir")"
+check "install_codex_agent_hook preserves existing hook" "0" "$(exit_code grep -q '"matcher": "Read"' "$tmp_dir/.codex/hooks.json")"
+check "install_codex_agent_hook adds lint hook" "0" "$(exit_code grep -q "scripts/agent-lint-hook.sh" "$tmp_dir/.codex/hooks.json")"
 rm -rf "$tmp_dir"
 
 tmp_dir="$(mktemp -d)"
+mkdir -p "$tmp_dir/scripts"
+printf '#!/usr/bin/env sh\n' > "$tmp_dir/scripts/agent-lint-hook.sh"
+chmod +x "$tmp_dir/scripts/agent-lint-hook.sh"
 mkdir -p "$tmp_dir/.claude"
-printf '%s\n' '{}' > "$tmp_dir/.claude/settings.json"
-check "install_claude_agent_hook rejects config without hook" "1" "$(exit_code install_claude_agent_hook "$tmp_dir")"
+printf '%s\n' '{"hooks":{"PostToolUse":[{"matcher":"Read","hooks":[]}]}}' > "$tmp_dir/.claude/settings.json"
+check "install_claude_agent_hook merges existing config" "0" "$(exit_code install_claude_agent_hook "$tmp_dir")"
+check "install_claude_agent_hook preserves existing hook" "0" "$(exit_code grep -q '"matcher": "Read"' "$tmp_dir/.claude/settings.json")"
+check "install_claude_agent_hook adds lint hook" "0" "$(exit_code grep -q "scripts/agent-lint-hook.sh" "$tmp_dir/.claude/settings.json")"
 rm -rf "$tmp_dir"
 
 # secrets target

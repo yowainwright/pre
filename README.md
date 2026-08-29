@@ -10,7 +10,6 @@ Zero config. One runtime binary.
 
 ## Install
 
-<!-- install methods and verification behavior from install.sh and release configuration -->
 
 ```sh
 # Homebrew
@@ -51,10 +50,11 @@ Runtime switches:
 |---------|--------------|
 | `PRE_DISABLE=1` | Bypasses all `pre` scans and runs the package manager directly |
 | `PRE_QUIET=1` | Hides scan progress and clean summaries; vulnerabilities and errors still print |
-| `PRE_NO_BACKGROUND=1` | Disables detached background scans after installs |
 | `PRE_MAX_PACKAGES=N` | Skips scanning when a manifest/lockfile expands beyond `N` packages |
-| `PRE_DIAGNOSTICS=0` | Disables local diagnostics event recording |
-| `PRE_DIAGNOSTICS_DIR=PATH` | Writes diagnostics to an alternate local state directory |
+| `PRE_CACHE_MAX_ENTRIES=N` | Prunes the approval cache to at most `N` entries |
+| `PRE_CACHE_MAX_BYTES=N` | Prunes the approval cache to at most `N` bytes |
+| `PRE_OBS=0` | Disables local obs event recording |
+| `PRE_OBS_DIR=PATH` | Writes obs events to an alternate local state directory |
 
 ## Package manager UI
 
@@ -127,7 +127,7 @@ sequenceDiagram
     rect rgba(203, 166, 247, 0.18)
         Pre->>Pre: Reuse trusted cache entries
         opt Uncached packages
-            Pre->>OSV: Query names and versions in parallel
+            Pre->>OSV: Query missing names and versions as one batch
             OSV-->>Pre: Findings or scan errors
         end
     end
@@ -136,9 +136,9 @@ sequenceDiagram
         alt Scan error
             Pre-->>User: Block command
         else Vulnerability found
-            Pre-->>User: Warn or ask based on severity
+            Pre-->>User: Show table and ask once
         else Clean
-            Pre-->>User: Approve command
+            Pre-->>User: Show table and ask once
         end
     end
 
@@ -146,9 +146,6 @@ sequenceDiagram
         Pre->>Manager: Run original command
         Manager-->>Pre: Return exit status
         Pre-->>User: Return result
-        opt Successful install changed the lockfile
-            Pre->>OSV: Start background scan of transitive versions
-        end
     end
 ```
 
@@ -157,14 +154,13 @@ sequenceDiagram
 | Situation | Output |
 |-----------|--------|
 | Everything cached and clean | Silent — install proceeds |
-| New packages, no issues | `scanning 12 packages... all clean` |
-| Low/medium CVE | Warning printed, install proceeds |
-| High/critical CVE | CVE detail box shown, Y/N prompt |
+| New packages, no issues | Clean table, then approval prompt |
+| Low/medium CVE | Vulnerability table, then approval prompt |
+| High/critical CVE | CVE detail box, then approval prompt |
 | OSV or version-resolution error | Install blocked; `PRE_DISABLE=1` is the explicit bypass |
 
 ### Supported managers
 
-<!-- lockfile support and source restrictions from internal/manager -->
 
 `pre` reads existing lockfiles first because they contain exact direct and transitive versions. Without a usable lockfile, it falls back to the project manifest.
 
@@ -180,7 +176,7 @@ sequenceDiagram
 | uv | `uv.lock` | `add`, `sync`, `pip install` |
 | poetry | `poetry.lock` | `add`, `update`, `install` |
 
-If a command creates or changes a lockfile, `pre` checks the requested packages before the install. It scans the resolved lockfile in the background afterward unless `PRE_NO_BACKGROUND=1` is set.
+If a command creates or changes a lockfile, `pre` checks the requested packages before the install and exits when the package manager exits.
 
 ### Commands that require exact resolution
 
@@ -202,8 +198,6 @@ Workspace-wide `cargo fetch` requires the shared `Cargo.lock`; run `cargo genera
 
 `uv sync` and lockfile-wide Poetry commands require an existing `uv.lock` or `poetry.lock`. Run `uv lock` or `poetry lock` first so the pre-install scan has exact versions.
 
-`PRE_DISABLE=1` is the explicit bypass.
-
 ## Commands
 
 ```sh
@@ -222,10 +216,9 @@ pre downgrade <mgr> <pkg> <v> # install an older package version
 pre uninstall <mgr> <pkg>     # remove a package
 pre config                    # show current config
 pre config set <key> <value>  # update a config value
-pre diagnostics status        # local event count, size, and rotation state
-pre diagnostics events        # recent sanitized JSONL events
-pre diagnostics export        # write a shareable sanitized report
-pre diagnostics clear         # remove local diagnostic event logs
+pre obs                       # local cache/process/scan summary plus events
+pre obs --json                # same response as JSON
+pre obs --events [query]      # event list, optionally filtered by text
 pre skills add [--global]     # install the agent skill to .claude/skills (~/.claude with --global)
 pre skills show               # print the agent skill to stdout
 pre scan system               # scan all cached packages now
@@ -241,8 +234,8 @@ pre self uninstall [--purge]  # remove pre itself
 |-----|---------|--------------|
 | `api.endpoint` | `https://api.osv.dev/v1/query` | OSV-compatible API to query |
 | `cache.ttl` | `24h` | How long a clean result is trusted |
-| `systemScan` | `false` | Weekly background scan of cached packages |
-| `systemTTL` | `168h` | How often the background scan runs |
+| `systemScan` | `false` | Enables explicit cached-package scan policy |
+| `systemTTL` | `168h` | How often cached-package scan state is considered fresh |
 | `managers` | — | Add or override managers |
 
 **Quick examples:**
@@ -255,20 +248,19 @@ PRE_QUIET=1 npm install        # hide clean scan output
 PRE_DISABLE=1 npm install      # emergency bypass
 ```
 
-## Diagnostics
+## Observability
 
-`pre` records local diagnostic events so developers can see and share what the
-tool decided without exposing private work:
+`pre obs` records local events so developers can see what the tool decided
+without exposing private work:
 
 ```sh
-pre diagnostics status
-pre diagnostics events --since 24h --limit 50
-pre diagnostics export --since 24h
-pre diagnostics clear
+pre obs
+pre obs --json
+pre obs --events scan
 ```
 
-Diagnostics stay on your machine unless you explicitly export and share a
-report. Events include manager names, command categories, decision reasons,
+Obs stays on your machine unless you explicitly copy and share the command
+output. Events include manager names, command categories, decision reasons,
 package counts, cache sizes, durations, exit codes, and Go runtime memory /
 goroutine samples.
 
@@ -290,14 +282,13 @@ Entries matching a built-in `name` replace it; new names extend the list.
 
 ## Security model
 
-<!-- security behavior from internal/proxy, internal/manager, and install.sh -->
 
 - Queries [OSV.dev](https://osv.dev), a free service operated by Google
 - Sends only the package name and version; no code leaves your machine
 - Uses existing lockfiles to check exact transitive versions before installation
 - Blocks the package manager if OSV, version resolution, or project reading fails; `PRE_DISABLE=1` is the explicit bypass
-- Checks newly resolved transitive dependencies after installation
-- Records local diagnostics for developer-owned troubleshooting; diagnostics are never uploaded automatically
+- Checks package sets before installation when they need approval
+- Records local obs for developer-owned troubleshooting; obs is never uploaded automatically
 - Publishes SHA-256 checksums signed with keyless Cosign for every platform
 - Curl installs require successful Cosign verification of the release checksums
 
@@ -305,7 +296,6 @@ Entries matching a built-in `name` replace it; new names extend the list.
 
 ## Update pre
 
-<!-- self-update behavior from cmd/pre and install.sh -->
 
 ```sh
 pre self update

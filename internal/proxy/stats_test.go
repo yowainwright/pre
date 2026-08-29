@@ -189,7 +189,7 @@ func TestShouldRunSystemScanZeroTTL(t *testing.T) {
 }
 
 func TestSaveAndLoadSystemStats(t *testing.T) {
-	withProxyDiagnostics(t)
+	withObsDir(t)
 	dir := t.TempDir()
 	defer withStatsCacheDir(dir)()
 
@@ -205,10 +205,10 @@ func TestSaveAndLoadSystemStats(t *testing.T) {
 	if s.LastAttempted.IsZero() {
 		t.Error("expected LastAttempted to be set")
 	}
-	written := requireProxyDiagnosticEvent(t, "pre.system_stats.written")
-	loaded := requireProxyDiagnosticEvent(t, "pre.system_stats.loaded")
+	written := requireObsEvent(t, "pre.system_stats.written")
+	loaded := requireObsEvent(t, "pre.system_stats.loaded")
 	if written["package_count"] != float64(10) || loaded["package_count"] != float64(10) {
-		t.Fatalf("unexpected stats diagnostics: written=%#v loaded=%#v", written, loaded)
+		t.Fatalf("unexpected stats obs: written=%#v loaded=%#v", written, loaded)
 	}
 }
 
@@ -269,7 +269,7 @@ func TestLoadSystemStatsMissing(t *testing.T) {
 }
 
 func TestSystemStatsPathError(t *testing.T) {
-	withProxyDiagnostics(t)
+	withObsDir(t)
 	orig := statsCacheDirFn
 	statsCacheDirFn = func() (string, error) { return "", errors.New("no dir") }
 	defer func() { statsCacheDirFn = orig }()
@@ -278,20 +278,20 @@ func TestSystemStatsPathError(t *testing.T) {
 	if s.Total != 0 || !s.LastUpdated.IsZero() {
 		t.Errorf("expected empty stats on path error, got %+v", s)
 	}
-	event := requireProxyDiagnosticEvent(t, "pre.system_stats.load_failed")
+	event := requireObsEvent(t, "pre.system_stats.load_failed")
 	if event["error_type"] == "" {
 		t.Fatalf("expected error type, got %#v", event)
 	}
 }
 
 func TestSaveSystemStatsDirError(t *testing.T) {
-	withProxyDiagnostics(t)
+	withObsDir(t)
 	orig := statsCacheDirFn
 	statsCacheDirFn = func() (string, error) { return "", errors.New("no dir") }
 	defer func() { statsCacheDirFn = orig }()
 
 	saveSystemStats(SystemStats{Total: 5})
-	event := requireProxyDiagnosticEvent(t, "pre.system_stats.write_failed")
+	event := requireObsEvent(t, "pre.system_stats.write_failed")
 	if event["package_count"] != float64(5) || event["error_type"] == "" {
 		t.Fatalf("unexpected write failure event: %#v", event)
 	}

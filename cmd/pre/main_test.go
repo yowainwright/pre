@@ -15,8 +15,8 @@ import (
 
 	precache "github.com/yowainwright/pre/internal/cache"
 	preconfig "github.com/yowainwright/pre/internal/config"
-	prediagnostics "github.com/yowainwright/pre/internal/diagnostics"
 	"github.com/yowainwright/pre/internal/manager"
+	preobs "github.com/yowainwright/pre/internal/obs"
 	"github.com/yowainwright/pre/internal/proxy"
 )
 
@@ -202,86 +202,71 @@ func TestRunStatus(t *testing.T) {
 	}
 }
 
-func TestRunDiagnosticsStatus(t *testing.T) {
+func TestRunObsStatus(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("PRE_DIAGNOSTICS_DIR", dir)
-	t.Setenv("PRE_DIAGNOSTICS", "1")
-	prediagnostics.Record("pre.scan.completed", map[string]any{"manager": "npm"})
+	t.Setenv("PRE_OBS_DIR", dir)
+	t.Setenv("PRE_OBS", "1")
+	preobs.Record("pre.scan.approved", map[string]any{"manager": "npm", "decision": "approved"})
 
 	var out, errOut bytes.Buffer
-	code := run([]string{"diagnostics", "status"}, &out, &errOut)
+	code := run([]string{"obs"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("expected exit 0, got %d: %s", code, errOut.String())
 	}
 	o := out.String()
-	if !strings.Contains(o, "diagnostics: enabled") || !strings.Contains(o, "events: 1") {
-		t.Fatalf("unexpected diagnostics status: %s", o)
+	if !strings.Contains(o, "status: ok") {
+		t.Fatalf("unexpected obs status: %s", o)
+	}
+	if !strings.Contains(o, "allowed: 1") {
+		t.Fatalf("unexpected obs status: %s", o)
 	}
 }
 
-func TestRunDiagnosticsEvents(t *testing.T) {
+func TestRunObsEvents(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("PRE_DIAGNOSTICS_DIR", dir)
-	t.Setenv("PRE_DIAGNOSTICS", "1")
-	prediagnostics.Record("pre.scan.completed", map[string]any{"manager": "npm"})
+	t.Setenv("PRE_OBS_DIR", dir)
+	t.Setenv("PRE_OBS", "1")
+	preobs.Record("pre.scan.completed", map[string]any{"manager": "npm"})
 
 	var out, errOut bytes.Buffer
-	code := run([]string{"diag", "events", "--since", "all", "--limit", "1"}, &out, &errOut)
+	code := run([]string{"obs", "--events", "scan.completed"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), `"event.name":"pre.scan.completed"`) {
-		t.Fatalf("expected event JSON, got: %s", out.String())
+	if !strings.Contains(out.String(), "pre.scan.completed") {
+		t.Fatalf("expected event output, got: %s", out.String())
 	}
 }
 
-func TestRunDiagnosticsExport(t *testing.T) {
+func TestRunObsJSON(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("PRE_DIAGNOSTICS_DIR", dir)
-	t.Setenv("PRE_DIAGNOSTICS", "1")
-	prediagnostics.Record("pre.scan.completed", map[string]any{"manager": "npm"})
+	t.Setenv("PRE_OBS_DIR", dir)
+	t.Setenv("PRE_OBS", "1")
+	preobs.Record("pre.scan.blocked", map[string]any{"decision": "blocked"})
 
 	var out, errOut bytes.Buffer
-	code := run([]string{"diagnostics", "export", "--since=all"}, &out, &errOut)
+	code := run([]string{"observability", "--json"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "diagnostics report:") {
-		t.Fatalf("expected report path, got: %s", out.String())
+	output := out.String()
+	if !strings.Contains(output, `"status": "ok"`) {
+		t.Fatalf("expected obs JSON, got: %s", output)
+	}
+	if !strings.Contains(output, `"blocked": 1`) {
+		t.Fatalf("expected obs JSON, got: %s", output)
 	}
 }
 
-func TestRunDiagnosticsClear(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PRE_DIAGNOSTICS_DIR", dir)
-	t.Setenv("PRE_DIAGNOSTICS", "1")
-	prediagnostics.Record("pre.scan.completed", nil)
-
-	var out, errOut bytes.Buffer
-	code := run([]string{"diagnostics", "clear"}, &out, &errOut)
-	if code != 0 {
-		t.Fatalf("expected exit 0, got %d: %s", code, errOut.String())
-	}
-	if !strings.Contains(out.String(), "diagnostics cleared") {
-		t.Fatalf("expected clear output, got: %s", out.String())
-	}
-}
-
-func TestRunDiagnosticsRejectsInvalidOptions(t *testing.T) {
+func TestRunObsRejectsInvalidOptions(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
 		want string
 	}{
-		{name: "missing command", args: []string{"diagnostics"}, want: "usage:"},
-		{name: "unknown command", args: []string{"diagnostics", "unknown"}, want: "usage:"},
-		{name: "missing since value", args: []string{"diagnostics", "events", "--since"}, want: "usage:"},
-		{name: "invalid since value", args: []string{"diagnostics", "events", "--since", "soon"}, want: "invalid --since"},
-		{name: "invalid since duration", args: []string{"diagnostics", "events", "--since=-1h"}, want: "invalid --since"},
-		{name: "missing limit value", args: []string{"diagnostics", "events", "--limit"}, want: "usage:"},
-		{name: "invalid limit value", args: []string{"diagnostics", "events", "--limit", "many"}, want: "invalid --limit"},
-		{name: "negative limit", args: []string{"diagnostics", "events", "--limit=-1"}, want: "invalid --limit"},
-		{name: "unknown option", args: []string{"diagnostics", "events", "--format", "text"}, want: "usage:"},
+		{name: "old diagnostics route", args: []string{"diagnostics"}, want: "unknown manager"},
+		{name: "old diag route", args: []string{"diag"}, want: "unknown manager"},
+		{name: "unknown option", args: []string{"obs", "--format", "text"}, want: "usage:"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

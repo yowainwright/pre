@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/yowainwright/pre/internal/diagnostics"
 	"github.com/yowainwright/pre/internal/fileutil"
+	"github.com/yowainwright/pre/internal/obs"
 )
 
 const (
@@ -60,7 +60,7 @@ func Load() *Config {
 		recordConfigEvent("pre.config.load_failed", err, len(data))
 		return cfg
 	}
-	diagnostics.Record("pre.config.loaded", map[string]any{"config_bytes": len(data)})
+	obs.Record("pre.config.loaded", map[string]any{"config_bytes": len(data)})
 	return cfg
 }
 
@@ -91,7 +91,7 @@ func Save(cfg *Config) error {
 		recordConfigEvent("pre.config.write_failed", err, len(data))
 		return err
 	}
-	diagnostics.Record("pre.config.written", map[string]any{"config_bytes": len(data)})
+	obs.Record("pre.config.written", map[string]any{"config_bytes": len(data)})
 	return nil
 }
 
@@ -108,8 +108,8 @@ func configPath() (string, error) {
 }
 
 func recordConfigEvent(name string, err error, bytes int) {
-	diagnostics.Record(name, map[string]any{
+	obs.Record(name, map[string]any{
 		"config_bytes": bytes,
-		"error_type":   diagnostics.ErrorType(err),
+		"error_type":   obs.ErrorType(err),
 	})
 }

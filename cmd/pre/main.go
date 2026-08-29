@@ -12,8 +12,8 @@ import (
 
 	"github.com/yowainwright/pre/internal/cache"
 	"github.com/yowainwright/pre/internal/config"
-	"github.com/yowainwright/pre/internal/diagnostics"
 	"github.com/yowainwright/pre/internal/manager"
+	"github.com/yowainwright/pre/internal/obs"
 	"github.com/yowainwright/pre/internal/proxy"
 	"github.com/yowainwright/pre/internal/security"
 	"github.com/yowainwright/pre/internal/skills"
@@ -22,10 +22,7 @@ import (
 var version = "dev"
 
 func run(args []string, stdout, stderr io.Writer) int {
-	diagnostics.SetVersion(version)
-	if len(args) >= 1 && (args[0] == "diagnostics" || args[0] == "diag") {
-		return handleDiagnostics(args[1:], stdout, stderr)
-	}
+	obs.SetVersion(version)
 
 	cfg := config.Load()
 	security.Endpoint = cfg.API.Endpoint
@@ -41,7 +38,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 1 {
 		fmt.Fprintln(stderr, "usage: pre <manager> <command> [args]")
 		fmt.Fprintln(stderr, "       pre manage | m | installed | install | update | downgrade | uninstall")
-		fmt.Fprintln(stderr, "       pre diagnostics status | events | export | clear")
+		fmt.Fprintln(stderr, "       pre obs [--json] [--events [query]]")
 		fmt.Fprintln(stderr, "       pre setup | teardown | status | config [set <key> <value>]")
 		fmt.Fprintln(stderr, "       pre skills <add|show> [--global]")
 		return 1
@@ -71,6 +68,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		proxy.RunBackgroundScan(mgr)
 	case "config":
 		return handleConfig(args[1:], cfg, stdout, stderr)
+	case "obs", "observability":
+		return handleObs(args[1:], stdout, stderr)
 	case "status":
 		handleStatus(cfg, stdout)
 	case "installed":
@@ -285,10 +284,10 @@ func handleStatus(cfg *config.Config, stdout io.Writer) {
 		fmt.Fprintf(stdout, "system scan: %d total · %d crit · %d warn · last run %s\n",
 			sys.Total, sys.Crit, sys.Warn, sys.LastUpdated.Format("2006-01-02 15:04"))
 	}
-	diag, err := diagnostics.Status()
+	obsSummary, err := obs.Status()
 	if err == nil {
-		fmt.Fprintf(stdout, "diagnostics: %s · %d events · %d bytes\n",
-			enabledLabel(diag.Enabled), diag.Events, diag.Bytes)
+		fmt.Fprintf(stdout, "obs: %s · %d events · %d bytes\n",
+			enabledLabel(obsSummary.Enabled), obsSummary.Events, obsSummary.Bytes)
 	}
 }
 

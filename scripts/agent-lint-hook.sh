@@ -9,10 +9,12 @@ if [ ! -f go.mod ] || [ ! -f scripts/lint.sh ]; then
   exit 0
 fi
 
-sh scripts/lint.sh --agent
-status="$?"
-if [ "$status" -ne 0 ]; then
-  exit "$status"
+_PRE_LINT_SOURCED=1
+. scripts/lint.sh
+if ! has_changed_go_inputs; then
+  printf '{}\n'
+  exit 0
 fi
 
+sh scripts/lint.sh --agent
 printf '{}\n'

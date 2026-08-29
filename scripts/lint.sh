@@ -76,24 +76,20 @@ should_run_legibility() {
 run_legibility() {
   should_run_legibility || return 0
   ensure_legibility
+  issues_flag=""
+  [ "$strict" -eq 1 ] || issues_flag="--issues-exit-code=0"
   if [ "$all" -eq 1 ]; then
-    "$LEGIBILITY_BIN" run ./...
+    "$LEGIBILITY_BIN" run $issues_flag ./...
     return
   fi
-  "$LEGIBILITY_BIN" run "--new-from-rev=${LINT_BASE_REV}" ./...
+  "$LEGIBILITY_BIN" run $issues_flag "--new-from-rev=${LINT_BASE_REV}" ./...
 }
 
 run_lint() {
   run_fmt_check
   run_vet
   [ "$setup_only" -eq 1 ] && { ensure_legibility; return; }
-  should_run_legibility || return 0
-  ensure_legibility
-  if [ "$strict" -eq 1 ]; then
-    run_legibility
-    return
-  fi
-  run_legibility || echo "warn legibility findings are strict only for agent lint" >&2
+  run_legibility
 }
 
 main() {

@@ -1,37 +1,15 @@
-ifndef VERSION
-VERSION := dev
-endif
-ifndef GOVULNCHECK_VERSION
-GOVULNCHECK_VERSION := v1.2.0
-endif
-ifndef GOSEC_VERSION
-GOSEC_VERSION := v2.25.0
-endif
-ifndef GOSEC_FLAGS
-GOSEC_FLAGS := -quiet -exclude=G304,G703
-endif
+VERSION ?= dev
+GOVULNCHECK_VERSION ?= v1.2.0
+GOSEC_VERSION ?= v2.25.0
+GOSEC_FLAGS ?= -quiet -exclude=G304,G703
 GOSEC := go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
-ifndef DIST
-DIST := dist
-endif
-ifndef E2E_IMAGE
-E2E_IMAGE := pre-e2e
-endif
-ifndef E2E_TEST
-E2E_TEST := npm
-endif
+DIST ?= dist
+E2E_IMAGE ?= pre-e2e
+E2E_TEST ?= npm
 LDFLAGS := -ldflags="-s -w -X main.version=$(VERSION)"
 BUILD := CGO_ENABLED=0 go build -trimpath $(LDFLAGS)
 BINARY := $(DIST)/pre
 CASK_PATH := $(DIST)/homebrew/Casks/pre.rb
-CASK_VERSION_PATTERN := version "[^"]+"
-CASK_SHA_PATTERN := sha256 "[0-9a-f]{64}"
-CASK_BINARY_PATTERN := binary "pre-[^"]+", target: "pre"
-CASK_QUARANTINE_READ_PATTERN := args: ["-p", "com.apple.quarantine", binary],
-CASK_MUST_SUCCEED_PATTERN := must_succeed: false,
-CASK_STDERR_PATTERN := print_stderr: false
-CASK_QUARANTINE_DELETE_PATTERN := args: ["-d", "com.apple.quarantine",
-CASK_QUARANTINE_DELETE_PATTERN += binary] if quarantine.success?
 CASK_PLATFORM_COUNT := 4
 E2E_ROOT := tests/e2e
 E2E_DOCKERFILE := $(E2E_ROOT)/Dockerfile
@@ -44,9 +22,9 @@ E2E_TEST_SCRIPT := $(E2E_ROOT)/$(E2E_TEST)_test.sh
 HOST_OS := $(shell uname -s)
 
 .PHONY: build clean
-.PHONY: e2e fmt fmt-check gosec integration lint lint-agent lint-agent-all lint-all lint-legibility-setup
+.PHONY: fmt fmt-check gosec lint lint-agent lint-agent-all lint-all lint-legibility-setup
 .PHONY: release release-check release-preview
-.PHONY: screenshots script-test secrets security setup snapshot tag
+.PHONY: screenshots secrets security setup snapshot tag
 .PHONY: test test-e2e test-e2e-build test-e2e-docker test-e2e-list
 .PHONY: test-integration test-race test-scripts
 .PHONY: verify-cask-install verify-e2e verify-e2e-test verify-snapshot vuln
@@ -68,13 +46,13 @@ release-check:
 verify-snapshot:
 	test -s $(CASK_PATH)
 	ruby -c $(CASK_PATH)
-	grep -Eq '$(CASK_VERSION_PATTERN)' $(CASK_PATH)
-	test "$$(grep -Ec '$(CASK_SHA_PATTERN)' $(CASK_PATH))" -eq $(CASK_PLATFORM_COUNT)
-	test "$$(grep -Ec '$(CASK_BINARY_PATTERN)' $(CASK_PATH))" -eq $(CASK_PLATFORM_COUNT)
-	grep -Fq '$(CASK_QUARANTINE_READ_PATTERN)' $(CASK_PATH)
-	grep -Fq '$(CASK_MUST_SUCCEED_PATTERN)' $(CASK_PATH)
-	grep -Fq '$(CASK_STDERR_PATTERN)' $(CASK_PATH)
-	grep -Fq '$(CASK_QUARANTINE_DELETE_PATTERN)' $(CASK_PATH)
+	grep -Eq 'version "[^"]+"' $(CASK_PATH)
+	test "$$(grep -Ec 'sha256 "[0-9a-f]{64}"' $(CASK_PATH))" -eq $(CASK_PLATFORM_COUNT)
+	test "$$(grep -Ec 'binary "pre-[^"]+", target: "pre"' $(CASK_PATH))" -eq $(CASK_PLATFORM_COUNT)
+	grep -Fq 'args: ["-p", "com.apple.quarantine", binary],' $(CASK_PATH)
+	grep -Fq 'must_succeed: false,' $(CASK_PATH)
+	grep -Fq 'print_stderr: false' $(CASK_PATH)
+	grep -Fq 'args: ["-d", "com.apple.quarantine", binary] if quarantine.success?' $(CASK_PATH)
 
 verify-cask-install: verify-snapshot
 	sh tests/scripts/homebrew_cask_test.sh $(DIST)
@@ -104,8 +82,6 @@ test-race:
 
 test-e2e: verify-e2e
 	go test -tags e2e ./tests/e2e/
-
-e2e: test-e2e
 
 fmt:
 	gofmt -w .
@@ -139,15 +115,11 @@ security: vuln gosec
 test-integration:
 	go test -tags integration ./tests/integration/
 
-integration: test-integration
-
 test-scripts:
 	sh tests/scripts/install_test.sh
 	sh tests/scripts/lint_test.sh
 	sh tests/scripts/setup_test.sh
 	sh tests/scripts/tag_test.sh
-
-script-test: test-scripts
 
 screenshots:
 	go run ./cmd/pre screenshots dist/screenshots
