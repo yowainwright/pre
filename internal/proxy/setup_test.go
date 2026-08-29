@@ -284,31 +284,6 @@ func TestTeardownWriteError(t *testing.T) {
 	Teardown()
 }
 
-func TestSetupEnablesSystemScan(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
-	defer withStdinInput("y\n")()
-
-	Setup()
-}
-
-func TestSetupEnablesSystemScanConfigError(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("root can write to read-only dirs")
-	}
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
-	defer withStdinInput("y\n")()
-
-	libDir := filepath.Join(dir, "Library")
-	os.MkdirAll(libDir, 0555)
-	defer os.Chmod(libDir, 0755)
-
-	Setup()
-}
-
 func TestSetupWriteError(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
@@ -362,24 +337,6 @@ func TestSetupPreservesUnreadableRCFile(t *testing.T) {
 	}
 	if string(content) != string(original) {
 		t.Fatalf("expected RC file to remain unchanged, got %q", content)
-	}
-}
-
-func TestSetupDeclinesSystemScan(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
-	defer withStdinInput("n\n")()
-
-	Setup()
-
-	rcPath := filepath.Join(dir, ".zshrc")
-	content, err := os.ReadFile(rcPath)
-	if err != nil {
-		t.Fatalf("expected rc file: %v", err)
-	}
-	if !strings.Contains(string(content), shellHookStart) {
-		t.Error("expected hooks to be written even when scan declined")
 	}
 }
 

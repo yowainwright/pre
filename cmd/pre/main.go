@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -43,9 +42,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "       pre skills <add|show> [--global]")
 		return 1
 	}
-	proxy.SetSystemScanEnabled(cfg.SystemScan)
-	proxy.SetSystemScanTTL(cfg.SystemTTL)
-
 	switch args[0] {
 	case "setup":
 		proxy.Setup()
@@ -54,24 +50,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	case "scan":
-		if len(args) < 2 {
+		if len(args) != 2 {
+			fmt.Fprintln(stderr, "usage: pre scan system")
 			return 1
 		}
-		if args[1] == "system" {
-			proxy.RunSystemScan()
-			return 0
-		}
-		mgr := manager.Get(args[1])
-		if mgr == nil {
+		if args[1] != "system" {
+			fmt.Fprintln(stderr, "usage: pre scan system")
 			return 1
 		}
-		proxy.RunBackgroundScan(mgr)
+		proxy.RunSystemScan()
+		return 0
 	case "config":
 		return handleConfig(args[1:], cfg, stdout, stderr)
 	case "obs", "observability":
 		return handleObs(args[1:], stdout, stderr)
 	case "status":
-		handleStatus(cfg, stdout)
+		handleStatus(stdout)
 	case "installed":
 		return handlePackageInventory(stdout, stderr)
 	case "manage", "m", "tui":
@@ -95,7 +89,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "packages":
 		return handlePackages(args[1:], stdout, stderr)
 	case "self":
-		return handleSelf(args[1:], cfg, stdout, stderr)
+		return handleSelf(args[1:], stdout, stderr)
 	case "skills":
 		return handleSkills(args[1:], stdout, stderr)
 	case "screenshots":
@@ -185,8 +179,6 @@ func handleConfig(args []string, cfg *config.Config, stdout, stderr io.Writer) i
 	if len(args) == 0 {
 		fmt.Fprintf(stdout, "api.endpoint  %s\n", cfg.API.Endpoint)
 		fmt.Fprintf(stdout, "cache.ttl     %s\n", cfg.Cache.TTL)
-		fmt.Fprintf(stdout, "systemScan    %v\n", cfg.SystemScan)
-		fmt.Fprintf(stdout, "systemTTL     %s\n", cfg.SystemTTL)
 		return 0
 	}
 	if args[0] != "set" {
@@ -208,21 +200,8 @@ func handleConfig(args []string, cfg *config.Config, stdout, stderr io.Writer) i
 			return 1
 		}
 		cfg.Cache.TTL = val
-	case "systemScan":
-		enabled, err := strconv.ParseBool(val)
-		if err != nil {
-			fmt.Fprintf(stderr, "pre config: invalid boolean for %s: %q\n", args[1], val)
-			return 1
-		}
-		cfg.SystemScan = enabled
-	case "systemTTL":
-		if err := validateNonNegativeDuration(val); err != nil {
-			fmt.Fprintf(stderr, "pre config: invalid duration for %s: %q\n", args[1], val)
-			return 1
-		}
-		cfg.SystemTTL = val
 	default:
-		fmt.Fprintf(stderr, "pre config: unknown key %q (api.endpoint, cache.ttl, systemScan, systemTTL)\n", args[1])
+		fmt.Fprintf(stderr, "pre config: unknown key %q (api.endpoint, cache.ttl)\n", args[1])
 		return 1
 	}
 	if err := config.Save(cfg); err != nil {
@@ -255,35 +234,53 @@ func normalizeConfigKey(key string) string {
 	}
 }
 
-func handleStatus(cfg *config.Config, stdout io.Writer) {
-	info := collectInstallInfo(cfg)
+func handleStatus(stdout io.Writer) {
+	info := collectInstallInfo()
 	renderInstallInfo(stdout, info)
 	fmt.Fprintln(stdout)
+	renderManagerStatus(stdout)
+	renderCacheStatus(stdout)
+	renderSystemStatus(stdout, proxy.LoadSystemStats())
+	renderObsStatus(stdout)
+}
 
+func renderManagerStatus(stdout io.Writer) {
 	mgrs := manager.All()
 	fmt.Fprintf(stdout, "managers (%d):\n", len(mgrs))
 	for _, m := range mgrs {
 		fmt.Fprintf(stdout, "  %-8s %s\n", m.Name, m.Ecosystem)
 	}
+}
 
+func renderCacheStatus(stdout io.Writer) {
 	c := cache.Load()
 	fmt.Fprintf(stdout, "cached: %d packages\n", len(c))
+}
 
-	sys := proxy.LoadSystemStats()
+func renderSystemStatus(stdout io.Writer, sys proxy.SystemStats) {
 	if sys.Total == 0 {
-		fmt.Fprintf(stdout, "system scan: not configured (run 'pre setup')\n")
-	} else if sys.Errors > 0 {
-		if sys.LastUpdated.IsZero() {
-			fmt.Fprintf(stdout, "system scan: %d total · %d crit · %d warn · %d errors · no successful run\n",
-				sys.Total, sys.Crit, sys.Warn, sys.Errors)
-		} else {
-			fmt.Fprintf(stdout, "system scan: %d total · %d crit · %d warn · %d errors · last successful %s\n",
-				sys.Total, sys.Crit, sys.Warn, sys.Errors, sys.LastUpdated.Format("2006-01-02 15:04"))
-		}
-	} else {
-		fmt.Fprintf(stdout, "system scan: %d total · %d crit · %d warn · last run %s\n",
-			sys.Total, sys.Crit, sys.Warn, sys.LastUpdated.Format("2006-01-02 15:04"))
+		fmt.Fprintf(stdout, "system scan: no manual scan yet\n")
+		return
 	}
+	if sys.Errors > 0 {
+		renderSystemErrorStatus(stdout, sys)
+		return
+	}
+	fmt.Fprintf(stdout, "system scan: %d total · %d crit · %d warn · last run %s\n",
+		sys.Total, sys.Crit, sys.Warn, sys.LastUpdated.Format("2006-01-02 15:04"))
+}
+
+func renderSystemErrorStatus(stdout io.Writer, sys proxy.SystemStats) {
+	if sys.LastUpdated.IsZero() {
+		fmt.Fprintf(stdout, "system scan: %d total · %d crit · %d warn · %d errors · no successful run\n",
+			sys.Total, sys.Crit, sys.Warn, sys.Errors)
+		return
+	}
+	fmt.Fprintf(stdout, "system scan: %d total · %d crit · %d warn · %d errors · last successful %s\n",
+		sys.Total, sys.Crit, sys.Warn, sys.Errors, sys.LastUpdated.Format("2006-01-02 15:04"))
+}
+
+func renderObsStatus(stdout io.Writer) {
 	obsSummary, err := obs.Status()
 	if err == nil {
 		fmt.Fprintf(stdout, "obs: %s · %d events · %d bytes\n",

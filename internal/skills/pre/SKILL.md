@@ -80,7 +80,7 @@ pre skills show          # print to stdout for other agent configs
 ## Config
 
 `pre config` shows config; `pre config set <key> <value>` updates it.
-Keys: `api.endpoint`, `cache.ttl`, `systemScan`, `systemTTL`, `managers`.
+Keys: `api.endpoint`, `cache.ttl`, `managers`.
 
 ## Agent loop
 

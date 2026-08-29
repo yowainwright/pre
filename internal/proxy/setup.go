@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/yowainwright/pre/internal/config"
 	"github.com/yowainwright/pre/internal/manager"
 )
 
@@ -137,16 +136,6 @@ func Setup() {
 
 	fmt.Println("pre: added hooks to", rcFile)
 	fmt.Println("pre: restart your shell or run: source", rcFile)
-
-	if confirm("Enable weekly background system scan? (checks all cached packages for new CVEs)") {
-		cfg := config.Load()
-		cfg.SystemScan = true
-		if err := config.Save(cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "pre setup: could not save config: %v\n", err)
-		} else {
-			fmt.Println("pre: system scan enabled — runs weekly in the background after installs")
-		}
-	}
 }
 
 func buildShellHook() string {

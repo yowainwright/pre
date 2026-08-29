@@ -30,8 +30,9 @@ func renderTree(ecosystem string, results []scanResult) string {
 	safeEcosystem := terminalText(ecosystem)
 	headerText := fmt.Sprintf("checking %d package(s) (%s)", len(results), safeEcosystem)
 	header := display.Cyan(display.IconInfo) + " " + display.Cyan(headerText)
-	sys := loadSystemStatsFn()
-	return logo + "\n" + header + "\n" + display.Tree(nodes) + display.HRule(20) + "\n" + renderSummary(results) + "\n" + renderSystemLine(sys) + "\n"
+	treeWithRule := display.Tree(nodes) + display.HRule(20)
+	summary := renderSummary(results)
+	return strings.Join([]string{logo, header, treeWithRule, summary, ""}, "\n")
 }
 
 func renderQuiet(count int) string {
@@ -108,18 +109,6 @@ func renderSummary(results []scanResult) string {
 		display.Cyan(display.IconUp) + fmt.Sprintf(" %d ups", ups),
 		display.Green(display.IconSuccess) + " " + display.BrightWhite(fmt.Sprintf("%d cached", cached)),
 		fmt.Sprintf("%d tots", tots),
-	}, sep)
-}
-
-func renderSystemLine(s SystemStats) string {
-	if s.Total == 0 {
-		return display.Dim("run 'pre setup' to enable weekly system scans")
-	}
-	sep := display.Dim(" · ")
-	return strings.Join([]string{
-		display.Red(display.IconError) + fmt.Sprintf(" %d syscrit", s.Crit),
-		display.Yellow(display.IconWarning) + fmt.Sprintf(" %d syswarn", s.Warn),
-		fmt.Sprintf("%d tots", s.Total),
 	}, sep)
 }
 

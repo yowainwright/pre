@@ -18,7 +18,6 @@ var (
 	processExit                         = os.Exit
 	stdinReader               io.Reader = os.Stdin
 	ExecFn                              = execReal
-	securityCheckFn                     = security.Check
 	securityBatchCheckFn                = security.CheckBatch
 	resolveVersionFn                    = manager.ResolveVersion
 	loadCacheFn                         = cache.Load

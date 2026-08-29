@@ -10,23 +10,6 @@ import (
 	"github.com/yowainwright/pre/internal/obs"
 )
 
-const defaultSystemScanTTL = 7 * 24 * time.Hour
-
-var configuredSystemScanTTL = defaultSystemScanTTL
-
-func SetSystemScanTTL(s string) {
-	if s == "" {
-		return
-	}
-	if d, err := time.ParseDuration(s); err == nil && d >= 0 {
-		configuredSystemScanTTL = d
-	}
-}
-
-func systemScanTTL() time.Duration {
-	return configuredSystemScanTTL
-}
-
 type SystemStats struct {
 	Crit          int       `json:"crit"`
 	Warn          int       `json:"warn"`
@@ -34,21 +17,6 @@ type SystemStats struct {
 	Total         int       `json:"total"`
 	LastUpdated   time.Time `json:"lastUpdated"`
 	LastAttempted time.Time `json:"lastAttempted,omitempty"`
-}
-
-func shouldRunSystemScan() bool {
-	s := loadSystemStatsFn()
-	ttl := systemScanTTL()
-	if ttl <= 0 {
-		return true
-	}
-
-	now := time.Now()
-	lastRun := s.LastUpdated
-	if s.LastAttempted.After(lastRun) {
-		lastRun = s.LastAttempted
-	}
-	return lastRun.IsZero() || lastRun.After(now) || now.Sub(lastRun) > ttl
 }
 
 var (

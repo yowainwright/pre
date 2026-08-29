@@ -10,17 +10,14 @@ import (
 )
 
 const (
-	DefaultEndpoint      = "https://api.osv.dev/v1/query"
-	DefaultTTL           = "24h"
-	DefaultSystemScanTTL = "168h"
+	DefaultEndpoint = "https://api.osv.dev/v1/query"
+	DefaultTTL      = "24h"
 )
 
 type Config struct {
-	API        APIConfig       `json:"api"`
-	Cache      CacheConfig     `json:"cache"`
-	Managers   []ManagerConfig `json:"managers"`
-	SystemScan bool            `json:"systemScan"`
-	SystemTTL  string          `json:"systemTTL"`
+	API      APIConfig       `json:"api"`
+	Cache    CacheConfig     `json:"cache"`
+	Managers []ManagerConfig `json:"managers"`
 }
 
 type APIConfig struct {
@@ -66,9 +63,8 @@ func Load() *Config {
 
 func defaults() *Config {
 	return &Config{
-		API:       APIConfig{Endpoint: DefaultEndpoint},
-		Cache:     CacheConfig{TTL: DefaultTTL},
-		SystemTTL: DefaultSystemScanTTL,
+		API:   APIConfig{Endpoint: DefaultEndpoint},
+		Cache: CacheConfig{TTL: DefaultTTL},
 	}
 }
 

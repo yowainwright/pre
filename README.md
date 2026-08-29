@@ -203,7 +203,7 @@ Workspace-wide `cargo fetch` requires the shared `Cargo.lock`; run `cargo genera
 ```sh
 pre setup                     # inject shell hooks
 pre teardown                  # remove shell hooks
-pre status                    # pre install state, managers, cache size, last system scan
+pre status                    # pre install state, managers, cache size, last manual system scan
 pre manage                    # package manager TUI
 pre m                         # short alias for pre manage
 pre installed                 # package inventory
@@ -234,15 +234,12 @@ pre self uninstall [--purge]  # remove pre itself
 |-----|---------|--------------|
 | `api.endpoint` | `https://api.osv.dev/v1/query` | OSV-compatible API to query |
 | `cache.ttl` | `24h` | How long a clean result is trusted |
-| `systemScan` | `false` | Enables explicit cached-package scan policy |
-| `systemTTL` | `168h` | How often cached-package scan state is considered fresh |
 | `managers` | — | Add or override managers |
 
 **Quick examples:**
 
 ```sh
 pre config set cache.ttl 12h
-pre config set systemScan true
 PRE_CACHE_TTL=0s npm install   # bypass cache for one install
 PRE_QUIET=1 npm install        # hide clean scan output
 PRE_DISABLE=1 npm install      # emergency bypass
@@ -264,7 +261,7 @@ output. Events include manager names, command categories, decision reasons,
 package counts, cache sizes, durations, exit codes, and Go runtime memory /
 goroutine samples.
 
-Diagnostics do not record command text, full arguments, paths, environment
+Obs does not record command text, full arguments, paths, environment
 variables, package names by default, OSV response bodies, prompts, completions,
 or plugin contents. Event logs are bounded and rotated locally.
 

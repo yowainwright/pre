@@ -15,20 +15,6 @@ func TestRenderQuiet(t *testing.T) {
 	}
 }
 
-func TestRenderSystemLineEmpty(t *testing.T) {
-	out := renderSystemLine(SystemStats{})
-	if !strings.Contains(out, "pre setup") {
-		t.Errorf("expected setup hint for empty stats, got %q", out)
-	}
-}
-
-func TestRenderSystemLineWithStats(t *testing.T) {
-	out := renderSystemLine(SystemStats{Crit: 2, Warn: 3, Total: 10})
-	if !strings.Contains(out, "2") || !strings.Contains(out, "3") || !strings.Contains(out, "10") {
-		t.Errorf("expected crit/warn/total in output, got %q", out)
-	}
-}
-
 func TestNodeStatusClean(t *testing.T) {
 	out := nodeStatus(scanResult{})
 	if !strings.Contains(out, "clean") {

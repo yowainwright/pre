@@ -123,20 +123,12 @@ func TestSaveAndReload(t *testing.T) {
 	defer withConfigDir(dir)()
 	cfg := defaults()
 	cfg.API.Endpoint = "https://custom.example.com"
-	cfg.SystemScan = true
-	cfg.SystemTTL = "48h"
 	if err := Save(cfg); err != nil {
 		t.Fatalf("Save failed: %v", err)
 	}
 	loaded := Load()
 	if loaded.API.Endpoint != "https://custom.example.com" {
 		t.Errorf("endpoint not persisted, got %q", loaded.API.Endpoint)
-	}
-	if !loaded.SystemScan {
-		t.Error("systemScan not persisted")
-	}
-	if loaded.SystemTTL != "48h" {
-		t.Errorf("systemTTL not persisted, got %q", loaded.SystemTTL)
 	}
 }
 

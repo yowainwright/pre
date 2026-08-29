@@ -3,11 +3,9 @@ package proxy
 import (
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/yowainwright/pre/internal/cache"
@@ -44,10 +42,6 @@ type systemScanChanges struct {
 }
 
 var (
-	systemScanEnabled     bool
-	spawnBackgroundScanFn = spawnBackgroundScan
-	spawnSystemScanFn     = spawnSystemScan
-	executableFn          = os.Executable
 	acquireSystemScanLock = tryAcquireSystemScanLock
 )
 
@@ -58,138 +52,8 @@ var (
 )
 
 const systemScanLockStaleAfter = 30 * time.Minute
-const scanConcurrency = 10
 
 var errMissingVersion = errors.New("version unavailable; skipped vulnerability check")
-
-func SetSystemScanEnabled(v bool) {
-	systemScanEnabled = v
-}
-
-func spawnBackgroundScan(mgrName string) {
-	obs.Record("pre.background_scan.spawn_requested", map[string]any{"manager": mgrName})
-	self, err := executableFn()
-	if err != nil {
-		obs.Record("pre.background_scan.spawn_failed", map[string]any{
-			"manager":    mgrName,
-			"error_type": obs.ErrorType(err),
-		})
-		return
-	}
-	cmd := exec.Command(self, "scan", mgrName) // #nosec G204 -- self is the current pre executable path.
-	if err := cmd.Start(); err != nil {
-		obs.Record("pre.background_scan.spawn_failed", map[string]any{
-			"manager":    mgrName,
-			"error_type": obs.ErrorType(err),
-		})
-	}
-}
-
-func spawnSystemScan() {
-	obs.Record("pre.system_scan.spawn_requested", nil)
-	self, err := executableFn()
-	if err != nil {
-		obs.Record("pre.system_scan.spawn_failed", map[string]any{
-			"error_type": obs.ErrorType(err),
-		})
-		return
-	}
-	cmd := exec.Command(self, "scan", "system") // #nosec G204 -- self is the current pre executable path.
-	if err := cmd.Start(); err != nil {
-		obs.Record("pre.system_scan.spawn_failed", map[string]any{
-			"error_type": obs.ErrorType(err),
-		})
-	}
-}
-
-func RunBackgroundScan(mgr *manager.Manager) {
-	start := time.Now()
-	obs.Record("pre.background_scan.started", map[string]any{
-		"manager":   mgr.Name,
-		"ecosystem": mgr.Ecosystem,
-	})
-	if disableEnabled() {
-		obs.Record("pre.background_scan.skipped", map[string]any{
-			"manager":     mgr.Name,
-			"ecosystem":   mgr.Ecosystem,
-			"reason":      "env_disabled",
-			"duration_ms": durationMillis(start),
-		})
-		return
-	}
-	packages, ok := backgroundScanPackages(mgr)
-	if !ok {
-		return
-	}
-	c := loadCacheFn()
-	results := scanBatchWithPolicy(mgr, packages, c, false)
-	stats, fresh := backgroundScanOutcome(mgr, results)
-	stats.Total = len(packages)
-	storeFreshScanResults(fresh)
-	saveSystemStatsFn(stats)
-	obs.Record("pre.background_scan.completed", map[string]any{
-		"manager":        mgr.Name,
-		"ecosystem":      mgr.Ecosystem,
-		"package_count":  len(packages),
-		"critical_count": stats.Crit,
-		"warning_count":  stats.Warn,
-		"error_count":    stats.Errors,
-		"duration_ms":    durationMillis(start),
-	})
-}
-
-func backgroundScanPackages(mgr *manager.Manager) ([]string, bool) {
-	validationErr := validateManifestFn(mgr, ".")
-	if validationErr != nil {
-		obs.Record("pre.background_scan.blocked", map[string]any{
-			"manager":    mgr.Name,
-			"ecosystem":  mgr.Ecosystem,
-			"reason":     "manifest_validation",
-			"error_type": obs.ErrorType(validationErr),
-		})
-		saveSystemStatsFn(SystemStats{Errors: 1})
-		return nil, false
-	}
-	packages := readManifestFn(mgr)
-	if len(packages) == 0 {
-		obs.Record("pre.background_scan.skipped", map[string]any{
-			"manager":   mgr.Name,
-			"ecosystem": mgr.Ecosystem,
-			"reason":    "no_packages",
-		})
-		return nil, false
-	}
-	if limit, exceeded := packageLimitExceeded(len(packages)); exceeded {
-		obs.Record("pre.background_scan.skipped", map[string]any{
-			"manager":       mgr.Name,
-			"ecosystem":     mgr.Ecosystem,
-			"reason":        "package_limit",
-			"package_count": len(packages),
-			"package_limit": limit,
-		})
-		return nil, false
-	}
-	return packages, true
-}
-
-func backgroundScanOutcome(mgr *manager.Manager, results []scanResult) (SystemStats, cache.Cache) {
-	stats := SystemStats{}
-	fresh := make(cache.Cache)
-	for _, r := range results {
-		switch {
-		case hasCriticalVulns(r):
-			stats.Crit++
-		case len(r.vulns) > 0:
-			stats.Warn++
-		case r.err != nil:
-			stats.Errors++
-		}
-		if shouldCacheScanResult(r) {
-			cache.Set(fresh, cache.Key(mgr.Ecosystem, r.name, r.version))
-		}
-	}
-	return stats, fresh
-}
 
 func storeFreshScanResults(fresh cache.Cache) {
 	if len(fresh) == 0 {
@@ -200,11 +64,6 @@ func storeFreshScanResults(fresh cache.Cache) {
 			cache.Set(current, key)
 		}
 	})
-}
-
-func shouldCacheScanResult(result scanResult) bool {
-	isClean := len(result.vulns) == 0 && result.err == nil
-	return isClean && result.version != "" && result.cacheable && !result.cached
 }
 
 func RunSystemScan() {
@@ -386,66 +245,6 @@ func applySystemScanChanges(changes systemScanChanges) {
 			cache.Set(current, key)
 		}
 	})
-}
-
-func scanAllWithPolicy(mgr *manager.Manager, packages []string, c cache.Cache, allowMissingVersionResolution bool) []scanResult {
-	type work struct {
-		idx     int
-		name    string
-		version string
-	}
-
-	results := make([]scanResult, len(packages))
-	var pending []work
-
-	for i, pkg := range packages {
-		name, version := manager.ParseSpec(mgr.Ecosystem, pkg)
-		if hasExactCacheHit(mgr, c, name, version) {
-			label := name + "@" + version
-			results[i] = scanResult{name: name, version: version, label: label, cached: true}
-			continue
-		}
-		pending = append(pending, work{idx: i, name: name, version: version})
-	}
-
-	jobs := make(chan work)
-	var wg sync.WaitGroup
-
-	workers := scanConcurrency
-	if len(pending) < workers {
-		workers = len(pending)
-	}
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for w := range jobs {
-				results[w.idx] = scanPendingPackage(mgr, w.name, w.version, c, allowMissingVersionResolution)
-			}
-		}()
-	}
-
-	for _, w := range pending {
-		jobs <- w
-	}
-	close(jobs)
-
-	wg.Wait()
-	return results
-}
-
-func scanPendingPackage(mgr *manager.Manager, name, version string, c cache.Cache, allowMissingVersionResolution bool) scanResult {
-	result := prepareScan(mgr, name, version, c, allowMissingVersionResolution)
-	if result.err != nil || result.cached {
-		return result
-	}
-	vulns, err := securityCheckFn(mgr.Ecosystem, result.name, result.version)
-	if err != nil {
-		result.err = err
-		return result
-	}
-	result.vulns = vulns
-	return result
 }
 
 func prepareScan(mgr *manager.Manager, name, requestedVersion string, c cache.Cache, allowMissing bool) scanResult {

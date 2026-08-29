@@ -161,8 +161,6 @@ func TestRunConfigRejectsInvalidDuration(t *testing.T) {
 	tests := [][]string{
 		{"config", "set", "cache.ttl", "soon"},
 		{"config", "set", "cache.ttl", "-1h"},
-		{"config", "set", "systemTTL", "weekly"},
-		{"config", "set", "systemTTL", "-1h"},
 	}
 	for _, args := range tests {
 		var out, errOut bytes.Buffer
@@ -173,20 +171,6 @@ func TestRunConfigRejectsInvalidDuration(t *testing.T) {
 		if !strings.Contains(errOut.String(), "invalid duration") {
 			t.Errorf("%v: expected invalid duration error, got: %s", args, errOut.String())
 		}
-	}
-}
-
-func TestRunConfigRejectsInvalidSystemScanBool(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-
-	var out, errOut bytes.Buffer
-	code := run([]string{"config", "set", "systemScan", "sometimes"}, &out, &errOut)
-	if code != 1 {
-		t.Errorf("expected exit 1, got %d", code)
-	}
-	if !strings.Contains(errOut.String(), "invalid boolean") {
-		t.Errorf("expected invalid boolean error, got: %s", errOut.String())
 	}
 }
 
@@ -1012,19 +996,14 @@ func TestRunScanSystem(t *testing.T) {
 	}
 }
 
-func TestRunScanManager(t *testing.T) {
+func TestRunScanRejectsManager(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := run([]string{"scan", "npm"}, &out, &errOut)
-	if code != 0 {
-		t.Errorf("expected exit 0, got %d", code)
-	}
-}
-
-func TestRunScanUnknownManager(t *testing.T) {
-	var out, errOut bytes.Buffer
-	code := run([]string{"scan", "unknownxyz"}, &out, &errOut)
 	if code != 1 {
-		t.Errorf("expected exit 1 for unknown manager, got %d", code)
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "usage: pre scan system") {
+		t.Errorf("expected scan usage, got: %s", errOut.String())
 	}
 }
 
@@ -1053,28 +1032,6 @@ func TestRunConfigSetDottedEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "api.endpoint") {
 		t.Errorf("expected api.endpoint in output, got: %s", out.String())
-	}
-}
-
-func TestRunConfigSetSystemScan(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-
-	var out, errOut bytes.Buffer
-	code := run([]string{"config", "set", "systemScan", "true"}, &out, &errOut)
-	if code != 0 {
-		t.Errorf("expected exit 0, got %d — err: %s", code, errOut.String())
-	}
-}
-
-func TestRunConfigSetSystemTTL(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-
-	var out, errOut bytes.Buffer
-	code := run([]string{"config", "set", "systemTTL", "48h"}, &out, &errOut)
-	if code != 0 {
-		t.Errorf("expected exit 0, got %d — err: %s", code, errOut.String())
 	}
 }
 
@@ -1546,19 +1503,6 @@ func TestRenderInstallInfoNoBinary(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "unknown") {
 		t.Errorf("expected 'unknown' when no binary path, got: %s", out.String())
-	}
-}
-
-func TestRenderInstallInfoSystemScanEnabled(t *testing.T) {
-	var out bytes.Buffer
-	renderInstallInfo(&out, installInfo{
-		Version:    "dev",
-		BinaryPath: "/usr/local/bin/pre",
-		Source:     installSourceManual,
-		SystemScan: true,
-	})
-	if !strings.Contains(out.String(), "enabled") {
-		t.Errorf("expected 'enabled' for SystemScan=true, got: %s", out.String())
 	}
 }
 
