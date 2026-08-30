@@ -1389,23 +1389,43 @@ func TestInterceptDeniedInstallDoesNotCache(t *testing.T) {
 	}
 }
 
-func TestInterceptApprovedWarningWritesCache(t *testing.T) {
-	updated := make(cache.Cache)
+func interceptApprovedInstall(t *testing.T, updated cache.Cache, vulns []security.Vulnerability) {
+	t.Helper()
 	defer withStdinInput("y\n")()
 	defer withExecFn(noopExec)()
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(func(fn func(cache.Cache)) { fn(updated) })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
-		return []security.Vulnerability{{ID: "CVE-2026-0001", Severity: security.SeverityMedium}}, nil
+		return vulns, nil
 	})()
 	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
 		return "18.0.0", nil
 	})()
 
 	Intercept(npmMgr(), []string{"install", "react"})
+}
 
-	if !cache.Hit(updated, cache.Key("npm", "react", "18.0.0")) {
-		t.Fatalf("expected approved warning to be cached, got %#v", updated)
+func TestInterceptApprovedWarningDoesNotWriteCache(t *testing.T) {
+	updated := make(cache.Cache)
+	vulns := []security.Vulnerability{{
+		ID:       "CVE-2026-0001",
+		Severity: security.SeverityMedium,
+	}}
+	interceptApprovedInstall(t, updated, vulns)
+
+	key := cache.Key("npm", "react", "18.0.0")
+	if cache.Hit(updated, key) {
+		t.Fatalf("expected approved warning not to be cached, got %#v", updated)
+	}
+}
+
+func TestInterceptApprovedCleanWritesCache(t *testing.T) {
+	updated := make(cache.Cache)
+	interceptApprovedInstall(t, updated, nil)
+
+	key := cache.Key("npm", "react", "18.0.0")
+	if !cache.Hit(updated, key) {
+		t.Fatalf("expected approved clean result to be cached, got %#v", updated)
 	}
 }
 

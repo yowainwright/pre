@@ -232,6 +232,9 @@ func shouldCacheApprovedResult(result scanResult) bool {
 	if result.version == "" {
 		return false
 	}
+	if len(result.vulns) > 0 {
+		return false
+	}
 	if !result.cacheable {
 		return false
 	}
