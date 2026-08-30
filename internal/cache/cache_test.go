@@ -1,11 +1,15 @@
 package cache
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/yowainwright/pre/internal/obs"
 )
 
 func withCacheDir(dir string) func() {
@@ -22,6 +26,42 @@ func resetConfiguredTTL() func() {
 func resetConfiguredSource() func() {
 	orig := configuredSource
 	return func() { configuredSource = orig }
+}
+
+func resetConfiguredMaxEntries() func() {
+	orig := configuredMaxEntries
+	return func() { configuredMaxEntries = orig }
+}
+
+func resetConfiguredMaxBytes() func() {
+	orig := configuredMaxBytes
+	return func() { configuredMaxBytes = orig }
+}
+
+func withObsDir(t *testing.T) {
+	t.Helper()
+	t.Setenv("PRE_OBS_DIR", t.TempDir())
+	t.Setenv("PRE_OBS", "1")
+}
+
+func requireObsEvent(t *testing.T, name string) obs.Event {
+	t.Helper()
+	for _, event := range obsEvents(t) {
+		if event["event.name"] == name {
+			return event
+		}
+	}
+	t.Fatalf("missing obs event %q", name)
+	return nil
+}
+
+func obsEvents(t *testing.T) []obs.Event {
+	t.Helper()
+	events, _, err := obs.Events(time.Time{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return events
 }
 
 func TestTTLDefault(t *testing.T) {
@@ -230,6 +270,14 @@ func TestSetStoresSource(t *testing.T) {
 	}
 }
 
+func TestSetSkipsVersionlessKey(t *testing.T) {
+	c := make(Cache)
+	Set(c, Key("npm", "react", ""))
+	if len(c) != 0 {
+		t.Fatalf("expected versionless key not to be cached, got %#v", c)
+	}
+}
+
 func TestLoadEmpty(t *testing.T) {
 	defer withCacheDir(t.TempDir())()
 	c := Load()
@@ -248,6 +296,22 @@ func TestSaveAndLoad(t *testing.T) {
 	loaded := Load()
 	if !Hit(loaded, Key("npm", "react", "18.0.0")) {
 		t.Error("expected cache hit after save and load")
+	}
+}
+
+func TestSaveAndLoadRecordDiagnostics(t *testing.T) {
+	withObsDir(t)
+	defer withCacheDir(t.TempDir())()
+
+	c := make(Cache)
+	Set(c, Key("npm", "react", "18.0.0"))
+	Save(c)
+	Load()
+
+	written := requireObsEvent(t, "pre.cache.written")
+	loaded := requireObsEvent(t, "pre.cache.loaded")
+	if written["cache_entries"] != float64(1) || loaded["cache_entries"] != float64(1) {
+		t.Fatalf("expected cache entry counts, got written=%#v loaded=%#v", written, loaded)
 	}
 }
 
@@ -286,6 +350,31 @@ func TestUpdateDeletesEntries(t *testing.T) {
 	}
 }
 
+func TestConcurrentUpdatesPreserveApprovals(t *testing.T) {
+	defer withCacheDir(t.TempDir())()
+
+	keys := []string{
+		Key("npm", "react", "18.0.0"),
+		Key("npm", "lodash", "4.17.21"),
+	}
+	var wg sync.WaitGroup
+	for _, key := range keys {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			Update(func(current Cache) { Set(current, key) })
+		}()
+	}
+	wg.Wait()
+
+	loaded := Load()
+	for _, key := range keys {
+		if !Hit(loaded, key) {
+			t.Fatalf("expected cache hit for %s after concurrent updates, got %#v", key, loaded)
+		}
+	}
+}
+
 func TestSaveBadDir(t *testing.T) {
 	defer withCacheDir(filepath.Join(t.TempDir(), "nonexistent-parent"))()
 	c := make(Cache)
@@ -308,6 +397,7 @@ func TestParseKeyNoSlash(t *testing.T) {
 }
 
 func TestLoadCacheDirError(t *testing.T) {
+	withObsDir(t)
 	orig := cacheDirFn
 	cacheDirFn = func() (string, error) { return "", errors.New("no dir") }
 	defer func() { cacheDirFn = orig }()
@@ -316,15 +406,24 @@ func TestLoadCacheDirError(t *testing.T) {
 	if len(c) != 0 {
 		t.Error("expected empty cache when dir fn errors")
 	}
+	event := requireObsEvent(t, "pre.cache.load_failed")
+	if event["error_type"] == "" {
+		t.Fatalf("expected error type, got %#v", event)
+	}
 }
 
 func TestSaveCacheDirError(t *testing.T) {
+	withObsDir(t)
 	orig := cacheDirFn
 	cacheDirFn = func() (string, error) { return "", errors.New("no dir") }
 	defer func() { cacheDirFn = orig }()
 
 	c := make(Cache)
 	Save(c)
+	event := requireObsEvent(t, "pre.cache.write_failed")
+	if event["error_type"] == "" {
+		t.Fatalf("expected error type, got %#v", event)
+	}
 }
 
 func TestSaveMkdirAllError(t *testing.T) {
@@ -337,13 +436,22 @@ func TestSaveMkdirAllError(t *testing.T) {
 }
 
 func TestLoadBadJSON(t *testing.T) {
+	withObsDir(t)
 	dir := t.TempDir()
 	defer withCacheDir(dir)()
 	os.MkdirAll(filepath.Join(dir, "pre"), 0755)
-	os.WriteFile(filepath.Join(dir, "pre", "versions.json"), []byte("not json"), 0644)
+	path := filepath.Join(dir, "pre", "versions.json")
+	os.WriteFile(path, []byte("not json"), 0644)
 	c := Load()
 	if len(c) != 0 {
 		t.Error("expected empty cache on bad JSON")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected bad cache to be quarantined, got %v", err)
+	}
+	event := requireObsEvent(t, "pre.cache.load_failed")
+	if event["error_type"] == "" {
+		t.Fatalf("expected load failure obs event, got %#v", event)
 	}
 }
 
@@ -451,4 +559,277 @@ func TestLoadMigratesLegacyKeys(t *testing.T) {
 	if !Hit(c, Key("npm", "react", "18.0.0")) {
 		t.Error("expected migrated cache hit")
 	}
+}
+
+func TestSavePrunesMaxEntries(t *testing.T) {
+	defer resetConfiguredMaxEntries()()
+	configuredMaxEntries = 2
+	defer withCacheDir(t.TempDir())()
+
+	c := make(Cache)
+	c[Key("npm", "old", "1.0.0")] = Entry{Version: "1.0.0", CheckedAt: time.Now().Add(-3 * time.Hour)}
+	c[Key("npm", "mid", "1.0.0")] = Entry{Version: "1.0.0", CheckedAt: time.Now().Add(-2 * time.Hour)}
+	c[Key("npm", "new", "1.0.0")] = Entry{Version: "1.0.0", CheckedAt: time.Now().Add(-1 * time.Hour)}
+
+	Save(c)
+	loaded := Load()
+
+	if len(loaded) != 2 {
+		t.Fatalf("expected two newest entries, got %#v", loaded)
+	}
+	if Hit(loaded, Key("npm", "old", "1.0.0")) {
+		t.Fatal("expected oldest entry to be pruned")
+	}
+}
+
+func TestSavePrunesMaxBytes(t *testing.T) {
+	defer resetConfiguredMaxBytes()()
+	configuredMaxBytes = 160
+	defer withCacheDir(t.TempDir())()
+
+	c := cacheWithOrderedEntries([]string{"old", "mid", "new"})
+
+	Save(c)
+	stats := FileStats()
+
+	if stats.Bytes > MaxBytes() {
+		t.Fatalf("expected cache bytes <= %d, got %d", MaxBytes(), stats.Bytes)
+	}
+	if stats.Entries >= 3 {
+		t.Fatalf("expected byte pruning to remove entries, got %d", stats.Entries)
+	}
+}
+
+func cacheWithOrderedEntries(names []string) Cache {
+	c := make(Cache)
+	for _, name := range names {
+		Set(c, Key("npm", name, "1.0.0"))
+		time.Sleep(time.Millisecond)
+	}
+	return c
+}
+
+func TestLoadPrunesExpiredEntries(t *testing.T) {
+	dir := t.TempDir()
+	defer withCacheDir(dir)()
+	writeExpiredCacheFixture(t, dir)
+
+	c := Load()
+	assertOnlyFreshCacheEntry(t, c)
+}
+
+func TestLoadPersistsPrunedEntries(t *testing.T) {
+	dir := t.TempDir()
+	defer withCacheDir(dir)()
+	writeExpiredCacheFixture(t, dir)
+
+	Load()
+	c := readCacheFixture(t, dir)
+	assertOnlyFreshCacheEntry(t, c)
+}
+
+func readCacheFixture(t *testing.T, dir string) Cache {
+	t.Helper()
+	path := filepath.Join(dir, "pre", "versions.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c Cache
+	if err := json.Unmarshal(data, &c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func writeExpiredCacheFixture(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "pre"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	data := expiredCacheFixture()
+	path := filepath.Join(dir, "pre", "versions.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func expiredCacheFixture() []byte {
+	fresh := formattedCacheTime(time.Now())
+	expired := formattedCacheTime(time.Now().Add(-48 * time.Hour))
+	fixture := `{
+		"npm/fresh@1.0.0":{"version":"1.0.0","checkedAt":"` + fresh + `"},
+		"npm/expired@1.0.0":{"version":"1.0.0","checkedAt":"` + expired + `"}
+	}`
+	return []byte(fixture)
+}
+
+func assertOnlyFreshCacheEntry(t *testing.T, c Cache) {
+	t.Helper()
+	if len(c) != 1 {
+		t.Fatalf("expected only fresh entry, got %#v", c)
+	}
+	if !Hit(c, Key("npm", "fresh", "1.0.0")) {
+		t.Fatalf("expected only fresh entry, got %#v", c)
+	}
+}
+
+func formattedCacheTime(value time.Time) string {
+	utc := value.UTC()
+	return utc.Format(time.RFC3339)
+}
+
+func TestMaxEntriesEnv(t *testing.T) {
+	defer resetConfiguredMaxEntries()()
+	configuredMaxEntries = 7
+	t.Setenv("PRE_CACHE_MAX_ENTRIES", "3")
+	if MaxEntries() != 3 {
+		t.Errorf("expected env max entries, got %d", MaxEntries())
+	}
+}
+
+func TestMaxEntriesInvalidEnvFallsBack(t *testing.T) {
+	defer resetConfiguredMaxEntries()()
+	configuredMaxEntries = 7
+	for _, value := range []string{"bad", "-1"} {
+		t.Setenv("PRE_CACHE_MAX_ENTRIES", value)
+		if MaxEntries() != 7 {
+			t.Fatalf("expected fallback for %q, got %d", value, MaxEntries())
+		}
+	}
+}
+
+func TestMaxBytesEnv(t *testing.T) {
+	defer resetConfiguredMaxBytes()()
+	configuredMaxBytes = 700
+	t.Setenv("PRE_CACHE_MAX_BYTES", "300")
+	if MaxBytes() != 300 {
+		t.Errorf("expected env max bytes, got %d", MaxBytes())
+	}
+}
+
+func TestMaxBytesInvalidEnvFallsBack(t *testing.T) {
+	defer resetConfiguredMaxBytes()()
+	configuredMaxBytes = 700
+	for _, value := range []string{"bad", "-1"} {
+		t.Setenv("PRE_CACHE_MAX_BYTES", value)
+		if MaxBytes() != 700 {
+			t.Fatalf("expected fallback for %q, got %d", value, MaxBytes())
+		}
+	}
+}
+
+func TestFileStatsCacheDirError(t *testing.T) {
+	withObsDir(t)
+	orig := cacheDirFn
+	cacheDirFn = func() (string, error) { return "", errors.New("no dir") }
+	defer func() { cacheDirFn = orig }()
+
+	stats := FileStats()
+	if stats.Entries != 0 {
+		t.Fatalf("expected empty stats, got %#v", stats)
+	}
+	event := requireObsEvent(t, "pre.cache.stat_failed")
+	if event["error_type"] == "" {
+		t.Fatalf("expected stat failure obs event, got %#v", event)
+	}
+}
+
+func TestMigrateCacheKeepsNewestDuplicate(t *testing.T) {
+	now := time.Now()
+	key := Key("npm", "react", "18.0.0")
+	c := Cache{
+		"npm/react": Entry{Version: "18.0.0", CheckedAt: now.Add(-time.Hour)},
+		key:         Entry{Version: "18.0.0", CheckedAt: now},
+	}
+
+	migrated, changed := migrateCache(c)
+	if !changed {
+		t.Fatal("expected duplicate migration to report change")
+	}
+	if !migrated[key].CheckedAt.Equal(now) {
+		t.Fatalf("expected newest duplicate to survive, got %#v", migrated[key])
+	}
+}
+
+func TestShouldPruneEntryRejectsInvalidKeys(t *testing.T) {
+	now := time.Now()
+	entry := Entry{Version: "1.0.0", CheckedAt: now}
+	for _, key := range []string{"", "npm", "npm/react"} {
+		if !shouldPruneEntry(key, entry, now, defaultTTL, "") {
+			t.Fatalf("expected invalid key %q to be pruned", key)
+		}
+	}
+}
+
+func TestShouldPruneEntryRejectsVersionMismatch(t *testing.T) {
+	now := time.Now()
+	key := Key("npm", "react", "1.0.0")
+	entry := Entry{Version: "2.0.0", CheckedAt: now}
+	if !shouldPruneEntry(key, entry, now, defaultTTL, "") {
+		t.Fatal("expected version mismatch to be pruned")
+	}
+}
+
+func TestShouldPruneEntryAcceptsValidEntry(t *testing.T) {
+	now := time.Now()
+	key := Key("npm", "react", "1.0.0")
+	entry := Entry{Version: "1.0.0", CheckedAt: now}
+	if shouldPruneEntry(key, entry, now, defaultTTL, "") {
+		t.Fatal("expected valid entry to survive pruning")
+	}
+}
+
+func TestPruneMaxEntriesNegativeDisabled(t *testing.T) {
+	defer resetConfiguredMaxEntries()()
+	configuredMaxEntries = -1
+	c := cacheWithOrderedEntries([]string{"old", "new"})
+	if pruneMaxEntries(c) {
+		t.Fatal("expected negative max entries to disable pruning")
+	}
+}
+
+func TestPruneMaxBytesNegativeDisabled(t *testing.T) {
+	defer resetConfiguredMaxBytes()()
+	configuredMaxBytes = -1
+	c := cacheWithOrderedEntries([]string{"old", "new"})
+	if pruneMaxBytes(c) {
+		t.Fatal("expected negative max bytes to disable pruning")
+	}
+}
+
+func TestCacheFileSizeStatError(t *testing.T) {
+	withObsDir(t)
+	parent := filepath.Join(t.TempDir(), "parent")
+	if err := os.WriteFile(parent, []byte("file"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	size := cacheFileSize(filepath.Join(parent, "versions.json"))
+	if size != 0 {
+		t.Fatalf("expected zero size on stat error, got %d", size)
+	}
+	requireObsEvent(t, "pre.cache.stat_failed")
+}
+
+func TestWriteCacheAtomicError(t *testing.T) {
+	withObsDir(t)
+	parent := filepath.Join(t.TempDir(), "parent")
+	if err := os.WriteFile(parent, []byte("file"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	writeCache(filepath.Join(parent, "versions.json"), make(Cache))
+	requireObsEvent(t, "pre.cache.write_failed")
+}
+
+func TestRepairCacheFileLockError(t *testing.T) {
+	withObsDir(t)
+	preDir := filepath.Join(t.TempDir(), "pre")
+	if err := os.MkdirAll(filepath.Join(preDir, "versions.lock"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	repairCacheFile(filepath.Join(preDir, "versions.json"))
+	requireObsEvent(t, "pre.cache.write_failed")
 }

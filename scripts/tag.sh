@@ -3,6 +3,8 @@ set -eu
 
 RELEASE_BRANCH="${RELEASE_BRANCH:-main}"
 RELEASE_REPOSITORY="${RELEASE_REPOSITORY:-yowainwright/pre}"
+SEMVER_PATTERN='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+NUMERIC_PRERELEASE_PATTERN='(^|\.)0[0-9]+($|\.)'
 
 # --- injectable primitives (redefine to test) ---
 
@@ -62,8 +64,14 @@ check_prerequisites() {
 }
 
 validate_tag() {
-  semver_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
-  printf '%s\n' "$1" | grep -Eq "$semver_pattern" || die "invalid semantic version: $1"
+  printf '%s\n' "$1" | grep -Eq "$SEMVER_PATTERN" || die "invalid semantic version: $1"
+  version_without_build="${1%%+*}"
+  case "$version_without_build" in
+    *-*) prerelease="${version_without_build#*-}" ;;
+    *) return 0 ;;
+  esac
+  printf '%s\n' "$prerelease" | grep -Eq "$NUMERIC_PRERELEASE_PATTERN" && die "invalid semantic version: $1"
+  return 0
 }
 
 check_clean() {

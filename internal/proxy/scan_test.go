@@ -12,11 +12,10 @@ import (
 	"github.com/yowainwright/pre/internal/security"
 )
 
-func withExecutableFn(fn func() (string, error)) func() {
-	orig := executableFn
-	executableFn = fn
-	return func() { executableFn = orig }
-}
+const (
+	allowMissingVersionResolution = true
+	requireExactVersion           = false
+)
 
 func withSaveSystemStats(fn func(SystemStats)) func() {
 	orig := saveSystemStatsFn
@@ -30,158 +29,15 @@ func withSystemScanLock(fn func() (func(), bool)) func() {
 	return func() { acquireSystemScanLock = orig }
 }
 
-func TestSetSystemScanEnabled(t *testing.T) {
-	orig := systemScanEnabled
-	defer func() { systemScanEnabled = orig }()
-
-	SetSystemScanEnabled(true)
-	if !systemScanEnabled {
-		t.Error("expected systemScanEnabled to be true")
-	}
-	SetSystemScanEnabled(false)
-	if systemScanEnabled {
-		t.Error("expected systemScanEnabled to be false")
-	}
-}
-
-func TestSpawnBackgroundScan(t *testing.T) {
-	spawnBackgroundScan("npm")
-}
-
-func TestSpawnBackgroundScanError(t *testing.T) {
-	defer withExecutableFn(func() (string, error) { return "", errors.New("no exec") })()
-	spawnBackgroundScan("npm")
-}
-
-func TestSpawnSystemScan(t *testing.T) {
-	spawnSystemScan()
-}
-
-func TestSpawnSystemScanError(t *testing.T) {
-	defer withExecutableFn(func() (string, error) { return "", errors.New("no exec") })()
-	spawnSystemScan()
-}
-
-func TestRunBackgroundScanEmpty(t *testing.T) {
-	defer withReadManifest(func(*manager.Manager) []string { return nil })()
-
-	mgr := &manager.Manager{Name: "npm", Ecosystem: "npm"}
-	RunBackgroundScan(mgr)
-}
-
-func TestRunBackgroundScanDisabledSkipsWork(t *testing.T) {
-	t.Setenv(envDisable, "1")
-
-	readCalled := false
-	defer withReadManifest(func(*manager.Manager) []string {
-		readCalled = true
-		return []string{"react@18.0.0"}
-	})()
-
-	RunBackgroundScan(npmMgr())
-
-	if readCalled {
-		t.Error("expected disabled background scan to skip manifest reading")
-	}
-}
-
-func TestRunBackgroundScan(t *testing.T) {
-	var savedStats SystemStats
-	savedCache := make(cache.Cache)
-	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
-	defer withUpdateCache(func(apply func(cache.Cache)) { apply(savedCache) })()
-	defer withLoadCache(emptyCache)()
-	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
-		return "4.17.21", nil
-	})()
-	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
-		return nil, nil
-	})()
-	defer withReadManifest(func(*manager.Manager) []string {
-		return []string{"lodash@4.17.21"}
-	})()
-
-	mgr := &manager.Manager{Name: "npm", Ecosystem: "npm"}
-	RunBackgroundScan(mgr)
-
-	if savedStats.Total != 1 {
-		t.Errorf("expected Total=1, got %d", savedStats.Total)
-	}
-	if !cache.Hit(savedCache, cache.Key("npm", "lodash", "4.17.21")) {
-		t.Error("expected background scan to persist cache")
-	}
-}
-
-func TestRunBackgroundScanPackageLimitSkipsWork(t *testing.T) {
-	t.Setenv(envMaxPackages, "1")
-
-	loadCalled := false
-	securityCalled := false
-	statsSaved := false
-	defer withLoadCache(func() cache.Cache {
-		loadCalled = true
-		return emptyCache()
-	})()
-	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
-		securityCalled = true
-		return nil, nil
-	})()
-	defer withSaveSystemStats(func(SystemStats) { statsSaved = true })()
-	defer withReadManifest(func(*manager.Manager) []string {
-		return []string{"react@18.0.0", "lodash@4.17.21"}
-	})()
-
-	RunBackgroundScan(npmMgr())
-
-	if loadCalled || securityCalled || statsSaved {
-		t.Error("expected package limit to skip background scan work")
-	}
-}
-
-func TestRunBackgroundScanCritical(t *testing.T) {
-	var savedStats SystemStats
-	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
-	defer withLoadCache(emptyCache)()
-	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
-		return []security.Vulnerability{{ID: "CVE-1234", Severity: "CRITICAL"}}, nil
-	})()
-	defer withReadManifest(func(*manager.Manager) []string {
-		return []string{"lodash@4.17.21"}
-	})()
-
-	mgr := &manager.Manager{Name: "npm", Ecosystem: "npm"}
-	RunBackgroundScan(mgr)
-
-	if savedStats.Crit != 1 {
-		t.Errorf("expected Crit=1, got %d", savedStats.Crit)
-	}
-}
-
-func TestRunBackgroundScanWarn(t *testing.T) {
-	var savedStats SystemStats
-	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
-	defer withLoadCache(emptyCache)()
-	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
-		return []security.Vulnerability{{ID: "CVE-1234", Severity: "MEDIUM"}}, nil
-	})()
-	defer withReadManifest(func(*manager.Manager) []string {
-		return []string{"lodash@4.17.21"}
-	})()
-
-	mgr := &manager.Manager{Name: "npm", Ecosystem: "npm"}
-	RunBackgroundScan(mgr)
-
-	if savedStats.Warn != 1 {
-		t.Errorf("expected Warn=1, got %d", savedStats.Warn)
-	}
-}
-
 func TestRunSystemScan(t *testing.T) {
+	withObsDir(t)
 	var savedStats SystemStats
+	securityCalled := false
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
 	defer withUpdateCache(noopUpdate)()
 	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		securityCalled = true
 		return nil, nil
 	})()
 
@@ -194,9 +50,20 @@ func TestRunSystemScan(t *testing.T) {
 	if savedStats.Total != 1 {
 		t.Errorf("expected Total=1, got %d", savedStats.Total)
 	}
+	if !securityCalled {
+		t.Error("expected system scan to query OSV for cached entry")
+	}
+	completed := requireObsEvent(t, "pre.system_scan.completed")
+	if completed["package_count"] != float64(1) {
+		t.Fatalf("unexpected system scan event: %#v", completed)
+	}
+	if completed["pending_count"] != float64(1) {
+		t.Fatalf("unexpected system scan event: %#v", completed)
+	}
 }
 
-func TestRunSystemScanDisabledSkipsWork(t *testing.T) {
+func TestRunSystemScanEnvDisabledSkipsWork(t *testing.T) {
+	withObsDir(t)
 	t.Setenv(envDisable, "1")
 
 	lockCalled := false
@@ -210,9 +77,14 @@ func TestRunSystemScanDisabledSkipsWork(t *testing.T) {
 	if lockCalled {
 		t.Error("expected disabled system scan to skip lock acquisition")
 	}
+	skipped := requireObsEvent(t, "pre.system_scan.skipped")
+	if skipped["reason"] != "env_disabled" {
+		t.Fatalf("unexpected system scan skip event: %#v", skipped)
+	}
 }
 
 func TestRunSystemScanPackageLimitSkipsWork(t *testing.T) {
+	withObsDir(t)
 	t.Setenv(envMaxPackages, "1")
 
 	securityCalled := false
@@ -234,6 +106,10 @@ func TestRunSystemScanPackageLimitSkipsWork(t *testing.T) {
 
 	if securityCalled || statsSaved {
 		t.Error("expected package limit to skip system scan work")
+	}
+	skipped := requireObsEvent(t, "pre.system_scan.skipped")
+	if skipped["reason"] != "package_limit" {
+		t.Fatalf("unexpected package limit event: %#v", skipped)
 	}
 }
 
@@ -286,25 +162,25 @@ func TestRunSystemScanSecurityError(t *testing.T) {
 	}
 }
 
-func TestRunBackgroundScanSecurityError(t *testing.T) {
-	var savedStats SystemStats
-	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
-	defer withLoadCache(emptyCache)()
-	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
-		return nil, errors.New("check failed")
-	})()
-	defer withReadManifest(func(*manager.Manager) []string {
-		return []string{"lodash@4.17.21"}
+func TestRunSystemScanUsesBatch(t *testing.T) {
+	batchCalls := 0
+	defer withSaveSystemStats(func(SystemStats) {})()
+	defer withUpdateCache(noopUpdate)()
+	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
+	defer withSecurityBatchCheck(func(queries []security.Query) ([][]security.Vulnerability, error) {
+		batchCalls++
+		return make([][]security.Vulnerability, len(queries)), nil
 	})()
 
-	mgr := &manager.Manager{Name: "npm", Ecosystem: "npm"}
-	RunBackgroundScan(mgr)
+	c := make(cache.Cache)
+	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
+	cache.Set(c, cache.Key("npm", "lodash", "4.17.21"))
+	defer withLoadCache(func() cache.Cache { return c })()
 
-	if savedStats.Errors != 1 || savedStats.Warn != 0 {
-		t.Errorf("expected Errors=1 Warn=0, got Warn=%d Errors=%d", savedStats.Warn, savedStats.Errors)
-	}
-	if savedStats.Total != 1 {
-		t.Errorf("expected Total=1, got %d", savedStats.Total)
+	RunSystemScan()
+
+	if batchCalls != 1 {
+		t.Errorf("expected one OSV batch request, got %d", batchCalls)
 	}
 }
 
@@ -390,15 +266,24 @@ func TestScanPackageSecurityError(t *testing.T) {
 		return nil, errors.New("security check failed")
 	})()
 
-	r := scanPackage(npmMgr(), "react@18.0.0", make(cache.Cache))
+	r := scanSingleResult(npmMgr(), "react@18.0.0", make(cache.Cache), true)
 	if r.err == nil {
 		t.Error("expected error from security check in scanPackage")
 	}
 }
 
-func TestIsExactVersionNonNpm(t *testing.T) {
-	if !isExactVersion("pypi", "1.0.0") {
-		t.Error("expected true for non-npm ecosystem with non-empty version")
+func TestIsExactVersionPyPI(t *testing.T) {
+	if !isExactVersion("PyPI", "1.0.0") {
+		t.Error("expected exact PyPI version")
+	}
+}
+
+func TestIsExactVersionUnknownEcosystem(t *testing.T) {
+	if isExactVersion("custom", "1.0.0") {
+		t.Error("expected unknown ecosystem versions to remain unverified")
+	}
+	if isExactVersion("Homebrew", "1.0.0") {
+		t.Error("expected Homebrew versions to remain unverified")
 	}
 }
 
@@ -497,7 +382,40 @@ func TestResolveScanVersionDefault(t *testing.T) {
 	}
 }
 
-func TestScanAllPostResolveCacheHit(t *testing.T) {
+func TestScanPackageParsesPyPIExtrasAndExactVersion(t *testing.T) {
+	var checkedName, checkedVersion string
+	defer withSecurityCheck(func(_ string, name, version string) ([]security.Vulnerability, error) {
+		checkedName = name
+		checkedVersion = version
+		return nil, nil
+	})()
+
+	result := scanSingleResult(pipMgr(), "requests[socks]==2.19.0", make(cache.Cache), false)
+	if result.err != nil {
+		t.Fatalf("unexpected error: %v", result.err)
+	}
+	if checkedName != "requests" || checkedVersion != "2.19.0" {
+		t.Errorf("expected requests 2.19.0, got %q %q", checkedName, checkedVersion)
+	}
+}
+
+func TestScanPackageRejectsUnresolvedPyPIConstraint(t *testing.T) {
+	securityCalled := false
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
+		securityCalled = true
+		return nil, nil
+	})()
+
+	result := scanSingleResult(pipMgr(), "urllib3<1.26", make(cache.Cache), false)
+	if !errors.Is(result.err, errMissingVersion) {
+		t.Fatalf("expected missing version error, got %v", result.err)
+	}
+	if securityCalled {
+		t.Error("expected unresolved requirement to fail before querying OSV")
+	}
+}
+
+func TestScanBatchPostResolveCacheHit(t *testing.T) {
 	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
 		return "18.0.0", nil
 	})()
@@ -508,7 +426,7 @@ func TestScanAllPostResolveCacheHit(t *testing.T) {
 	c := make(cache.Cache)
 	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
 
-	results := scanAll(npmMgr(), []string{"react"}, c)
+	results := scanBatchWithPolicy(npmMgr(), []string{"react"}, c, allowMissingVersionResolution)
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -518,7 +436,7 @@ func TestScanAllPostResolveCacheHit(t *testing.T) {
 	}
 }
 
-func TestScanAllResolvesNPMSemverConstraint(t *testing.T) {
+func TestScanBatchResolvesNPMSemverConstraint(t *testing.T) {
 	resolveArg := ""
 	defer withResolveVersion(func(_ *manager.Manager, pkg string) (string, error) {
 		resolveArg = pkg
@@ -531,50 +449,65 @@ func TestScanAllResolvesNPMSemverConstraint(t *testing.T) {
 		return nil, nil
 	})()
 
-	results := scanAllWithPolicy(npmMgr(), []string{"react@^18.0.0"}, make(cache.Cache), false)
+	results := scanBatchWithPolicy(npmMgr(), []string{"react@^18.0.0"}, make(cache.Cache), requireExactVersion)
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if resolveArg != "react" {
-		t.Errorf("expected name-only resolution for semver constraint, got %q", resolveArg)
+	if resolveArg != "react@^18.0.0" {
+		t.Errorf("expected range-aware resolution for semver constraint, got %q", resolveArg)
 	}
 	if results[0].version != "18.2.0" || !results[0].cacheable {
 		t.Errorf("expected cacheable resolved result, got %+v", results[0])
 	}
 }
 
-func TestScanAllIgnoresNonExactCacheHit(t *testing.T) {
+func TestScanBatchIgnoresNonExactCacheHit(t *testing.T) {
 	resolveArg := ""
 	securityCalled := false
-	defer withResolveVersion(func(_ *manager.Manager, pkg string) (string, error) {
-		resolveArg = pkg
-		return "18.2.0", nil
-	})()
-	defer withSecurityCheck(func(_, _, ver string) ([]security.Vulnerability, error) {
-		securityCalled = true
-		if ver != "18.2.0" {
-			t.Errorf("expected resolved npm version 18.2.0, got %q", ver)
-		}
-		return nil, nil
-	})()
+	defer withResolvedReactVersion(&resolveArg)()
+	defer withCheckedReactVersion(t, &securityCalled)()
 
-	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "react", "^18.0.0"))
-	results := scanAllWithPolicy(npmMgr(), []string{"react@^18.0.0"}, c, false)
+	results := scanReactRangeWithNonExactCache()
+	requireNonExactCacheMiss(t, results, resolveArg, securityCalled)
+}
 
+func requireNonExactCacheMiss(t *testing.T, results []scanResult, resolveArg string, securityCalled bool) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if resolveArg != "react" {
-		t.Errorf("expected name-only resolution for semver constraint, got %q", resolveArg)
+	if resolveArg != "react@^18.0.0" {
+		t.Errorf("expected range-aware resolution for semver constraint, got %q", resolveArg)
 	}
 	if !securityCalled {
 		t.Error("expected security check after resolving non-exact cached spec")
 	}
-	if results[0].cached {
-		t.Errorf("expected non-exact cache entry to be ignored, got %+v", results[0])
+	if result := results[0]; result.cached {
+		t.Errorf("expected non-exact cache entry to be ignored, got %+v", result)
 	}
+}
+
+func withResolvedReactVersion(resolveArg *string) func() {
+	return withResolveVersion(func(_ *manager.Manager, pkg string) (string, error) {
+		*resolveArg = pkg
+		return "18.2.0", nil
+	})
+}
+
+func withCheckedReactVersion(t *testing.T, securityCalled *bool) func() {
+	return withSecurityCheck(func(_, _, ver string) ([]security.Vulnerability, error) {
+		*securityCalled = true
+		if ver != "18.2.0" {
+			t.Errorf("expected resolved npm version 18.2.0, got %q", ver)
+		}
+		return nil, nil
+	})
+}
+
+func scanReactRangeWithNonExactCache() []scanResult {
+	c := make(cache.Cache)
+	cache.Set(c, cache.Key("npm", "react", "^18.0.0"))
+	return scanBatchWithPolicy(npmMgr(), []string{"react@^18.0.0"}, c, requireExactVersion)
 }
 
 func TestScanPackageWithoutVersionDoesNotResolveWhenDisabled(t *testing.T) {
@@ -591,7 +524,7 @@ func TestScanPackageWithoutVersionDoesNotResolveWhenDisabled(t *testing.T) {
 	})()
 
 	c := make(cache.Cache)
-	r := scanPackageWithPolicy(npmMgr(), "react", c, false)
+	r := scanSingleResult(npmMgr(), "react", c, false)
 
 	if resolveCalled {
 		t.Error("expected disabled missing-version resolution")
@@ -608,6 +541,7 @@ func TestScanPackageWithoutVersionDoesNotResolveWhenDisabled(t *testing.T) {
 }
 
 func TestRunSystemScanSkipsWhenLocked(t *testing.T) {
+	withObsDir(t)
 	called := false
 	defer withSystemScanLock(func() (func(), bool) { return nil, false })()
 	defer withSaveSystemStats(func(SystemStats) { called = true })()
@@ -616,6 +550,10 @@ func TestRunSystemScanSkipsWhenLocked(t *testing.T) {
 
 	if called {
 		t.Error("expected locked system scan to skip work")
+	}
+	skipped := requireObsEvent(t, "pre.system_scan.skipped")
+	if skipped["reason"] != "locked" {
+		t.Fatalf("unexpected locked skip event: %#v", skipped)
 	}
 }
 
@@ -638,7 +576,6 @@ func TestRunSystemScanWithRelease(t *testing.T) {
 func TestRunSystemScanLegacyKeyMigrated(t *testing.T) {
 	var savedStats SystemStats
 	defer withSaveSystemStats(func(s SystemStats) { savedStats = s })()
-	defer withSaveCache(noopSave)()
 	defer withSystemScanLock(func() (func(), bool) { return nil, true })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
 		return nil, nil

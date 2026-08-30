@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 )
 
 func TestBrewVersionSuccess(t *testing.T) {
 	orig := runCmd
+	var requested []string
 	runCmd = func(name string, args ...string) ([]byte, error) {
+		requested = args
 		return []byte(`{"formulae":[{"versions":{"stable":"1.25.0"}}]}`), nil
 	}
 	defer func() { runCmd = orig }()
@@ -21,6 +24,26 @@ func TestBrewVersionSuccess(t *testing.T) {
 	}
 	if ver != "1.25.0" {
 		t.Errorf("expected '1.25.0', got %q", ver)
+	}
+	wantArgs := []string{"info", "--json=v2", "--", "nginx"}
+	if !slices.Equal(requested, wantArgs) {
+		t.Errorf("expected safe brew arguments %v, got %v", wantArgs, requested)
+	}
+}
+
+func TestBrewVersionCask(t *testing.T) {
+	orig := runCmd
+	runCmd = func(string, ...string) ([]byte, error) {
+		return []byte(`{"formulae":[],"casks":[{"version":"1.2.3"}]}`), nil
+	}
+	defer func() { runCmd = orig }()
+
+	ver, err := brewVersion("example")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ver != "1.2.3" {
+		t.Errorf("expected cask version 1.2.3, got %q", ver)
 	}
 }
 
@@ -79,6 +102,25 @@ func TestNpmVersionSuccess(t *testing.T) {
 	}
 }
 
+func TestNpmVersionSelectsHighestMatchingVersion(t *testing.T) {
+	orig := runCmd
+	var requested []string
+	runCmd = func(_ string, args ...string) ([]byte, error) {
+		requested = args
+		return []byte(`["1.0.0","1.9.0"]`), nil
+	}
+	defer func() { runCmd = orig }()
+
+	ver, err := npmVersion("example@^1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantArgs := []string{"view", "--json", "--", "example@^1", "version"}
+	if ver != "1.9.0" || !slices.Equal(requested, wantArgs) {
+		t.Errorf("expected range query to resolve 1.9.0, got version=%q args=%v", ver, requested)
+	}
+}
+
 func TestNpmVersionError(t *testing.T) {
 	orig := runCmd
 	runCmd = func(name string, args ...string) ([]byte, error) {
@@ -105,6 +147,18 @@ func TestNpmVersionEmpty(t *testing.T) {
 	}
 }
 
+func TestNpmVersionEmptyJSONList(t *testing.T) {
+	orig := runCmd
+	runCmd = func(string, ...string) ([]byte, error) {
+		return []byte(`[]`), nil
+	}
+	defer func() { runCmd = orig }()
+
+	if _, err := npmVersion("example@^1"); err == nil {
+		t.Error("expected error for an empty version list")
+	}
+}
+
 func TestGoVersionSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, `{"Version":"v1.2.3"}`)
@@ -121,6 +175,27 @@ func TestGoVersionSuccess(t *testing.T) {
 	}
 	if ver != "v1.2.3" {
 		t.Errorf("expected 'v1.2.3', got %q", ver)
+	}
+}
+
+func TestGoVersionEscapesUppercaseModulePath(t *testing.T) {
+	requestedPath := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPath = r.URL.Path
+		fmt.Fprintln(w, `{"Version":"v1.2.3"}`)
+	}))
+	defer srv.Close()
+	origBase := goProxyBase
+	goProxyBase = srv.URL
+	defer func() { goProxyBase = origBase }()
+
+	_, err := goVersion("github.com/Azure/example")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantPath := "/github.com/!azure/example/@latest"
+	if requestedPath != wantPath {
+		t.Errorf("expected %q, got %q", wantPath, requestedPath)
 	}
 }
 

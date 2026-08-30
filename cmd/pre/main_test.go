@@ -16,6 +16,7 @@ import (
 	precache "github.com/yowainwright/pre/internal/cache"
 	preconfig "github.com/yowainwright/pre/internal/config"
 	"github.com/yowainwright/pre/internal/manager"
+	preobs "github.com/yowainwright/pre/internal/obs"
 	"github.com/yowainwright/pre/internal/proxy"
 )
 
@@ -160,8 +161,6 @@ func TestRunConfigRejectsInvalidDuration(t *testing.T) {
 	tests := [][]string{
 		{"config", "set", "cache.ttl", "soon"},
 		{"config", "set", "cache.ttl", "-1h"},
-		{"config", "set", "systemTTL", "weekly"},
-		{"config", "set", "systemTTL", "-1h"},
 	}
 	for _, args := range tests {
 		var out, errOut bytes.Buffer
@@ -175,20 +174,6 @@ func TestRunConfigRejectsInvalidDuration(t *testing.T) {
 	}
 }
 
-func TestRunConfigRejectsInvalidSystemScanBool(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-
-	var out, errOut bytes.Buffer
-	code := run([]string{"config", "set", "systemScan", "sometimes"}, &out, &errOut)
-	if code != 1 {
-		t.Errorf("expected exit 1, got %d", code)
-	}
-	if !strings.Contains(errOut.String(), "invalid boolean") {
-		t.Errorf("expected invalid boolean error, got: %s", errOut.String())
-	}
-}
-
 func TestRunStatus(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := run([]string{"status"}, &out, &errOut)
@@ -198,6 +183,86 @@ func TestRunStatus(t *testing.T) {
 	o := out.String()
 	if !strings.Contains(o, "managers") || !strings.Contains(o, "cached") {
 		t.Errorf("expected managers and cached in status output, got: %s", o)
+	}
+}
+
+func TestRunObsStatus(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PRE_OBS_DIR", dir)
+	t.Setenv("PRE_OBS", "1")
+	preobs.Record("pre.scan.approved", map[string]any{"manager": "npm", "decision": "approved"})
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"obs"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+	o := out.String()
+	if !strings.Contains(o, "status: ok") {
+		t.Fatalf("unexpected obs status: %s", o)
+	}
+	if !strings.Contains(o, "allowed: 1") {
+		t.Fatalf("unexpected obs status: %s", o)
+	}
+}
+
+func TestRunObsEvents(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PRE_OBS_DIR", dir)
+	t.Setenv("PRE_OBS", "1")
+	preobs.Record("pre.scan.completed", map[string]any{"manager": "npm"})
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"obs", "--events", "scan.completed"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "pre.scan.completed") {
+		t.Fatalf("expected event output, got: %s", out.String())
+	}
+}
+
+func TestRunObsJSON(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PRE_OBS_DIR", dir)
+	t.Setenv("PRE_OBS", "1")
+	preobs.Record("pre.scan.blocked", map[string]any{"decision": "blocked"})
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"observability", "--json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, errOut.String())
+	}
+	output := out.String()
+	if !strings.Contains(output, `"status": "ok"`) {
+		t.Fatalf("expected obs JSON, got: %s", output)
+	}
+	if !strings.Contains(output, `"blocked": 1`) {
+		t.Fatalf("expected obs JSON, got: %s", output)
+	}
+}
+
+func TestRunObsRejectsInvalidOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "old diagnostics route", args: []string{"diagnostics"}, want: "unknown manager"},
+		{name: "old diag route", args: []string{"diag"}, want: "unknown manager"},
+		{name: "unknown option", args: []string{"obs", "--format", "text"}, want: "usage:"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := run(test.args, &out, &errOut)
+			if code != 1 {
+				t.Fatalf("expected exit 1, got %d", code)
+			}
+			if !strings.Contains(errOut.String(), test.want) {
+				t.Fatalf("expected %q, got: %s", test.want, errOut.String())
+			}
+		})
 	}
 }
 
@@ -387,8 +452,8 @@ func TestRunManageSearchDialog(t *testing.T) {
 	}
 }
 
-func TestRunManageSearchQuitsWithoutEnter(t *testing.T) {
-	defer withPackageInput("/reaq")()
+func TestRunManageSearchAcceptsQ(t *testing.T) {
+	defer withPackageInput("/reaq\nq")()
 	defer withLookPath(func(name string) (string, error) {
 		if name == "npm" {
 			return "/usr/bin/npm", nil
@@ -404,7 +469,7 @@ func TestRunManageSearchQuitsWithoutEnter(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "/rea") {
+	if !strings.Contains(out.String(), "/reaq") {
 		t.Errorf("expected live search text in output, got: %q", out.String())
 	}
 }
@@ -710,6 +775,31 @@ func TestRunSelfUninstallManualInstall(t *testing.T) {
 	}
 }
 
+func TestRunSelfUninstallKeepsManualBinaryWhenHookRemovalFails(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+	exe := filepath.Join(dir, "bin", "pre")
+	defer withExecutablePath(func() (string, error) { return exe, nil })()
+	binaryRemoved := false
+	defer withRemoveFile(func(string) error {
+		binaryRemoved = true
+		return nil
+	})()
+	rcPath := filepath.Join(dir, ".zshrc")
+	if err := os.Mkdir(rcPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	code := run([]string{"self", "uninstall"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if binaryRemoved {
+		t.Error("expected hook failure to preserve the manual binary")
+	}
+}
+
 func TestRunSelfUninstallHomebrewInstall(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
@@ -737,6 +827,35 @@ func TestRunSelfUninstallHomebrewInstall(t *testing.T) {
 	}
 	if gotName != "brew" || strings.Join(gotArgs, " ") != "uninstall pre" {
 		t.Errorf("expected brew uninstall pre, got %q %v", gotName, gotArgs)
+	}
+}
+
+func TestRunSelfUninstallKeepsHomebrewInstallWhenHookRemovalFails(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+	defer withExecutablePath(func() (string, error) {
+		return "/opt/homebrew/Cellar/pre/1.2.3/bin/pre", nil
+	})()
+	defer withLookPath(func(name string) (string, error) {
+		return "/opt/homebrew/bin/" + name, nil
+	})()
+	commandCalled := false
+	defer withCommandRunner(func(string, []string, []string, io.Writer, io.Writer) error {
+		commandCalled = true
+		return nil
+	})()
+	rcPath := filepath.Join(dir, ".zshrc")
+	if err := os.Mkdir(rcPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	code := run([]string{"self", "uninstall"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if commandCalled {
+		t.Error("expected hook failure to preserve the Homebrew install")
 	}
 }
 
@@ -842,6 +961,21 @@ func TestRunTeardown(t *testing.T) {
 	}
 }
 
+func TestRunTeardownPropagatesHookRemovalFailure(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+	rcPath := filepath.Join(dir, ".zshrc")
+	if err := os.Mkdir(rcPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	code := run([]string{"teardown"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+}
+
 func TestRunScanMissingArg(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := run([]string{"scan"}, &out, &errOut)
@@ -862,19 +996,14 @@ func TestRunScanSystem(t *testing.T) {
 	}
 }
 
-func TestRunScanManager(t *testing.T) {
+func TestRunScanRejectsManager(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := run([]string{"scan", "npm"}, &out, &errOut)
-	if code != 0 {
-		t.Errorf("expected exit 0, got %d", code)
-	}
-}
-
-func TestRunScanUnknownManager(t *testing.T) {
-	var out, errOut bytes.Buffer
-	code := run([]string{"scan", "unknownxyz"}, &out, &errOut)
 	if code != 1 {
-		t.Errorf("expected exit 1 for unknown manager, got %d", code)
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut.String(), "usage: pre scan system") {
+		t.Errorf("expected scan usage, got: %s", errOut.String())
 	}
 }
 
@@ -903,28 +1032,6 @@ func TestRunConfigSetDottedEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "api.endpoint") {
 		t.Errorf("expected api.endpoint in output, got: %s", out.String())
-	}
-}
-
-func TestRunConfigSetSystemScan(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-
-	var out, errOut bytes.Buffer
-	code := run([]string{"config", "set", "systemScan", "true"}, &out, &errOut)
-	if code != 0 {
-		t.Errorf("expected exit 0, got %d — err: %s", code, errOut.String())
-	}
-}
-
-func TestRunConfigSetSystemTTL(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-
-	var out, errOut bytes.Buffer
-	code := run([]string{"config", "set", "systemTTL", "48h"}, &out, &errOut)
-	if code != 0 {
-		t.Errorf("expected exit 0, got %d — err: %s", code, errOut.String())
 	}
 }
 
@@ -1396,19 +1503,6 @@ func TestRenderInstallInfoNoBinary(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "unknown") {
 		t.Errorf("expected 'unknown' when no binary path, got: %s", out.String())
-	}
-}
-
-func TestRenderInstallInfoSystemScanEnabled(t *testing.T) {
-	var out bytes.Buffer
-	renderInstallInfo(&out, installInfo{
-		Version:    "dev",
-		BinaryPath: "/usr/local/bin/pre",
-		Source:     installSourceManual,
-		SystemScan: true,
-	})
-	if !strings.Contains(out.String(), "enabled") {
-		t.Errorf("expected 'enabled' for SystemScan=true, got: %s", out.String())
 	}
 }
 

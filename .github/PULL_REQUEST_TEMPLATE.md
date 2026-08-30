@@ -29,9 +29,9 @@
 
 - [ ] `make test` passes
 - [ ] `make lint` passes
-- [ ] `make script-test` passes
-- [ ] `make e2e` passes (if touching intercept/setup logic)
-- [ ] `make integration` passes (if touching live API/version resolution)
+- [ ] `make test-scripts` passes
+- [ ] `make test-e2e` passes (if touching intercept/setup logic)
+- [ ] `make test-integration` passes (if touching live API/version resolution)
 - [ ] New behavior is covered by tests
 
 ## Release Notes

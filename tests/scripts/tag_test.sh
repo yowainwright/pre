@@ -30,6 +30,10 @@ check "validate_tag rejects empty"       "1" "$(exit_code validate_tag "")"
 check "validate_tag rejects short version" "1" "$(exit_code validate_tag "v1.2")"
 check "validate_tag rejects leading zero"  "1" "$(exit_code validate_tag "v01.2.3")"
 check "validate_tag rejects empty identifier" "1" "$(exit_code validate_tag "v1.2.3-rc..1")"
+check "validate_tag rejects numeric prerelease leading zero" "1" "$(exit_code validate_tag "v1.2.3-01")"
+check "validate_tag rejects nested numeric prerelease leading zero" "1" "$(exit_code validate_tag "v1.2.3-rc.01")"
+check "validate_tag accepts zero prerelease" "0" "$(exit_code validate_tag "v1.2.3-0")"
+check "validate_tag accepts numeric build leading zero" "0" "$(exit_code validate_tag "v1.2.3+build.01")"
 
 # --- annotated tags ---
 

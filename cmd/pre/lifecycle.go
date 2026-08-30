@@ -27,6 +27,7 @@ const (
 	installSourceManual       = "manual"
 	installSourceHomebrew     = "homebrew"
 	installSourceHomebrewCask = "homebrew-cask"
+	selfUsage                 = "usage: pre self installed | update | uninstall [--purge]"
 )
 
 var (
@@ -39,66 +40,79 @@ var (
 	httpGetBytesFn           = httpGetBytes
 )
 
-func handleSelf(args []string, cfg *config.Config, stdout, stderr io.Writer) int {
+func handleSelf(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: pre self installed | update | uninstall [--purge]")
-		return 1
+		return printSelfUsage(stderr)
 	}
 	switch args[0] {
 	case "installed", "status":
-		if len(args) != 1 {
-			fmt.Fprintln(stderr, "usage: pre self installed")
-			return 1
-		}
-		handleSelfInstalled(cfg, stdout)
+		return handleSelfInstalledCommand(args, stdout, stderr)
 	case "update":
-		return handleSelfUpdate(args[1:], cfg, stdout, stderr)
+		return handleSelfUpdate(args[1:], stdout, stderr)
 	case "uninstall":
-		return handleSelfUninstall(args[1:], cfg, stdout, stderr)
+		return handleSelfUninstall(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintln(stderr, "usage: pre self installed | update | uninstall [--purge]")
+		return printSelfUsage(stderr)
+	}
+}
+
+func printSelfUsage(stderr io.Writer) int {
+	fmt.Fprintln(stderr, selfUsage)
+	return 1
+}
+
+func handleSelfInstalledCommand(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "usage: pre self installed")
 		return 1
 	}
+	handleSelfInstalled(stdout)
 	return 0
 }
 
-func handleSelfInstalled(cfg *config.Config, stdout io.Writer) {
-	renderInstallInfo(stdout, collectInstallInfo(cfg))
+func handleSelfInstalled(stdout io.Writer) {
+	renderInstallInfo(stdout, collectInstallInfo())
 }
 
-func handleSelfUpdate(args []string, cfg *config.Config, stdout, stderr io.Writer) int {
+func handleSelfUpdate(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 0 {
 		fmt.Fprintln(stderr, "usage: pre self update")
 		return 1
 	}
 
-	info := collectInstallInfo(cfg)
+	info := collectInstallInfo()
 	if info.BinaryPath == "" {
 		fmt.Fprintln(stderr, "pre update: could not locate the pre binary")
 		return 1
 	}
-
 	if isHomebrewInstall(info.Source) {
-		brewArgs := homebrewLifecycleArgs(info.Source, "upgrade")
-		if _, err := lookPathFn("brew"); err != nil {
-			fmt.Fprintln(stderr, "pre update: Homebrew install detected, but brew is not on PATH")
-			fmt.Fprintf(stderr, "pre update: run: brew %s\n", strings.Join(brewArgs, " "))
-			return 1
-		}
-		fmt.Fprintln(stdout, "pre: updating with Homebrew")
-		if err := commandRunnerFn("brew", brewArgs, nil, stdout, stderr); err != nil {
-			fmt.Fprintf(stderr, "pre update: %v\n", err)
-			return 1
-		}
-		return 0
+		return updateHomebrewSelf(info.Source, stdout, stderr)
 	}
+	return updateManualSelf(info.BinaryPath, stdout, stderr)
+}
 
-	binDir := filepath.Dir(info.BinaryPath)
-	if binDir == "." || binDir == "" {
-		fmt.Fprintf(stderr, "pre update: could not determine binary directory for %s\n", info.BinaryPath)
+func updateHomebrewSelf(source string, stdout, stderr io.Writer) int {
+	brewArgs := homebrewLifecycleArgs(source, "upgrade")
+	if _, err := lookPathFn("brew"); err != nil {
+		fmt.Fprintln(stderr, "pre update: Homebrew install detected, but brew is not on PATH")
+		fmt.Fprintf(stderr, "pre update: run: brew %s\n", strings.Join(brewArgs, " "))
 		return 1
 	}
+	fmt.Fprintln(stdout, "pre: updating with Homebrew")
+	if err := commandRunnerFn("brew", brewArgs, nil, stdout, stderr); err != nil {
+		fmt.Fprintf(stderr, "pre update: %v\n", err)
+		return 1
+	}
+	return 0
+}
 
+func updateManualSelf(binaryPath string, stdout, stderr io.Writer) int {
+	binDir := filepath.Dir(binaryPath)
+	missingBinDir := binDir == "." || binDir == ""
+	if missingBinDir {
+		fmt.Fprintf(stderr, "pre update: could not determine binary directory for %s\n", binaryPath)
+		return 1
+	}
 	fmt.Fprintf(stdout, "pre: updating manual install in %s\n", binDir)
 	if err := downloadVerifyAndRun(installScriptURL, installChecksumsURL, []string{"PRE_BIN_DIR=" + binDir}, stdout, stderr); err != nil {
 		fmt.Fprintf(stderr, "pre update: %v\n", err)
@@ -165,63 +179,97 @@ func verifyInstallScript(script, checksums []byte) error {
 	return errors.New("install.sh SHA256 checksum does not match checksums.txt")
 }
 
-func handleSelfUninstall(args []string, cfg *config.Config, stdout, stderr io.Writer) int {
+func handleSelfUninstall(args []string, stdout, stderr io.Writer) int {
+	purge, valid := selfUninstallOptions(args)
+	if !valid {
+		fmt.Fprintln(stderr, "usage: pre self uninstall [--purge]")
+		return 1
+	}
+	return uninstallSelf(collectInstallInfo(), purge, stdout, stderr)
+}
+
+func uninstallSelf(info installInfo, purge bool, stdout, stderr io.Writer) int {
+	if !validateSelfUninstall(info, stderr) {
+		return 1
+	}
+	if !removeSelfHooks(stdout, stderr) {
+		return 1
+	}
+	if !uninstallSelfBinary(info, stdout, stderr) {
+		return 1
+	}
+	if purge && !purgeInstallData(stdout, stderr) {
+		return 1
+	}
+	return 0
+}
+
+func selfUninstallOptions(args []string) (bool, bool) {
 	purge := false
 	for _, arg := range args {
-		switch arg {
-		case "--purge":
-			purge = true
-		default:
-			fmt.Fprintln(stderr, "usage: pre self uninstall [--purge]")
-			return 1
+		if arg != "--purge" {
+			return false, false
 		}
+		purge = true
 	}
+	return purge, true
+}
 
-	info := collectInstallInfo(cfg)
-
+func validateSelfUninstall(info installInfo, stderr io.Writer) bool {
 	if isHomebrewInstall(info.Source) {
 		brewArgs := homebrewLifecycleArgs(info.Source, "uninstall")
 		if _, err := lookPathFn("brew"); err != nil {
 			fmt.Fprintln(stderr, "pre uninstall: Homebrew install detected, but brew is not on PATH")
 			fmt.Fprintf(stderr, "pre uninstall: run: brew %s\n", strings.Join(brewArgs, " "))
-			return 1
+			return false
 		}
-		fmt.Fprintln(stdout, "pre: uninstalling with Homebrew")
-		if err := commandRunnerFn("brew", brewArgs, nil, stdout, stderr); err != nil {
-			fmt.Fprintf(stderr, "pre uninstall: %v\n", err)
-			return 1
-		}
-	} else {
-		if info.BinaryPath == "" {
-			fmt.Fprintln(stderr, "pre uninstall: could not locate the pre binary")
-			return 1
-		}
-		if filepath.Base(info.BinaryPath) != "pre" {
-			fmt.Fprintf(stderr, "pre uninstall: refusing to remove %s because its filename is not pre\n", info.BinaryPath)
-			return 1
-		}
-		if err := removeFileFn(info.BinaryPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(stderr, "pre uninstall: remove %s: %v\n", info.BinaryPath, err)
-			return 1
-		}
-		fmt.Fprintf(stdout, "pre: removed binary %s\n", info.BinaryPath)
+		return true
 	}
+	return validateManualSelfUninstall(info, stderr)
+}
 
-	rcFile, removedHooks, err := proxy.RemoveShellHooks()
+func validateManualSelfUninstall(info installInfo, stderr io.Writer) bool {
+	if info.BinaryPath == "" {
+		fmt.Fprintln(stderr, "pre uninstall: could not locate the pre binary")
+		return false
+	}
+	if filepath.Base(info.BinaryPath) != "pre" {
+		fmt.Fprintf(stderr, "pre uninstall: refusing to remove %s because its filename is not pre\n", info.BinaryPath)
+		return false
+	}
+	return true
+}
+
+func removeSelfHooks(stdout, stderr io.Writer) bool {
+	rcFile, removed, err := proxy.RemoveShellHooks()
 	if err != nil {
 		fmt.Fprintf(stderr, "pre uninstall: %v\n", err)
-		return 1
+		return false
 	}
-	if removedHooks {
+	if removed {
 		fmt.Fprintf(stdout, "pre: removed hooks from %s\n", rcFile)
 	} else {
 		fmt.Fprintf(stdout, "pre: no hooks found in %s\n", rcFile)
 	}
+	return true
+}
 
-	if purge && !purgeInstallData(stdout, stderr) {
-		return 1
+func uninstallSelfBinary(info installInfo, stdout, stderr io.Writer) bool {
+	if isHomebrewInstall(info.Source) {
+		brewArgs := homebrewLifecycleArgs(info.Source, "uninstall")
+		fmt.Fprintln(stdout, "pre: uninstalling with Homebrew")
+		if err := commandRunnerFn("brew", brewArgs, nil, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "pre uninstall: %v\n", err)
+			return false
+		}
+		return true
 	}
-	return 0
+	if err := removeFileFn(info.BinaryPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(stderr, "pre uninstall: remove %s: %v\n", info.BinaryPath, err)
+		return false
+	}
+	fmt.Fprintf(stdout, "pre: removed binary %s\n", info.BinaryPath)
+	return true
 }
 
 type installInfo struct {
@@ -235,19 +283,15 @@ type installInfo struct {
 	CachePath     string
 	CacheExists   bool
 	CachedCount   int
-	SystemScan    bool
 }
 
-func collectInstallInfo(cfg *config.Config) installInfo {
-	binaryPath, err := executablePathFn()
-	if err != nil {
-		binaryPath = ""
-	}
+func collectInstallInfo() installInfo {
+	binaryPath := currentExecutablePath()
 	hookPath, hookInstalled := proxy.ShellHookStatus()
-	configPath, _ := config.Path()
-	cachePath, _ := cache.Path()
+	configPath := currentConfigPath()
+	cachePath := currentCachePath()
 
-	info := installInfo{
+	return installInfo{
 		Version:       version,
 		BinaryPath:    binaryPath,
 		Source:        detectInstallSource(binaryPath),
@@ -259,10 +303,24 @@ func collectInstallInfo(cfg *config.Config) installInfo {
 		CacheExists:   fileExists(cachePath),
 		CachedCount:   len(cache.Load()),
 	}
-	if cfg != nil {
-		info.SystemScan = cfg.SystemScan
+}
+
+func currentExecutablePath() string {
+	binaryPath, err := executablePathFn()
+	if err != nil {
+		return ""
 	}
-	return info
+	return binaryPath
+}
+
+func currentConfigPath() string {
+	configPath, _ := config.Path()
+	return configPath
+}
+
+func currentCachePath() string {
+	cachePath, _ := cache.Path()
+	return cachePath
 }
 
 func renderInstallInfo(stdout io.Writer, info installInfo) {
@@ -279,7 +337,6 @@ func renderInstallInfo(stdout io.Writer, info installInfo) {
 	}
 	fmt.Fprintf(stdout, "config: %s (%s)\n", info.ConfigPath, existsLabel(info.ConfigExists))
 	fmt.Fprintf(stdout, "cache: %s (%s, %d packages)\n", info.CachePath, existsLabel(info.CacheExists), info.CachedCount)
-	fmt.Fprintf(stdout, "background system scan: %s\n", enabledLabel(info.SystemScan))
 	fmt.Fprintln(stdout, "update pre: pre self update")
 	fmt.Fprintln(stdout, "uninstall pre: pre self uninstall")
 }

@@ -6,12 +6,36 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/yowainwright/pre/internal/obs"
 )
 
 func withConfigDir(dir string) func() {
 	orig := configDirFn
 	configDirFn = func() (string, error) { return dir, nil }
 	return func() { configDirFn = orig }
+}
+
+func withObsDir(t *testing.T) {
+	t.Helper()
+	t.Setenv("PRE_OBS_DIR", t.TempDir())
+	t.Setenv("PRE_OBS", "1")
+}
+
+func requireObsEvent(t *testing.T, name string) obs.Event {
+	t.Helper()
+	events, _, err := obs.Events(time.Time{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event["event.name"] == name {
+			return event
+		}
+	}
+	t.Fatalf("missing obs event %q", name)
+	return nil
 }
 
 func writeConfig(t *testing.T, dir string, cfg *Config) {
@@ -99,8 +123,6 @@ func TestSaveAndReload(t *testing.T) {
 	defer withConfigDir(dir)()
 	cfg := defaults()
 	cfg.API.Endpoint = "https://custom.example.com"
-	cfg.SystemScan = true
-	cfg.SystemTTL = "48h"
 	if err := Save(cfg); err != nil {
 		t.Fatalf("Save failed: %v", err)
 	}
@@ -108,15 +130,27 @@ func TestSaveAndReload(t *testing.T) {
 	if loaded.API.Endpoint != "https://custom.example.com" {
 		t.Errorf("endpoint not persisted, got %q", loaded.API.Endpoint)
 	}
-	if !loaded.SystemScan {
-		t.Error("systemScan not persisted")
+}
+
+func TestSaveAndLoadRecordDiagnostics(t *testing.T) {
+	withObsDir(t)
+	dir := t.TempDir()
+	defer withConfigDir(dir)()
+
+	if err := Save(defaults()); err != nil {
+		t.Fatalf("Save failed: %v", err)
 	}
-	if loaded.SystemTTL != "48h" {
-		t.Errorf("systemTTL not persisted, got %q", loaded.SystemTTL)
+	Load()
+
+	written := requireObsEvent(t, "pre.config.written")
+	loaded := requireObsEvent(t, "pre.config.loaded")
+	if written["config_bytes"] == float64(0) || loaded["config_bytes"] == float64(0) {
+		t.Fatalf("expected config byte counts, got written=%#v loaded=%#v", written, loaded)
 	}
 }
 
 func TestLoadConfigDirError(t *testing.T) {
+	withObsDir(t)
 	orig := configDirFn
 	configDirFn = func() (string, error) { return "", errors.New("no dir") }
 	defer func() { configDirFn = orig }()
@@ -125,9 +159,14 @@ func TestLoadConfigDirError(t *testing.T) {
 	if cfg.API.Endpoint != DefaultEndpoint {
 		t.Error("expected defaults when config dir fn errors")
 	}
+	event := requireObsEvent(t, "pre.config.load_failed")
+	if event["error_type"] == "" {
+		t.Fatalf("expected error type, got %#v", event)
+	}
 }
 
 func TestSaveConfigDirError(t *testing.T) {
+	withObsDir(t)
 	orig := configDirFn
 	configDirFn = func() (string, error) { return "", errors.New("no dir") }
 	defer func() { configDirFn = orig }()
@@ -135,6 +174,10 @@ func TestSaveConfigDirError(t *testing.T) {
 	err := Save(defaults())
 	if err == nil {
 		t.Error("expected error when config dir fn errors")
+	}
+	event := requireObsEvent(t, "pre.config.write_failed")
+	if event["error_type"] == "" {
+		t.Fatalf("expected error type, got %#v", event)
 	}
 }
 

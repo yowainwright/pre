@@ -232,7 +232,7 @@ source = "registry+https://index.crates.io/"
 	}
 
 	pathValue := "PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH")
-	env := append(baseEnv(home), pathValue, "PRE_NO_BACKGROUND=1")
+	env := append(baseEnv(home), pathValue)
 	stdout, stderr, code := runInDir(dir, env, "cargo", "fetch", "--locked")
 	if code != 0 {
 		t.Fatalf("expected exit 0, got %d: %s%s", code, stdout, stderr)

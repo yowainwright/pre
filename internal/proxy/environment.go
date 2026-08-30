@@ -7,10 +7,9 @@ import (
 )
 
 const (
-	envDisable      = "PRE_DISABLE"
-	envQuiet        = "PRE_QUIET"
-	envNoBackground = "PRE_NO_BACKGROUND"
-	envMaxPackages  = "PRE_MAX_PACKAGES"
+	envDisable     = "PRE_DISABLE"
+	envQuiet       = "PRE_QUIET"
+	envMaxPackages = "PRE_MAX_PACKAGES"
 )
 
 func envFlag(name string) bool {
@@ -28,10 +27,6 @@ func disableEnabled() bool {
 
 func quietEnabled() bool {
 	return envFlag(envQuiet)
-}
-
-func backgroundDisabled() bool {
-	return envFlag(envNoBackground)
 }
 
 func maxPackages() int {

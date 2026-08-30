@@ -2,7 +2,6 @@ package display
 
 import (
 	"os"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -25,7 +24,6 @@ const (
 	cGreen       = "\033[32m"
 	cYellow      = "\033[33m"
 	cCyan        = "\033[36m"
-	cSkyBlue     = "\033[96m"
 	cFluoYellow  = "\033[38;5;226m"
 	cBrightRed   = "\033[91m"
 	cOrange      = "\033[38;5;208m"
@@ -52,7 +50,6 @@ func Red(s string) string         { return colorize(cRed, s) }
 func Green(s string) string       { return colorize(cGreen, s) }
 func Yellow(s string) string      { return colorize(cYellow, s) }
 func Cyan(s string) string        { return colorize(cCyan, s) }
-func SkyBlue(s string) string     { return colorize(cSkyBlue, s) }
 func FluoYellow(s string) string  { return colorize(cFluoYellow, s) }
 func BrightRed(s string) string   { return colorize(cBrightRed, s) }
 func Orange(s string) string      { return colorize(cOrange, s) }
@@ -96,15 +93,6 @@ func HRule(width int) string {
 
 func Prompt(question string) string {
 	return Cyan("?") + " " + Bold(question) + " " + Dim("[y/N]") + " "
-}
-
-func Width() int {
-	if cols := os.Getenv("COLUMNS"); cols != "" {
-		if n, err := strconv.Atoi(cols); err == nil && n > 0 {
-			return n
-		}
-	}
-	return 80
 }
 
 func Pad(s string, width int) string {

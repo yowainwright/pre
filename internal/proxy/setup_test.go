@@ -10,6 +10,21 @@ import (
 	"github.com/yowainwright/pre/internal/manager"
 )
 
+const globalOptionCommands = `
+cargo +nightly --color always update
+cargo +nightly build
+npm --prefix app install react
+pnpm --dir app add react
+go -C app get example.com/mod
+`
+
+const globalOptionOutput = `pre:cargo +nightly --color always update
+cargo:+nightly build
+pre:npm --prefix app install react
+pre:pnpm --dir app add react
+pre:go -C app get example.com/mod
+`
+
 func TestBuildShellHookContents(t *testing.T) {
 	hook := buildShellHook()
 	if !strings.Contains(hook, "# pre security proxy") {
@@ -37,7 +52,7 @@ func TestBuildShellHookIncludesDisableBypass(t *testing.T) {
 
 func TestBuildShellHookIncludesNestedUVInstall(t *testing.T) {
 	hook := buildShellHook()
-	condition := `[[ "$1" == "pip" && "$2" == "install" ]]`
+	condition := `[[ "$_pre_command" == "pip" && "$_pre_subcommand" == "install" ]]`
 	if !strings.Contains(hook, condition) {
 		t.Errorf("expected uv pip install condition, got:\n%s", hook)
 	}
@@ -49,6 +64,17 @@ func TestBuildShellHookParsesCargoGlobalOptions(t *testing.T) {
 	for _, marker := range markers {
 		if !strings.Contains(hook, marker) {
 			t.Errorf("expected Cargo hook marker %q", marker)
+		}
+	}
+}
+
+func TestBuildShellHookParsesManagerGlobalOptions(t *testing.T) {
+	hook := buildShellHook()
+	markers := []string{"_pre_command", "--prefix", "--dir", "-C"}
+	for _, marker := range markers {
+		hasMarker := strings.Contains(hook, marker)
+		if !hasMarker {
+			t.Errorf("expected manager hook marker %q", marker)
 		}
 	}
 }
@@ -71,13 +97,12 @@ func TestCargoShellHookRoutesGlobalOptions(t *testing.T) {
 	t.Setenv("PATH", binDir)
 
 	hook := buildShellHook()
-	commands := "\ncargo +nightly --color always update\ncargo +nightly build\n"
-	cmd := exec.Command("/bin/bash", "-c", hook+commands)
+	cmd := exec.Command("/bin/bash", "-c", hook+globalOptionCommands)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("run Cargo hook: %v\n%s", err, output)
 	}
-	want := "pre:cargo +nightly --color always update\ncargo:+nightly build\n"
+	want := globalOptionOutput
 	if string(output) != want {
 		t.Fatalf("unexpected Cargo hook output: %q", output)
 	}
@@ -93,7 +118,10 @@ func writeShellFixture(t *testing.T, path, content string) {
 func TestDetectRCFileZsh(t *testing.T) {
 	t.Setenv("SHELL", "/bin/zsh")
 	t.Setenv("HOME", t.TempDir())
-	rc := detectRCFile()
+	rc, err := detectRCFile()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.HasSuffix(rc, ".zshrc") {
 		t.Errorf("expected .zshrc, got %s", rc)
 	}
@@ -102,9 +130,19 @@ func TestDetectRCFileZsh(t *testing.T) {
 func TestDetectRCFileBash(t *testing.T) {
 	t.Setenv("SHELL", "/bin/bash")
 	t.Setenv("HOME", t.TempDir())
-	rc := detectRCFile()
+	rc, err := detectRCFile()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.HasSuffix(rc, ".bashrc") {
 		t.Errorf("expected .bashrc, got %s", rc)
+	}
+}
+
+func TestDetectRCFileRequiresHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	if _, err := detectRCFile(); err == nil {
+		t.Fatal("expected missing home directory to fail")
 	}
 }
 
@@ -142,7 +180,9 @@ func TestSetupRefreshesExistingHooks(t *testing.T) {
 	if !strings.Contains(string(content), "# end pre security proxy") {
 		t.Error("expected setup to refresh hook block")
 	}
-	if !strings.Contains(string(content), `"$1" == "update"`) {
+	contentText := string(content)
+	containsUpdate := strings.Contains(contentText, `"$_pre_command" == "update"`)
+	if !containsUpdate {
 		t.Error("expected refreshed hooks to include update commands")
 	}
 }
@@ -244,31 +284,6 @@ func TestTeardownWriteError(t *testing.T) {
 	Teardown()
 }
 
-func TestSetupEnablesSystemScan(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
-	defer withStdinInput("y\n")()
-
-	Setup()
-}
-
-func TestSetupEnablesSystemScanConfigError(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("root can write to read-only dirs")
-	}
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
-	defer withStdinInput("y\n")()
-
-	libDir := filepath.Join(dir, "Library")
-	os.MkdirAll(libDir, 0555)
-	defer os.Chmod(libDir, 0755)
-
-	Setup()
-}
-
 func TestSetupWriteError(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
@@ -290,21 +305,38 @@ func TestSetupWriteError(t *testing.T) {
 	Setup()
 }
 
-func TestSetupDeclinesSystemScan(t *testing.T) {
+func TestSetupPreservesUnreadableRCFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read files without read permission")
+	}
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("SHELL", "/bin/zsh")
-	defer withStdinInput("n\n")()
+	rcPath := filepath.Join(dir, ".zshrc")
+	original := []byte("export IMPORTANT=value\n")
+	if err := os.WriteFile(rcPath, original, 0o200); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(rcPath, 0o600)
+
+	exitCode := 0
+	origExit := processExit
+	processExit = func(code int) { exitCode = code }
+	defer func() { processExit = origExit }()
 
 	Setup()
-
-	rcPath := filepath.Join(dir, ".zshrc")
+	if exitCode != 1 {
+		t.Fatalf("expected setup to fail, got exit code %d", exitCode)
+	}
+	if err := os.Chmod(rcPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	content, err := os.ReadFile(rcPath)
 	if err != nil {
-		t.Fatalf("expected rc file: %v", err)
+		t.Fatal(err)
 	}
-	if !strings.Contains(string(content), shellHookStart) {
-		t.Error("expected hooks to be written even when scan declined")
+	if string(content) != string(original) {
+		t.Fatalf("expected RC file to remain unchanged, got %q", content)
 	}
 }
 

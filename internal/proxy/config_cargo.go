@@ -11,7 +11,10 @@ import (
 	"strings"
 )
 
-var cargoDefaultRegistryRE = regexp.MustCompile(`(?:^|[{,]\s*)default\s*=\s*["']([^"']+)["']`)
+var (
+	cargoDefaultRegistryRE = regexp.MustCompile(`(?:^|[{,]\s*)default\s*=\s*["']([^"']+)["']`)
+	cargoConfigKeyReplacer = strings.NewReplacer(`"`, "", `'`, "")
+)
 
 type cargoConfigState struct {
 	defaultRegistry        string
@@ -276,8 +279,7 @@ func cargoConfigKeyChangesResolution(section, key string) bool {
 
 func normalizeCargoConfigKey(value string) string {
 	trimmed := strings.TrimSpace(value)
-	replacer := strings.NewReplacer(`"`, "", `'`, "")
-	return replacer.Replace(trimmed)
+	return cargoConfigKeyReplacer.Replace(trimmed)
 }
 
 func cargoInlineDefaultRegistry(value string) string {

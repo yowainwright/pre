@@ -1,0 +1,26 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - legibility
+  settings:
+    custom:
+      legibility:
+        type: module
+        description: Syntax-only Go legibility rules.
+        original-url: github.com/yowainwright/golangci-lint-legibility
+        settings:
+          max-expression-operators: 4
+          max-if-operators: 0
+          max-control-flow-depth: 3
+          max-array-chain-depth: 2
+          max-computed-value-operators: 1
+          min-object-lookup-chain-length: 3
+          max-selector-chain-depth: 3
+          min-switch-chain-length: 3
+          max-if-init-operators: 0
+          max-composite-literal-arg-depth: 1
+          max-function-lines: 20
+          max-function-params: 5
+          max-naked-return-lines: 5

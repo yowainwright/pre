@@ -15,20 +15,6 @@ func TestRenderQuiet(t *testing.T) {
 	}
 }
 
-func TestRenderSystemLineEmpty(t *testing.T) {
-	out := renderSystemLine(SystemStats{})
-	if !strings.Contains(out, "pre setup") {
-		t.Errorf("expected setup hint for empty stats, got %q", out)
-	}
-}
-
-func TestRenderSystemLineWithStats(t *testing.T) {
-	out := renderSystemLine(SystemStats{Crit: 2, Warn: 3, Total: 10})
-	if !strings.Contains(out, "2") || !strings.Contains(out, "3") || !strings.Contains(out, "10") {
-		t.Errorf("expected crit/warn/total in output, got %q", out)
-	}
-}
-
 func TestNodeStatusClean(t *testing.T) {
 	out := nodeStatus(scanResult{})
 	if !strings.Contains(out, "clean") {
@@ -147,5 +133,16 @@ func TestNodeChildrenWithScore(t *testing.T) {
 	}
 	if !strings.Contains(children[0], "9.8") {
 		t.Errorf("expected score in child, got %q", children[0])
+	}
+}
+
+func TestRenderTreeSanitizesTerminalControls(t *testing.T) {
+	vulnerability := security.Vulnerability{
+		ID: "CVE\x1b[H-1234", Summary: "fake clean\nsummary", Severity: security.SeverityCritical,
+	}
+	result := scanResult{label: "lodash\x1b[2J@1.0.0", vulns: []security.Vulnerability{vulnerability}}
+	output := renderTree("npm\x1b[2J", []scanResult{result})
+	if strings.Contains(output, "\x1b") || strings.Contains(output, "fake clean\nsummary") {
+		t.Fatalf("expected untrusted terminal controls to be replaced, got %q", output)
 	}
 }

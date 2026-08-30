@@ -3,15 +3,14 @@ package proxy
 import (
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/yowainwright/pre/internal/cache"
 	"github.com/yowainwright/pre/internal/manager"
+	"github.com/yowainwright/pre/internal/obs"
 	"github.com/yowainwright/pre/internal/security"
 )
 
@@ -26,11 +25,23 @@ type scanResult struct {
 	updated   bool
 }
 
+type batchScanWork struct {
+	index int
+	query security.Query
+}
+
+type systemScanWork struct {
+	key          string
+	canonicalKey string
+	query        security.Query
+}
+
+type systemScanChanges struct {
+	deleteKeys  map[string]struct{}
+	refreshKeys cache.Cache
+}
+
 var (
-	systemScanEnabled     bool
-	spawnBackgroundScanFn = spawnBackgroundScan
-	spawnSystemScanFn     = spawnSystemScan
-	executableFn          = os.Executable
 	acquireSystemScanLock = tryAcquireSystemScanLock
 )
 
@@ -41,76 +52,36 @@ var (
 )
 
 const systemScanLockStaleAfter = 30 * time.Minute
-const scanConcurrency = 10
 
 var errMissingVersion = errors.New("version unavailable; skipped vulnerability check")
 
-func SetSystemScanEnabled(v bool) {
-	systemScanEnabled = v
-}
-
-func spawnBackgroundScan(mgrName string) {
-	self, err := executableFn()
-	if err != nil {
+func storeFreshScanResults(fresh cache.Cache) {
+	if len(fresh) == 0 {
 		return
 	}
-	cmd := exec.Command(self, "scan", mgrName) // #nosec G204 -- self is the current pre executable path.
-	_ = cmd.Start()
-}
-
-func spawnSystemScan() {
-	self, err := executableFn()
-	if err != nil {
-		return
-	}
-	cmd := exec.Command(self, "scan", "system") // #nosec G204 -- self is the current pre executable path.
-	_ = cmd.Start()
-}
-
-func RunBackgroundScan(mgr *manager.Manager) {
-	if disableEnabled() {
-		return
-	}
-	packages := readManifestFn(mgr)
-	if len(packages) == 0 {
-		return
-	}
-	if _, exceeded := packageLimitExceeded(len(packages)); exceeded {
-		return
-	}
-	c := loadCacheFn()
-	fresh := make(cache.Cache)
-	var crit, warn, errs int
-	for _, pkg := range packages {
-		r := scanPackageWithPolicy(mgr, pkg, c, false)
-		switch {
-		case hasCriticalVulns(r):
-			crit++
-		case len(r.vulns) > 0:
-			warn++
-		case r.err != nil:
-			errs++
+	updateCacheFn(func(current cache.Cache) {
+		for key := range fresh {
+			cache.Set(current, key)
 		}
-		if len(r.vulns) == 0 && r.version != "" && r.err == nil && r.cacheable && !r.cached {
-			cache.Set(fresh, cache.Key(mgr.Ecosystem, r.name, r.version))
-		}
-	}
-	if len(fresh) > 0 {
-		updateCacheFn(func(current cache.Cache) {
-			for key := range fresh {
-				cache.Set(current, key)
-			}
-		})
-	}
-	saveSystemStatsFn(SystemStats{Crit: crit, Warn: warn, Errors: errs, Total: len(packages)})
+	})
 }
 
 func RunSystemScan() {
+	start := time.Now()
+	obs.Record("pre.system_scan.started", nil)
 	if disableEnabled() {
+		obs.Record("pre.system_scan.skipped", map[string]any{
+			"reason":      "env_disabled",
+			"duration_ms": durationMillis(start),
+		})
 		return
 	}
 	release, ok := acquireSystemScanLock()
 	if !ok {
+		obs.Record("pre.system_scan.skipped", map[string]any{
+			"reason":      "locked",
+			"duration_ms": durationMillis(start),
+		})
 		return
 	}
 	if release != nil {
@@ -118,143 +89,173 @@ func RunSystemScan() {
 	}
 
 	c := loadCacheFn()
-	if _, exceeded := packageLimitExceeded(len(c)); exceeded {
+	if limit, exceeded := packageLimitExceeded(len(c)); exceeded {
+		obs.Record("pre.system_scan.skipped", map[string]any{
+			"reason":        "package_limit",
+			"package_count": len(c),
+			"package_limit": limit,
+			"duration_ms":   durationMillis(start),
+		})
 		return
 	}
-	total := 0
-	var crit, warn, errs int
-	deleteKeys := make(map[string]struct{})
-	refreshKeys := make(cache.Cache)
-	for key, entry := range c {
-		ecosystem, name, version := cache.ParseKey(key)
-		if ecosystem == "" || name == "" {
-			continue
-		}
-		if version == "" {
-			version = entry.Version
-		}
-		if version == "" {
-			continue
-		}
-		total++
-		mgr := manager.Get(strings.ToLower(ecosystem))
-		if mgr == nil {
-			mgr = &manager.Manager{Name: ecosystem, Ecosystem: ecosystem}
-		}
-		vulns, err := securityCheckFn(mgr.Ecosystem, name, version)
-		if err != nil {
-			errs++
-			continue
-		}
-		r := scanResult{name: name, version: version, vulns: vulns}
-		canonicalKey := cache.Key(mgr.Ecosystem, name, version)
-		switch {
-		case hasCriticalVulns(r):
-			crit++
-			deleteKeys[key] = struct{}{}
-			deleteKeys[canonicalKey] = struct{}{}
-		case len(vulns) > 0:
-			warn++
-			deleteKeys[key] = struct{}{}
-			deleteKeys[canonicalKey] = struct{}{}
-		default:
-			cache.Set(refreshKeys, canonicalKey)
-			if key != canonicalKey {
-				deleteKeys[key] = struct{}{}
-			}
-		}
-	}
-	updateCacheFn(func(current cache.Cache) {
-		for key := range deleteKeys {
-			delete(current, key)
-		}
-		for key := range refreshKeys {
-			cache.Set(current, key)
-		}
+	pending, total := pendingSystemScans(c)
+	results, err := checkSystemScans(pending)
+	stats, changes := systemScanOutcome(pending, results, err)
+	stats.Total = total
+	applySystemScanChanges(changes)
+	saveSystemStatsFn(stats)
+	obs.Record("pre.system_scan.completed", map[string]any{
+		"package_count":  total,
+		"pending_count":  len(pending),
+		"critical_count": stats.Crit,
+		"warning_count":  stats.Warn,
+		"error_count":    stats.Errors,
+		"duration_ms":    durationMillis(start),
 	})
-	saveSystemStatsFn(SystemStats{Crit: crit, Warn: warn, Errors: errs, Total: total})
 }
 
-func scanAll(mgr *manager.Manager, packages []string, c cache.Cache) []scanResult {
-	return scanAllWithPolicy(mgr, packages, c, true)
-}
-
-func scanAllWithPolicy(mgr *manager.Manager, packages []string, c cache.Cache, allowMissingVersionResolution bool) []scanResult {
-	type work struct {
-		idx     int
-		name    string
-		version string
-	}
-
+func scanBatchWithPolicy(mgr *manager.Manager, packages []string, c cache.Cache, allowMissingVersionResolution bool) []scanResult {
 	results := make([]scanResult, len(packages))
-	var pending []work
-
-	for i, pkg := range packages {
-		name, version := manager.ParseSpec(mgr.Ecosystem, pkg)
-		if hasExactCacheHit(mgr, c, name, version) {
-			label := name + "@" + version
-			results[i] = scanResult{name: name, version: version, label: label, cached: true}
-			continue
+	pending := make([]batchScanWork, 0, len(packages))
+	for index, spec := range packages {
+		result, query, scan := prepareBatchScan(mgr, spec, c, allowMissingVersionResolution)
+		results[index] = result
+		if scan {
+			pending = append(pending, batchScanWork{index: index, query: query})
 		}
-		pending = append(pending, work{idx: i, name: name, version: version})
 	}
-
-	jobs := make(chan work)
-	var wg sync.WaitGroup
-
-	workers := scanConcurrency
-	if len(pending) < workers {
-		workers = len(pending)
-	}
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for w := range jobs {
-				results[w.idx] = scanPendingPackage(mgr, w.name, w.version, c, allowMissingVersionResolution, false)
-			}
-		}()
-	}
-
-	for _, w := range pending {
-		jobs <- w
-	}
-	close(jobs)
-
-	wg.Wait()
+	applyBatchScanResults(results, pending)
 	return results
 }
 
-func scanPackage(mgr *manager.Manager, spec string, c cache.Cache) scanResult {
-	return scanPackageWithPolicy(mgr, spec, c, true)
-}
-
-func scanPackageWithPolicy(mgr *manager.Manager, spec string, c cache.Cache, allowMissingVersionResolution bool) scanResult {
-	name, version := manager.ParseSpec(mgr.Ecosystem, spec)
-	return scanPendingPackage(mgr, name, version, c, allowMissingVersionResolution, true)
-}
-
-func scanPendingPackage(mgr *manager.Manager, name, version string, c cache.Cache, allowMissingVersionResolution bool, updateCache bool) scanResult {
-	version, label, resolved, cacheable, err := resolveScanVersion(mgr, name, version, allowMissingVersionResolution)
-	if err != nil {
-		return scanResult{name: name, label: label, err: err}
+func prepareBatchScan(mgr *manager.Manager, spec string, c cache.Cache, allowMissing bool) (scanResult, security.Query, bool) {
+	name, requestedVersion := manager.ParseSpec(mgr.Ecosystem, spec)
+	result := prepareScan(mgr, name, requestedVersion, c, allowMissing)
+	if result.err != nil || result.cached {
+		return result, security.Query{}, false
 	}
+	query := security.Query{Ecosystem: mgr.Ecosystem, Name: result.name, Version: result.version}
+	return result, query, true
+}
 
+func applyBatchScanResults(results []scanResult, pending []batchScanWork) {
+	if len(pending) == 0 {
+		return
+	}
+	queries := make([]security.Query, len(pending))
+	for index, work := range pending {
+		queries[index] = work.query
+	}
+	vulnerabilities, err := securityBatchCheckFn(queries)
+	for index, work := range pending {
+		results[work.index].err = err
+		if err == nil {
+			results[work.index].vulns = vulnerabilities[index]
+		}
+	}
+}
+
+func pendingSystemScans(c cache.Cache) ([]systemScanWork, int) {
+	pending := make([]systemScanWork, 0, len(c))
+	total := 0
+	for key, entry := range c {
+		work, ok := systemScanWorkFrom(key, entry)
+		if !ok {
+			continue
+		}
+		total++
+		pending = append(pending, work)
+	}
+	return pending, total
+}
+
+func systemScanWorkFrom(key string, entry cache.Entry) (systemScanWork, bool) {
+	ecosystem, name, version := cache.ParseKey(key)
+	if version == "" {
+		version = entry.Version
+	}
+	if ecosystem == "" || name == "" || version == "" {
+		return systemScanWork{}, false
+	}
+	mgr := manager.Get(strings.ToLower(ecosystem))
+	if mgr != nil {
+		ecosystem = mgr.Ecosystem
+	}
+	query := security.Query{Ecosystem: ecosystem, Name: name, Version: version}
+	canonicalKey := cache.Key(ecosystem, name, version)
+	return systemScanWork{key: key, canonicalKey: canonicalKey, query: query}, true
+}
+
+func checkSystemScans(pending []systemScanWork) ([][]security.Vulnerability, error) {
+	if len(pending) == 0 {
+		return nil, nil
+	}
+	queries := make([]security.Query, len(pending))
+	for index, work := range pending {
+		queries[index] = work.query
+	}
+	return securityBatchCheckFn(queries)
+}
+
+func systemScanOutcome(pending []systemScanWork, results [][]security.Vulnerability, batchErr error) (SystemStats, systemScanChanges) {
+	changes := systemScanChanges{deleteKeys: make(map[string]struct{}), refreshKeys: make(cache.Cache)}
+	stats := SystemStats{}
+	if batchErr != nil {
+		stats.Errors = len(pending)
+		return stats, changes
+	}
+	for index, work := range pending {
+		applySystemScanResult(work, results[index], &stats, &changes)
+	}
+	return stats, changes
+}
+
+func applySystemScanResult(work systemScanWork, vulnerabilities []security.Vulnerability, stats *SystemStats, changes *systemScanChanges) {
+	result := scanResult{vulns: vulnerabilities}
+	if hasCriticalVulns(result) {
+		stats.Crit++
+		markSystemScanDeleted(work, changes)
+		return
+	}
+	if len(vulnerabilities) > 0 {
+		stats.Warn++
+		markSystemScanDeleted(work, changes)
+		return
+	}
+	cache.Set(changes.refreshKeys, work.canonicalKey)
+	if work.key != work.canonicalKey {
+		changes.deleteKeys[work.key] = struct{}{}
+	}
+}
+
+func markSystemScanDeleted(work systemScanWork, changes *systemScanChanges) {
+	changes.deleteKeys[work.key] = struct{}{}
+	changes.deleteKeys[work.canonicalKey] = struct{}{}
+}
+
+func applySystemScanChanges(changes systemScanChanges) {
+	if len(changes.deleteKeys) == 0 && len(changes.refreshKeys) == 0 {
+		return
+	}
+	updateCacheFn(func(current cache.Cache) {
+		for key := range changes.deleteKeys {
+			delete(current, key)
+		}
+		for key := range changes.refreshKeys {
+			cache.Set(current, key)
+		}
+	})
+}
+
+func prepareScan(mgr *manager.Manager, name, requestedVersion string, c cache.Cache, allowMissing bool) scanResult {
+	version, label, updated, cacheable, err := resolveScanVersion(mgr, name, requestedVersion, allowMissing)
+	result := scanResult{name: name, version: version, label: label, updated: updated, cacheable: cacheable, err: err}
+	if err != nil {
+		return result
+	}
 	key := cache.Key(mgr.Ecosystem, name, version)
-	if cacheable && cache.Hit(c, key) {
-		return scanResult{name: name, version: version, label: label, cached: true, cacheable: true}
-	}
-
-	vulns, err := securityCheckFn(mgr.Ecosystem, name, version)
-	if err != nil {
-		return scanResult{name: name, version: version, label: label, err: err}
-	}
-
-	if updateCache && len(vulns) == 0 && cacheable {
-		cache.Set(c, key)
-	}
-
-	return scanResult{name: name, version: version, label: label, vulns: vulns, updated: resolved, cacheable: cacheable}
+	result.cached = cacheable && cache.Hit(c, key)
+	return result
 }
 
 func tryAcquireSystemScanLock() (func(), bool) {
@@ -268,18 +269,24 @@ func tryAcquireSystemScanLock() (func(), bool) {
 
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > systemScanLockStaleAfter {
-				_ = os.Remove(path)
-				return tryAcquireSystemScanLock()
-			}
-			return nil, false
-		}
-		return nil, true
+		return handleSystemScanLockError(path, err)
 	}
 	_, _ = file.WriteString(time.Now().Format(time.RFC3339Nano))
 	_ = file.Close()
 	return func() { _ = os.Remove(path) }, true
+}
+
+func handleSystemScanLockError(path string, err error) (func(), bool) {
+	if !errors.Is(err, os.ErrExist) {
+		return nil, true
+	}
+	info, statErr := os.Stat(path)
+	isStale := statErr == nil && time.Since(info.ModTime()) > systemScanLockStaleAfter
+	if !isStale {
+		return nil, false
+	}
+	_ = os.Remove(path)
+	return tryAcquireSystemScanLock()
 }
 
 func systemScanLockPath() (string, error) {
@@ -326,7 +333,8 @@ func resolveScanVersion(mgr *manager.Manager, name, version string, allowMissing
 		return version, label, false, true, nil
 	case canResolveConstraint(mgr.Ecosystem, version):
 		target := name
-		if mgr.Ecosystem == "crates.io" {
+		usesRequirement := mgr.Ecosystem == "npm" || mgr.Ecosystem == "crates.io"
+		if usesRequirement {
 			target = label
 		}
 		resolved, err := resolveVersionFn(mgr, target)
@@ -364,8 +372,12 @@ func isExactVersion(ecosystem, version string) bool {
 		return npmExactVersionRE.MatchString(version)
 	case "Go":
 		return goExactVersionRE.MatchString(version)
+	case "PyPI":
+		return !strings.ContainsAny(version, "<>=~*,@ ")
 	case "crates.io":
 		return crateExactVersionRE.MatchString(version)
+	case "Homebrew":
+		return false
 	}
-	return true
+	return false
 }

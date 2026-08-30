@@ -25,6 +25,18 @@ func TestOSVKnownVulnerablePackage(t *testing.T) {
 	}
 }
 
+func TestOSVBatch(t *testing.T) {
+	clean := security.Query{Ecosystem: "npm", Name: "react", Version: "18.0.0"}
+	vulnerable := security.Query{Ecosystem: "npm", Name: "lodash", Version: "4.17.4"}
+	results, err := security.CheckBatch([]security.Query{clean, vulnerable})
+	if err != nil {
+		t.Fatalf("unexpected batch error: %v", err)
+	}
+	if len(results) != 2 || len(results[1]) == 0 {
+		t.Fatalf("unexpected batch results: %+v", results)
+	}
+}
+
 func TestOSVGoEcosystem(t *testing.T) {
 	_, err := security.Check("Go", "golang.org/x/net", "0.0.0-20210226172049-4dc4b3a7a6e")
 	if err != nil {

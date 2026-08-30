@@ -21,6 +21,62 @@ func TestValidateManifestRejectsInvalidPackageLock(t *testing.T) {
 	}
 }
 
+func TestValidateManifestRejectsUnsafePackageLockEntry(t *testing.T) {
+	tests := map[string]string{
+		"mismatched name":          `{"packages":{"node_modules/lodash":{"name":"evil-pkg","version":"4.17.21","resolved":"https://registry.npmjs.org/evil-pkg/-/evil-pkg-4.17.21.tgz"}}}`,
+		"non-registry source":      `{"packages":{"node_modules/lodash":{"version":"4.17.21","resolved":"https://attacker.example/lodash.tgz"}}}`,
+		"mismatched registry path": `{"packages":{"node_modules/lodash":{"version":"4.17.21","resolved":"https://registry.npmjs.org/evil-pkg/-/evil-pkg-4.17.21.tgz"}}}`,
+	}
+	for name, lockfile := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "package-lock.json")
+			if err := os.WriteFile(path, []byte(lockfile), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			err := ValidateManifest(&Manager{Name: "npm", Ecosystem: "npm"}, dir)
+			if err == nil || !strings.Contains(err.Error(), "package-lock.json") {
+				t.Fatalf("expected unsafe package lock error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateManifestAllowsRegistryPackageLockEntry(t *testing.T) {
+	dir := t.TempDir()
+	lockfile := `{"packages":{"node_modules/@scope/pkg":{"name":"@scope/pkg","version":"1.0.0","resolved":"https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte(lockfile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := ValidateManifest(&Manager{Name: "npm", Ecosystem: "npm"}, dir)
+	if err != nil {
+		t.Fatalf("expected registry package lock to pass, got %v", err)
+	}
+}
+
+func TestNPMRegistryURL(t *testing.T) {
+	tests := map[string]struct {
+		name     string
+		expected bool
+	}{
+		"https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz":     {name: "@scope/pkg", expected: true},
+		"https://registry.npmjs.org/%40scope%2Fpkg/-/pkg-1.0.0.tgz": {name: "@scope/pkg", expected: true},
+		"https://registry.npmjs.org/evil/-/evil-1.0.0.tgz":          {name: "pkg", expected: false},
+		"http://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz":             {name: "pkg", expected: false},
+		"https://registry.npmjs.org.evil.example/pkg.tgz":           {name: "pkg", expected: false},
+		"https://user@registry.npmjs.org/pkg/-/pkg-1.0.0.tgz":       {name: "pkg", expected: false},
+		"https://registry.example/pkg/-/pkg-1.0.0.tgz":              {name: "pkg", expected: false},
+		"file:../pkg.tgz": {name: "pkg", expected: false},
+	}
+	for resolved, test := range tests {
+		if actual := isNPMRegistryURL(resolved, test.name); actual != test.expected {
+			t.Errorf("isNPMRegistryURL(%q, %q) = %t, want %t", resolved, test.name, actual, test.expected)
+		}
+	}
+}
+
 func TestValidateManifestRejectsInvalidBunLock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bun.lock")

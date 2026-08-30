@@ -81,6 +81,108 @@ install_hook() {
   chmod +x "$hook"
 }
 
+agent_lint_hook_path() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  echo "${root}/scripts/agent-lint-hook.sh"
+}
+
+codex_hooks_path() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  echo "${root}/.codex/hooks.json"
+}
+
+claude_settings_path() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  echo "${root}/.claude/settings.json"
+}
+
+codex_agent_hook_installed() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  hook="$(agent_lint_hook_path "$root")"
+  settings="$(codex_hooks_path "$root")"
+  [ -x "$hook" ] && [ -f "$settings" ] && grep -Fq "scripts/agent-lint-hook.sh" "$settings"
+}
+
+claude_agent_hook_installed() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  hook="$(agent_lint_hook_path "$root")"
+  settings="$(claude_settings_path "$root")"
+  [ -x "$hook" ] && [ -f "$settings" ] && grep -Fq "scripts/agent-lint-hook.sh" "$settings"
+}
+
+merge_agent_hook_config() {
+  settings="$2"
+  write_agent_hook_config "$settings"
+}
+
+write_agent_hook_config() {
+  settings="$1"
+  dir="$(dirname "$settings")"
+  mkdir -p "$dir" || return 1
+  tmp="${settings}.$$"
+  write_agent_hook_json "$settings" > "$tmp" &&
+    mv "$tmp" "$settings"
+}
+
+write_agent_hook_json() {
+  settings="$1"
+  printf '{\n'
+  printf '  "hooks": {\n'
+  printf '    "PostToolUse": [\n'
+  write_existing_agent_matchers "$settings"
+  write_agent_lint_matcher
+  printf '    ]\n'
+  printf '  }\n'
+  printf '}\n'
+}
+
+write_existing_agent_matchers() {
+  settings="$1"
+  [ -f "$settings" ] || return 0
+  extract_agent_matchers "$settings" |
+    while IFS= read -r matcher; do
+      [ -n "$matcher" ] || continue
+      [ "$matcher" = "Edit|MultiEdit|Write" ] && continue
+      printf '      {\n'
+      printf '        "matcher": "%s",\n' "$matcher"
+      printf '        "hooks": []\n'
+      printf '      },\n'
+    done
+}
+
+extract_agent_matchers() {
+  grep -o '"matcher"[[:space:]]*:[[:space:]]*"[^"]*"' "$1" 2>/dev/null |
+    sed 's/.*"matcher"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/'
+}
+
+write_agent_lint_matcher() {
+  printf '      {\n'
+  printf '        "matcher": "Edit|MultiEdit|Write",\n'
+  printf '        "hooks": [\n'
+  printf '          {\n'
+  printf '            "type": "command",\n'
+  printf '            "command": "sh scripts/agent-lint-hook.sh"\n'
+  printf '          }\n'
+  printf '        ]\n'
+  printf '      }\n'
+}
+
+install_codex_agent_hook() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  settings="$(codex_hooks_path "$root")"
+  codex_agent_hook_installed "$root" && return 0
+  merge_agent_hook_config "codex" "$settings" &&
+    codex_agent_hook_installed "$root"
+}
+
+install_claude_agent_hook() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  settings="$(claude_settings_path "$root")"
+  claude_agent_hook_installed "$root" && return 0
+  merge_agent_hook_config "claude" "$settings" &&
+    claude_agent_hook_installed "$root"
+}
+
 check_deps() {
   echo "--- deps"
   cmd_exists go   && ok "go"   || fail "go"   "not found — https://go.dev/dl"
@@ -132,12 +234,24 @@ check_hooks() {
   done
 }
 
+check_agent_hooks() {
+  root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+  echo "--- agent hooks"
+  install_codex_agent_hook "$root" &&
+    ok "Codex agent lint hook installed" ||
+    fail "Codex agent lint hook" "could not merge scripts/agent-lint-hook.sh into .codex/hooks.json"
+  install_claude_agent_hook "$root" &&
+    ok "Claude agent lint hook installed" ||
+    fail "Claude agent lint hook" "could not merge scripts/agent-lint-hook.sh into .claude/settings.json"
+}
+
 main() {
   check_deps
   echo ""; check_auth
   echo ""; check_env
   echo ""; check_secrets
   echo ""; check_hooks
+  echo ""; check_agent_hooks
   echo ""
   printf "%d ok  %d warned  %d failed\n" "$passed" "$warned" "$failed"
   [ "$failed" -eq 0 ]

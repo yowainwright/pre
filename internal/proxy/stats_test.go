@@ -14,181 +14,8 @@ func withStatsCacheDir(dir string) func() {
 	return func() { statsCacheDirFn = orig }
 }
 
-func TestSetSystemScanTTLValid(t *testing.T) {
-	orig := configuredSystemScanTTL
-	defer func() { configuredSystemScanTTL = orig }()
-
-	SetSystemScanTTL("48h")
-	if configuredSystemScanTTL != 48*time.Hour {
-		t.Errorf("expected 48h, got %v", configuredSystemScanTTL)
-	}
-}
-
-func TestSetSystemScanTTLEmpty(t *testing.T) {
-	orig := configuredSystemScanTTL
-	defer func() { configuredSystemScanTTL = orig }()
-
-	SetSystemScanTTL("")
-	if configuredSystemScanTTL != orig {
-		t.Error("empty string should not change TTL")
-	}
-}
-
-func TestSetSystemScanTTLInvalid(t *testing.T) {
-	orig := configuredSystemScanTTL
-	defer func() { configuredSystemScanTTL = orig }()
-
-	SetSystemScanTTL("notaduration")
-	if configuredSystemScanTTL != orig {
-		t.Error("invalid duration should not change TTL")
-	}
-}
-
-func TestSetSystemScanTTLNegative(t *testing.T) {
-	orig := configuredSystemScanTTL
-	defer func() { configuredSystemScanTTL = orig }()
-
-	SetSystemScanTTL("-1h")
-	if configuredSystemScanTTL != orig {
-		t.Error("negative duration should not change TTL")
-	}
-}
-
-func TestShouldRunSystemScanNeverRun(t *testing.T) {
-	dir := t.TempDir()
-	defer withStatsCacheDir(dir)()
-	orig := loadSystemStatsFn
-	loadSystemStatsFn = loadSystemStats
-	defer func() { loadSystemStatsFn = orig }()
-
-	if !shouldRunSystemScan() {
-		t.Error("expected true when stats file missing (never run)")
-	}
-}
-
-func TestShouldRunSystemScanRecent(t *testing.T) {
-	dir := t.TempDir()
-	defer withStatsCacheDir(dir)()
-	orig := loadSystemStatsFn
-	loadSystemStatsFn = loadSystemStats
-	defer func() { loadSystemStatsFn = orig }()
-
-	saveSystemStats(SystemStats{Total: 5})
-
-	origTTL := configuredSystemScanTTL
-	configuredSystemScanTTL = 24 * time.Hour
-	defer func() { configuredSystemScanTTL = origTTL }()
-
-	if shouldRunSystemScan() {
-		t.Error("expected false when scan ran recently")
-	}
-}
-
-func TestShouldRunSystemScanExpired(t *testing.T) {
-	dir := t.TempDir()
-	defer withStatsCacheDir(dir)()
-	orig := loadSystemStatsFn
-	loadSystemStatsFn = loadSystemStats
-	defer func() { loadSystemStatsFn = orig }()
-
-	s := SystemStats{Total: 5}
-	saveSystemStats(s)
-
-	origTTL := configuredSystemScanTTL
-	configuredSystemScanTTL = 1 * time.Nanosecond
-	defer func() { configuredSystemScanTTL = origTTL }()
-
-	time.Sleep(2 * time.Millisecond)
-
-	if !shouldRunSystemScan() {
-		t.Error("expected true when scan TTL has expired")
-	}
-}
-
-func TestShouldRunSystemScanRecentFailedAttempt(t *testing.T) {
-	dir := t.TempDir()
-	defer withStatsCacheDir(dir)()
-	orig := loadSystemStatsFn
-	loadSystemStatsFn = loadSystemStats
-	defer func() { loadSystemStatsFn = orig }()
-
-	saveSystemStats(SystemStats{Errors: 1, Total: 1})
-
-	origTTL := configuredSystemScanTTL
-	configuredSystemScanTTL = 24 * time.Hour
-	defer func() { configuredSystemScanTTL = origTTL }()
-
-	if shouldRunSystemScan() {
-		t.Error("expected false after a recent failed scan attempt")
-	}
-}
-
-func TestShouldRunSystemScanRecentAttemptWithExpiredSuccess(t *testing.T) {
-	now := time.Now()
-	orig := loadSystemStatsFn
-	loadSystemStatsFn = func() SystemStats {
-		return SystemStats{
-			LastUpdated:   now.Add(-48 * time.Hour),
-			LastAttempted: now,
-		}
-	}
-	defer func() { loadSystemStatsFn = orig }()
-
-	origTTL := configuredSystemScanTTL
-	configuredSystemScanTTL = 24 * time.Hour
-	defer func() { configuredSystemScanTTL = origTTL }()
-
-	if shouldRunSystemScan() {
-		t.Error("expected false when failed attempt is recent even if last success is expired")
-	}
-}
-
-func TestShouldRunSystemScanExpiredFailedAttempt(t *testing.T) {
-	now := time.Now()
-	orig := loadSystemStatsFn
-	loadSystemStatsFn = func() SystemStats {
-		return SystemStats{LastAttempted: now.Add(-2 * time.Hour)}
-	}
-	defer func() { loadSystemStatsFn = orig }()
-
-	origTTL := configuredSystemScanTTL
-	configuredSystemScanTTL = time.Hour
-	defer func() { configuredSystemScanTTL = origTTL }()
-
-	if !shouldRunSystemScan() {
-		t.Error("expected true when failed attempt TTL has expired")
-	}
-}
-
-func TestShouldRunSystemScanFutureLastUpdated(t *testing.T) {
-	orig := loadSystemStatsFn
-	loadSystemStatsFn = func() SystemStats {
-		return SystemStats{LastUpdated: time.Now().Add(time.Hour)}
-	}
-	defer func() { loadSystemStatsFn = orig }()
-
-	if !shouldRunSystemScan() {
-		t.Error("expected true when last updated is in the future")
-	}
-}
-
-func TestShouldRunSystemScanZeroTTL(t *testing.T) {
-	origLoad := loadSystemStatsFn
-	loadSystemStatsFn = func() SystemStats {
-		return SystemStats{LastUpdated: time.Now()}
-	}
-	defer func() { loadSystemStatsFn = origLoad }()
-
-	origTTL := configuredSystemScanTTL
-	configuredSystemScanTTL = 0
-	defer func() { configuredSystemScanTTL = origTTL }()
-
-	if !shouldRunSystemScan() {
-		t.Error("expected true when system scan TTL is zero")
-	}
-}
-
 func TestSaveAndLoadSystemStats(t *testing.T) {
+	withObsDir(t)
 	dir := t.TempDir()
 	defer withStatsCacheDir(dir)()
 
@@ -203,6 +30,11 @@ func TestSaveAndLoadSystemStats(t *testing.T) {
 	}
 	if s.LastAttempted.IsZero() {
 		t.Error("expected LastAttempted to be set")
+	}
+	written := requireObsEvent(t, "pre.system_stats.written")
+	loaded := requireObsEvent(t, "pre.system_stats.loaded")
+	if written["package_count"] != float64(10) || loaded["package_count"] != float64(10) {
+		t.Fatalf("unexpected stats obs: written=%#v loaded=%#v", written, loaded)
 	}
 }
 
@@ -263,6 +95,7 @@ func TestLoadSystemStatsMissing(t *testing.T) {
 }
 
 func TestSystemStatsPathError(t *testing.T) {
+	withObsDir(t)
 	orig := statsCacheDirFn
 	statsCacheDirFn = func() (string, error) { return "", errors.New("no dir") }
 	defer func() { statsCacheDirFn = orig }()
@@ -271,14 +104,23 @@ func TestSystemStatsPathError(t *testing.T) {
 	if s.Total != 0 || !s.LastUpdated.IsZero() {
 		t.Errorf("expected empty stats on path error, got %+v", s)
 	}
+	event := requireObsEvent(t, "pre.system_stats.load_failed")
+	if event["error_type"] == "" {
+		t.Fatalf("expected error type, got %#v", event)
+	}
 }
 
 func TestSaveSystemStatsDirError(t *testing.T) {
+	withObsDir(t)
 	orig := statsCacheDirFn
 	statsCacheDirFn = func() (string, error) { return "", errors.New("no dir") }
 	defer func() { statsCacheDirFn = orig }()
 
 	saveSystemStats(SystemStats{Total: 5})
+	event := requireObsEvent(t, "pre.system_stats.write_failed")
+	if event["package_count"] != float64(5) || event["error_type"] == "" {
+		t.Fatalf("unexpected write failure event: %#v", event)
+	}
 }
 
 func TestSaveSystemStatsMkdirError(t *testing.T) {

@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+const npmRegistryHost = "registry.npmjs.org"
 
 func ValidateManifest(mgr *Manager, dir string) error {
 	if mgr == nil {
@@ -35,7 +38,7 @@ func validateNPMProject(name, dir string) error {
 	var err error
 	switch name {
 	case "npm":
-		err = validateJSONFiles(dir, "package-lock.json")
+		err = validatePackageLock(filepath.Join(dir, npmPackageLockFilename))
 	case "bun":
 		err = validateBunLock(filepath.Join(dir, "bun.lock"))
 	case "pnpm":
@@ -50,13 +53,92 @@ func validateNPMProject(name, dir string) error {
 }
 
 func validateAllNPMLocks(dir string) error {
-	if err := validateJSONFiles(dir, "package-lock.json"); err != nil {
+	if err := validatePackageLock(filepath.Join(dir, npmPackageLockFilename)); err != nil {
 		return err
 	}
 	if err := validateBunLock(filepath.Join(dir, "bun.lock")); err != nil {
 		return err
 	}
 	return validateTextFiles(dir, "pnpm-lock.yaml")
+}
+
+func validatePackageLock(path string) error {
+	lockfile, err := readPackageLock(path)
+	if err != nil || lockfile == nil {
+		return err
+	}
+	if err := validatePackageLockPackages(lockfile.Packages, path); err != nil {
+		return err
+	}
+	return validatePackageLockDependencies(lockfile.Dependencies, path, 0)
+}
+
+func readPackageLock(path string) (*packageLock, error) {
+	data, exists, err := readOptionalProjectFile(path)
+	if err != nil || !exists {
+		return nil, err
+	}
+	var lockfile *packageLock
+	if err := json.Unmarshal(data, &lockfile); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if lockfile == nil {
+		return nil, fmt.Errorf("parse %s: expected JSON object", path)
+	}
+	return lockfile, nil
+}
+
+func validatePackageLockPackages(packages map[string]packageLockEntry, path string) error {
+	for packagePath, entry := range packages {
+		if packagePath == "" {
+			continue
+		}
+		name := packageLockPackageName(packagePath)
+		if entry.Name != "" && entry.Name != name {
+			return fmt.Errorf("package identity mismatch for %q in %s", name, path)
+		}
+		if err := validatePackageLockSource(name, entry.Version, entry.Resolved, entry.Link, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePackageLockDependencies(dependencies map[string]packageLockDependency, path string, depth int) error {
+	if depth >= maxPackageLockDependencyDepth && len(dependencies) > 0 {
+		return fmt.Errorf("package dependency depth exceeds %d in %s", maxPackageLockDependencyDepth, path)
+	}
+	for name, dependency := range dependencies {
+		if dependency.Name != "" && dependency.Name != name {
+			return fmt.Errorf("package identity mismatch for %q in %s", name, path)
+		}
+		if err := validatePackageLockSource(name, dependency.Version, dependency.Resolved, false, path); err != nil {
+			return err
+		}
+		if err := validatePackageLockDependencies(dependency.Dependencies, path, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePackageLockSource(name, version, resolved string, link bool, path string) error {
+	hasUnsupportedVersion := version != "" && !IsSupportedNPMRegistrySpec(strings.TrimSpace(version))
+	hasUnsupportedSource := resolved != "" && !isNPMRegistryURL(resolved, name)
+	if link || hasUnsupportedVersion || hasUnsupportedSource {
+		return fmt.Errorf("unsupported npm lockfile source for %q in %s", name, path)
+	}
+	return nil
+}
+
+func isNPMRegistryURL(value, name string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return false
+	}
+	hasRegistryHost := strings.EqualFold(parsed.Hostname(), npmRegistryHost) && parsed.Port() == ""
+	hasPackagePath := strings.HasPrefix(parsed.Path, "/"+name+"/-/")
+	return parsed.Scheme == "https" && parsed.User == nil && hasRegistryHost && hasPackagePath
 }
 
 func validatePythonProject(name, dir string) error {

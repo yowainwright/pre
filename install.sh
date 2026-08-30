@@ -32,9 +32,16 @@ detect_arch() {
 
 fetch_latest_version() {
   repo="${1:-$REPO}"
-  curl -fsSL "https://api.github.com/repos/${repo}/releases/latest" \
-    | grep '"tag_name"' \
-    | sed 's/.*"tag_name": *"v\([^"]*\)".*/\1/'
+  if ! response="$(curl -fsSL "https://api.github.com/repos/${repo}/releases/latest")"; then
+    echo "pre: failed to fetch latest release" >&2
+    return 1
+  fi
+  version="$(printf '%s\n' "$response" | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')"
+  if [ -z "$version" ]; then
+    echo "pre: latest release response has no tag" >&2
+    return 1
+  fi
+  printf '%s\n' "$version"
 }
 
 resolve_version() {
@@ -89,19 +96,31 @@ verify_checksum() {
 verify_cosign() {
   bundle="$1"
   file="$2"
-  if command -v cosign >/dev/null 2>&1; then
-    if cosign verify-blob \
-      --bundle "$bundle" \
-      --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-      --certificate-identity-regexp "https://github.com/yowainwright/pre/" \
-      "$file" 2>/dev/null; then
-      echo "pre: cosign signature verified"
-    else
-      echo "pre: cosign verification failed" >&2
-      return 1
-    fi
-  else
-    echo "pre: cosign not found, skipping signature verification"
+  if ! command -v cosign >/dev/null 2>&1; then
+    echo "pre: cosign is required for signature verification" >&2
+    return 1
+  fi
+  if ! cosign verify-blob \
+    --bundle "$bundle" \
+    --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+    --certificate-identity-regexp "https://github.com/yowainwright/pre/" \
+    "$file" 2>/dev/null; then
+    echo "pre: cosign verification failed" >&2
+    return 1
+  fi
+  echo "pre: cosign signature verified"
+}
+
+download_signature_bundle() {
+  url="$1"
+  dest="$2"
+  if ! download_file "$url" "$dest"; then
+    echo "pre: signature bundle download failed" >&2
+    return 1
+  fi
+  if [ ! -s "$dest" ]; then
+    echo "pre: signature bundle is empty" >&2
+    return 1
   fi
 }
 
@@ -155,15 +174,12 @@ main() {
   }
   verify_checksum "$tmp_bin" "$expected_checksum"
 
-  download_file "$bundle_url" "$tmp_bundle" 2>/dev/null || true
-
-  if [ -s "$tmp_bundle" ] && [ -s "$tmp_checksums" ]; then
-    verify_cosign "$tmp_bundle" "$tmp_checksums"
-  fi
+  download_signature_bundle "$bundle_url" "$tmp_bundle"
+  verify_cosign "$tmp_bundle" "$tmp_checksums"
 
   install_binary "$tmp_bin"
 
-  echo "pre: installed (checksum verified)"
+  echo "pre: installed (checksum and signature verified)"
   echo "pre: run 'pre setup' to install shell hooks"
 }
 

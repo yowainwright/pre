@@ -180,8 +180,24 @@ func isCratesIOSource(source string) bool {
 
 const maxPackageLockDependencyDepth = 50
 
+const npmPackageLockFilename = "package-lock.json"
+
+type packageLock struct {
+	Packages     map[string]packageLockEntry      `json:"packages"`
+	Dependencies map[string]packageLockDependency `json:"dependencies"`
+}
+
+type packageLockEntry struct {
+	Name     string `json:"name"`
+	Version  string `json:"version"`
+	Resolved string `json:"resolved"`
+	Link     bool   `json:"link"`
+}
+
 type packageLockDependency struct {
+	Name         string                           `json:"name"`
 	Version      string                           `json:"version"`
+	Resolved     string                           `json:"resolved"`
 	Dependencies map[string]packageLockDependency `json:"dependencies"`
 }
 
@@ -196,16 +212,11 @@ func readNPMLockfile(dir string) []string {
 }
 
 func readPackageLockJSON(dir string) []string {
-	data, err := os.ReadFile(filepath.Join(dir, "package-lock.json"))
+	data, err := os.ReadFile(filepath.Join(dir, npmPackageLockFilename))
 	if err != nil {
 		return nil
 	}
-	var lockfile struct {
-		Packages map[string]struct {
-			Version string `json:"version"`
-		} `json:"packages"`
-		Dependencies map[string]packageLockDependency `json:"dependencies"`
-	}
+	var lockfile packageLock
 	if err := json.Unmarshal(data, &lockfile); err != nil {
 		return nil
 	}
@@ -216,9 +227,9 @@ func readPackageLockJSON(dir string) []string {
 			if path == "" || pkg.Version == "" {
 				continue
 			}
-			name := strings.TrimPrefix(path, "node_modules/")
-			if idx := strings.LastIndex(name, "node_modules/"); idx != -1 {
-				name = name[idx+len("node_modules/"):]
+			name := packageLockPackageName(path)
+			if pkg.Name != "" {
+				name = pkg.Name
 			}
 			spec := name + "@" + pkg.Version
 			if seen[spec] {
@@ -233,6 +244,14 @@ func readPackageLockJSON(dir string) []string {
 	}
 	appendPackageLockDependencies(&result, seen, lockfile.Dependencies, 0)
 	return result
+}
+
+func packageLockPackageName(path string) string {
+	name := strings.TrimPrefix(path, "node_modules/")
+	if idx := strings.LastIndex(name, "node_modules/"); idx != -1 {
+		return name[idx+len("node_modules/"):]
+	}
+	return name
 }
 
 func appendPackageLockDependencies(result *[]string, seen map[string]bool, deps map[string]packageLockDependency, depth int) {
@@ -276,7 +295,8 @@ func readBunLock(dir string) []string {
 }
 
 func bunPackageSpec(key string, raw json.RawMessage) string {
-	atIdx := strings.LastIndex(key, "@")
+	lastSegment := key[strings.LastIndex(key, "/")+1:]
+	atIdx := strings.LastIndex(lastSegment, "@")
 	if atIdx > 0 {
 		return key
 	}
@@ -318,13 +338,14 @@ func readPNPMLock(dir string) []string {
 			continue
 		}
 		trimmed := strings.TrimSuffix(strings.TrimSpace(line), ":")
+		trimmed = trimYAMLKeyQuotes(trimmed)
 		trimmed = strings.TrimPrefix(trimmed, "/")
+		trimmed = strings.SplitN(trimmed, "(", 2)[0]
 		atIdx := strings.LastIndex(trimmed, "@")
 		if atIdx <= 0 {
 			continue
 		}
 		name, version := trimmed[:atIdx], trimmed[atIdx+1:]
-		version = strings.SplitN(version, "(", 2)[0]
 		spec := name + "@" + version
 		if !seen[spec] {
 			seen[spec] = true
@@ -332,6 +353,19 @@ func readPNPMLock(dir string) []string {
 		}
 	}
 	return result
+}
+
+func trimYAMLKeyQuotes(key string) string {
+	if len(key) < 2 {
+		return key
+	}
+	first := key[0]
+	last := key[len(key)-1]
+	isQuoted := first == last && (first == '\'' || first == '"')
+	if isQuoted {
+		return key[1 : len(key)-1]
+	}
+	return key
 }
 
 // Go: go.sum

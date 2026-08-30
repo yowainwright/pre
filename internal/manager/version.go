@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,21 @@ var (
 
 type crateVersionResponse struct {
 	Versions []crateVersionInfo `json:"versions"`
+}
+
+type brewFormulaInfo struct {
+	Versions struct {
+		Stable string `json:"stable"`
+	} `json:"versions"`
+}
+
+type brewCaskInfo struct {
+	Version string `json:"version"`
+}
+
+type brewInfo struct {
+	Formulae []brewFormulaInfo `json:"formulae"`
+	Casks    []brewCaskInfo    `json:"casks"`
 }
 
 func ResolveVersion(mgr *Manager, pkg string) (string, error) {
@@ -92,14 +108,7 @@ func decodeCrateVersion(resp *http.Response, name, requirement string) (string, 
 }
 
 func brewVersion(name string) (string, error) {
-	type brewInfo struct {
-		Formulae []struct {
-			Versions struct {
-				Stable string `json:"stable"`
-			} `json:"versions"`
-		} `json:"formulae"`
-	}
-	out, err := runCmd("brew", "info", "--json=v2", name)
+	out, err := runCmd("brew", "info", "--json=v2", "--", name)
 	if err != nil {
 		return "", fmt.Errorf("brew info: %w", err)
 	}
@@ -107,26 +116,59 @@ func brewVersion(name string) (string, error) {
 	if err := json.Unmarshal(out, &info); err != nil {
 		return "", fmt.Errorf("parse brew info: %w", err)
 	}
-	if len(info.Formulae) == 0 {
-		return "", fmt.Errorf("formula %q not found", name)
+	version := brewPackageVersion(info)
+	if version == "" {
+		return "", fmt.Errorf("Homebrew package %q not found", name)
 	}
-	return info.Formulae[0].Versions.Stable, nil
+	return version, nil
+}
+
+func brewPackageVersion(info brewInfo) string {
+	if len(info.Formulae) > 0 && info.Formulae[0].Versions.Stable != "" {
+		return info.Formulae[0].Versions.Stable
+	}
+	if len(info.Casks) > 0 && info.Casks[0].Version != "" {
+		return info.Casks[0].Version
+	}
+	return ""
 }
 
 func npmVersion(pkg string) (string, error) {
-	out, err := runCmd("npm", "view", pkg, "version")
+	out, err := runCmd("npm", "view", "--json", "--", pkg, "version")
 	if err != nil {
 		return "", fmt.Errorf("npm: version unavailable")
 	}
-	version := strings.TrimSpace(string(out))
+	version := decodeNPMVersion(out)
 	if version == "" {
 		return "", fmt.Errorf("npm: version unavailable")
 	}
 	return version, nil
 }
 
-func goVersion(module string) (string, error) {
-	url := fmt.Sprintf("%s/%s/@latest", goProxyBase, module)
+func decodeNPMVersion(out []byte) string {
+	var versions []string
+	if err := json.Unmarshal(out, &versions); err == nil {
+		if len(versions) == 0 {
+			return ""
+		}
+		return versions[len(versions)-1]
+	}
+	var version string
+	if err := json.Unmarshal(out, &version); err == nil {
+		return strings.TrimSpace(version)
+	}
+	if json.Valid(out) {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func goVersion(modulePath string) (string, error) {
+	escapedPath, err := escapeGoModulePath(modulePath)
+	if err != nil {
+		return "", fmt.Errorf("go proxy: %w", err)
+	}
+	url := fmt.Sprintf("%s/%s/@latest", goProxyBase, escapedPath)
 	resp, err := versionHTTP.Get(url)
 	if err != nil {
 		return "", fmt.Errorf("go proxy: %w", err)
@@ -143,9 +185,27 @@ func goVersion(module string) (string, error) {
 		return "", fmt.Errorf("parse go proxy: %w", err)
 	}
 	if result.Version == "" {
-		return "", fmt.Errorf("go proxy: empty version for %q", module)
+		return "", fmt.Errorf("go proxy: empty version for %q", modulePath)
 	}
 	return result.Version, nil
+}
+
+func escapeGoModulePath(modulePath string) (string, error) {
+	if modulePath == "" {
+		return "", errors.New("empty module path")
+	}
+	var escaped strings.Builder
+	for _, char := range modulePath {
+		if char == '!' {
+			return "", fmt.Errorf("invalid module path %q", modulePath)
+		}
+		if char >= 'A' && char <= 'Z' {
+			escaped.WriteByte('!')
+			char += 'a' - 'A'
+		}
+		escaped.WriteRune(char)
+	}
+	return escaped.String(), nil
 }
 
 func pypiVersion(pkg string) (string, error) {

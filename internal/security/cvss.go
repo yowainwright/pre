@@ -5,6 +5,15 @@ import (
 	"strings"
 )
 
+var (
+	cvssAttackVectorWeights = map[string]float64{"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.20}
+	cvssComplexityWeights   = map[string]float64{"L": 0.77, "H": 0.44}
+	cvssInteractionWeights  = map[string]float64{"N": 0.85, "R": 0.62}
+	cvssImpactWeights       = map[string]float64{"N": 0.0, "L": 0.22, "H": 0.56}
+	cvssPrivilegeWeights    = map[string]float64{"N": 0.85, "L": 0.62, "H": 0.27}
+	cvssChangedWeights      = map[string]float64{"N": 0.85, "L": 0.68, "H": 0.50}
+)
+
 func cvssScore(vector string) float64 {
 	parts := strings.Split(vector, "/")
 	if len(parts) < 2 {
@@ -18,19 +27,12 @@ func cvssScore(vector string) float64 {
 		}
 	}
 
-	avMap := map[string]float64{"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.20}
-	acMap := map[string]float64{"L": 0.77, "H": 0.44}
-	uiMap := map[string]float64{"N": 0.85, "R": 0.62}
-	ciaMap := map[string]float64{"N": 0.0, "L": 0.22, "H": 0.56}
-	prUMap := map[string]float64{"N": 0.85, "L": 0.62, "H": 0.27}
-	prCMap := map[string]float64{"N": 0.85, "L": 0.68, "H": 0.50}
-
-	av, avOK := avMap[m["AV"]]
-	ac, acOK := acMap[m["AC"]]
-	ui, uiOK := uiMap[m["UI"]]
-	c, cOK := ciaMap[m["C"]]
-	i, iOK := ciaMap[m["I"]]
-	a, aOK := ciaMap[m["A"]]
+	av, avOK := cvssAttackVectorWeights[m["AV"]]
+	ac, acOK := cvssComplexityWeights[m["AC"]]
+	ui, uiOK := cvssInteractionWeights[m["UI"]]
+	c, cOK := cvssImpactWeights[m["C"]]
+	i, iOK := cvssImpactWeights[m["I"]]
+	a, aOK := cvssImpactWeights[m["A"]]
 	if !avOK || !acOK || !uiOK || !cOK || !iOK || !aOK {
 		return -1
 	}
@@ -39,9 +41,9 @@ func cvssScore(vector string) float64 {
 	var pr float64
 	var prOK bool
 	if scopeChanged {
-		pr, prOK = prCMap[m["PR"]]
+		pr, prOK = cvssChangedWeights[m["PR"]]
 	} else {
-		pr, prOK = prUMap[m["PR"]]
+		pr, prOK = cvssPrivilegeWeights[m["PR"]]
 	}
 	if !prOK {
 		return -1
@@ -71,13 +73,13 @@ func cvssScore(vector string) float64 {
 func severityFromScore(score float64) string {
 	switch {
 	case score >= 9.0:
-		return "CRITICAL"
+		return SeverityCritical
 	case score >= 7.0:
-		return "HIGH"
+		return SeverityHigh
 	case score >= 4.0:
-		return "MEDIUM"
+		return SeverityMedium
 	case score > 0:
-		return "LOW"
+		return SeverityLow
 	default:
 		return ""
 	}
