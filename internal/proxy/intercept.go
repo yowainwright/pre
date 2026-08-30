@@ -85,14 +85,15 @@ func Intercept(mgr *manager.Manager, args []string) {
 		return
 	}
 	if limit, exceeded := packageLimitExceeded(len(packages)); exceeded {
-		run.recordDecision("pre.scan.skipped", "approved", "package_limit", map[string]any{
+		run.recordDecision("pre.scan.blocked", "blocked", "package_limit", map[string]any{
 			"package_count": len(packages),
 			"package_limit": limit,
 		})
-		if !quietEnabled() {
-			fmt.Print(display.Dim(fmt.Sprintf("pre: skipping scan for %d packages (PRE_MAX_PACKAGES=%d)\n", len(packages), limit)))
-		}
-		ExecFn(mgr.Name, args)
+		fmt.Print(display.Red(fmt.Sprintf(
+			"pre: %d package(s) exceeds PRE_MAX_PACKAGES=%d; install blocked (raise PRE_MAX_PACKAGES or use PRE_DISABLE=1 to bypass)\n",
+			len(packages), limit,
+		)))
+		processExit(1)
 		return
 	}
 

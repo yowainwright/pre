@@ -196,6 +196,23 @@ func obsEvents(t *testing.T) []preobs.Event {
 	return events
 }
 
+func requirePackageLimitBlock(t *testing.T, wantCount, wantLimit int) {
+	t.Helper()
+	event := requireObsEvent(t, "pre.scan.blocked")
+	if event["reason"] != "package_limit" {
+		t.Fatalf("unexpected block reason: %#v", event)
+	}
+	wrongCount := event["package_count"] != float64(wantCount)
+	wrongLimit := event["package_limit"] != float64(wantLimit)
+	wrongPackageLimit := wrongCount || wrongLimit
+	if wrongPackageLimit {
+		t.Fatalf("unexpected package counts: %#v", event)
+	}
+	if event["decision"] != "blocked" {
+		t.Fatalf("unexpected package limit decision: %#v", event)
+	}
+}
+
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	orig := os.Stdout
@@ -360,21 +377,22 @@ func TestInterceptRecordsPolicyBlock(t *testing.T) {
 	requireNoObsLeak(t, "private")
 }
 
-func TestInterceptRecordsPackageLimitSkip(t *testing.T) {
+func TestInterceptPackageLimitBlocksInstall(t *testing.T) {
 	withObsDir(t)
 	t.Setenv(envMaxPackages, "1")
-	defer withExecFn(noopExec)()
+	execCalled := false
+	defer withExecFn(func(string, []string) { execCalled = true })()
 
-	Intercept(npmMgr(), []string{"install", "react", "lodash"})
+	expectProcessExit(t, 1, func() {
+		Intercept(npmMgr(), []string{"install", "react", "lodash"})
+	})
 
-	event := requireObsEvent(t, "pre.scan.skipped")
-	if event["reason"] != "package_limit" {
-		t.Fatalf("unexpected skip reason: %#v", event)
-	}
-	if event["package_count"] != float64(2) || event["package_limit"] != float64(1) {
-		t.Fatalf("unexpected package counts: %#v", event)
+	requirePackageLimitBlock(t, 2, 1)
+	if execCalled {
+		t.Fatal("expected over-limit install not to execute")
 	}
 	requireNoObsLeak(t, "react")
+	requireNoObsLeak(t, "lodash")
 }
 
 func TestInterceptRecordsScanErrorBlock(t *testing.T) {
@@ -1563,7 +1581,8 @@ func TestInterceptQuietStillShowsVulnerabilities(t *testing.T) {
 	}
 }
 
-func TestInterceptPackageLimitBypassesScan(t *testing.T) {
+func TestInterceptPackageLimitBlocksBeforeScan(t *testing.T) {
+	withObsDir(t)
 	t.Setenv(envMaxPackages, "1")
 
 	execCalled := false
@@ -1579,13 +1598,16 @@ func TestInterceptPackageLimitBypassesScan(t *testing.T) {
 		return nil, nil
 	})()
 
-	Intercept(npmMgr(), []string{"install", "react", "lodash"})
+	expectProcessExit(t, 1, func() {
+		Intercept(npmMgr(), []string{"install", "react", "lodash"})
+	})
 
-	if !execCalled {
-		t.Error("expected package-limit bypass to run the package manager")
+	requirePackageLimitBlock(t, 2, 1)
+	if execCalled {
+		t.Error("expected package-limit block not to run the package manager")
 	}
 	if loadCalled || securityCalled {
-		t.Error("expected package-limit bypass to skip cache loading and security checks")
+		t.Error("expected package-limit block to skip cache loading and security checks")
 	}
 }
 

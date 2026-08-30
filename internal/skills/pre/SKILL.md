@@ -42,11 +42,25 @@ pre teardown                      # remove hooks entirely
 |---------|--------|
 | `PRE_DISABLE=1` | Skip all scans, run the package manager directly |
 | `PRE_QUIET=1` | Hide progress and clean summaries; CVEs still print |
-| `PRE_MAX_PACKAGES=N` | Skip scanning past N packages |
+| `PRE_MAX_PACKAGES=N` | Block installs past N packages; manual `pre scan system` skips |
 | `PRE_CACHE_TTL=0s` | Bypass cache for one install |
 | `PRE_CACHE_MAX_ENTRIES=N` | Prune the approval cache to at most N entries |
 | `PRE_CACHE_MAX_BYTES=N` | Prune the approval cache to at most N bytes |
 | `PRE_OBS=0` | Disable local obs recording |
+
+## Install safety flow
+
+`pre` runs inline, not in the background: cache hit, batch preflight, one prompt,
+then run or block before the package manager starts.
+
+```mermaid
+flowchart LR
+  Install["install"] --> Cache["approved exact-version cache"]
+  Cache --> Scan["scan misses as one batch"]
+  Scan --> Decision["ask once or block"]
+  Decision --> Run["run package manager"]
+  Decision --> Stop["exit before install"]
+```
 
 ## Package commands
 

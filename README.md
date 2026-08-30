@@ -50,11 +50,31 @@ Runtime switches:
 |---------|--------------|
 | `PRE_DISABLE=1` | Bypasses all `pre` scans and runs the package manager directly |
 | `PRE_QUIET=1` | Hides scan progress and clean summaries; vulnerabilities and errors still print |
-| `PRE_MAX_PACKAGES=N` | Skips scanning when a manifest/lockfile expands beyond `N` packages |
+| `PRE_MAX_PACKAGES=N` | Blocks installs that expand beyond `N` packages; manual `pre scan system` skips instead |
 | `PRE_CACHE_MAX_ENTRIES=N` | Prunes the approval cache to at most `N` entries |
 | `PRE_CACHE_MAX_BYTES=N` | Prunes the approval cache to at most `N` bytes |
 | `PRE_OBS=0` | Disables local obs event recording |
 | `PRE_OBS_DIR=PATH` | Writes obs events to an alternate local state directory |
+
+## Install safety flow
+
+`pre` does its work inline: load the bounded approval cache, scan cache misses,
+ask once when needed, then either start the package manager or exit before the
+install begins.
+
+```mermaid
+flowchart LR
+  Install["install command"] --> Cache["approved exact-version cache"]
+  Cache -->|single exact hit| Run["run package manager"]
+  Cache -->|misses or batch| Scan["one batch preflight"]
+  Scan --> Decision["ask once or block"]
+  Decision -->|approved| Save["cache exact versions"]
+  Save --> Run
+  Decision -->|denied, failed, or over limit| Stop["do not start install"]
+```
+
+`PRE_MAX_PACKAGES` protects the machine by stopping installs that are too large
+to preflight safely. `PRE_DISABLE=1` is the explicit bypass.
 
 ## Package manager UI
 
