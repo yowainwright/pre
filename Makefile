@@ -47,6 +47,7 @@ verify-snapshot:
 	test -s $(CASK_PATH)
 	ruby -c $(CASK_PATH)
 	grep -Eq 'version "[^"]+"' $(CASK_PATH)
+	grep -Eq '^[0-9a-f]{64}  install.sh$$' $(DIST)/checksums.txt
 	test "$$(grep -Ec 'sha256 "[0-9a-f]{64}"' $(CASK_PATH))" -eq $(CASK_PLATFORM_COUNT)
 	test "$$(grep -Ec 'binary "pre-[^"]+", target: "pre"' $(CASK_PATH))" -eq $(CASK_PLATFORM_COUNT)
 	grep -Fq 'args: ["-p", "com.apple.quarantine", binary],' $(CASK_PATH)
