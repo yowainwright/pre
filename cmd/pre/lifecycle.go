@@ -21,6 +21,8 @@ import (
 const (
 	installScriptURL    = "https://github.com/yowainwright/pre/releases/latest/download/install.sh"
 	installChecksumsURL = "https://github.com/yowainwright/pre/releases/latest/download/checksums.txt"
+	cosignOIDCIssuer    = "https://token.actions.githubusercontent.com"
+	cosignIdentityRE    = "https://github.com/yowainwright/pre/"
 )
 
 const (
@@ -39,6 +41,12 @@ var (
 	removeAllFn              = os.RemoveAll
 	httpGetBytesFn           = httpGetBytes
 )
+
+type installAssets struct {
+	script    []byte
+	checksums []byte
+	bundle    []byte
+}
 
 func handleSelf(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -122,35 +130,99 @@ func updateManualSelf(binaryPath string, stdout, stderr io.Writer) int {
 }
 
 func downloadVerifyAndRun(scriptURL, checksumsURL string, env []string, stdout, stderr io.Writer) error {
+	assets, err := downloadInstallAssets(scriptURL, checksumsURL)
+	if err != nil {
+		return err
+	}
+	if err := verifyChecksumsSignature(assets.checksums, assets.bundle, stdout, stderr); err != nil {
+		return err
+	}
+	if err := verifyInstallScript(assets.script, assets.checksums); err != nil {
+		return err
+	}
+	return runInstallScript(assets.script, env, stdout, stderr)
+}
+
+func downloadInstallAssets(scriptURL, checksumsURL string) (installAssets, error) {
 	script, err := httpGetBytesFn(scriptURL)
 	if err != nil {
-		return fmt.Errorf("downloading install.sh: %w", err)
+		return installAssets{}, fmt.Errorf("downloading install.sh: %w", err)
 	}
 	checksums, err := httpGetBytesFn(checksumsURL)
 	if err != nil {
-		return fmt.Errorf("downloading checksums.txt: %w", err)
+		return installAssets{}, fmt.Errorf("downloading checksums.txt: %w", err)
 	}
-	if err := verifyInstallScript(script, checksums); err != nil {
-		return err
+	bundle, err := httpGetBytesFn(checksumsURL + ".bundle")
+	if err != nil {
+		return installAssets{}, fmt.Errorf("downloading checksums.txt.bundle: %w", err)
 	}
-	tmp, err := os.CreateTemp("", "pre-install-*.sh")
+	return installAssets{script: script, checksums: checksums, bundle: bundle}, nil
+}
+
+func verifyChecksumsSignature(checksums, bundle []byte, stdout, stderr io.Writer) error {
+	checksumsPath, cleanupChecksums, err := writeTempBytes("pre-checksums-*.txt", checksums)
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(script); err != nil {
-		if closeErr := tmp.Close(); closeErr != nil {
-			return fmt.Errorf("writing install script: %w; closing temp file: %v", err, closeErr)
-		}
+	defer cleanupChecksums()
+	bundlePath, cleanupBundle, err := writeTempBytes("pre-checksums-*.bundle", bundle)
+	if err != nil {
 		return err
+	}
+	defer cleanupBundle()
+	args := cosignVerifyArgs(bundlePath, checksumsPath)
+	if err := commandRunnerFn("cosign", args, nil, stdout, stderr); err != nil {
+		return fmt.Errorf("cosign verification failed: %w", err)
+	}
+	return nil
+}
+
+func cosignVerifyArgs(bundlePath, checksumsPath string) []string {
+	return []string{
+		"verify-blob",
+		"--bundle", bundlePath,
+		"--certificate-oidc-issuer", cosignOIDCIssuer,
+		"--certificate-identity-regexp", cosignIdentityRE,
+		checksumsPath,
+	}
+}
+
+func runInstallScript(script []byte, env []string, stdout, stderr io.Writer) error {
+	path, cleanup, err := writeTempBytes("pre-install-*.sh", script)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	if err := os.Chmod(path, 0700); err != nil { // #nosec G302 -- executable script requires 0700
+		return err
+	}
+	return commandRunnerFn("sh", []string{path}, env, stdout, stderr)
+}
+
+func writeTempBytes(pattern string, data []byte) (string, func(), error) {
+	tmp, err := os.CreateTemp("", pattern)
+	if err != nil {
+		return "", nil, err
+	}
+	path := tmp.Name()
+	cleanup := func() { _ = os.Remove(path) }
+	if _, err := tmp.Write(data); err != nil {
+		writeErr := closeTempWithError(tmp, err)
+		cleanup()
+		return "", nil, writeErr
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing install script: %w", err)
+		cleanup()
+		return "", nil, err
 	}
-	if err := os.Chmod(tmp.Name(), 0700); err != nil { // #nosec G302 -- executable script requires 0700
-		return err
+	return path, cleanup, nil
+}
+
+func closeTempWithError(file *os.File, err error) error {
+	if closeErr := file.Close(); closeErr != nil {
+		return errors.Join(err, closeErr)
 	}
-	return commandRunnerFn("sh", []string{tmp.Name()}, env, stdout, stderr)
+	return err
 }
 
 var httpClient = &http.Client{Timeout: 60 * time.Second}

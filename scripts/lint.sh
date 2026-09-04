@@ -63,7 +63,7 @@ ensure_legibility() {
 
 has_changed_go_inputs() {
   git diff --name-only --diff-filter=ACMR "$LINT_BASE_REV" -- \
-    '*.go' go.mod go.sum .golangci.yml .custom-gcl.yml Makefile scripts/lint.sh scripts/agent-lint-hook.sh |
+    '*.go' go.mod go.sum .golangci.yml .custom-gcl.yml Makefile scripts/lint.sh scripts/agent/lint.sh |
     grep -q . && return 0
   git ls-files --others --exclude-standard -- '*.go' | grep -q .
 }

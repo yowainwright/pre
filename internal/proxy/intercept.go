@@ -57,6 +57,11 @@ func Intercept(mgr *manager.Manager, args []string) {
 		blockIncompleteInstall(err)
 		return
 	}
+	if err := unknownInstallTargetError(mgr, args, packageArgs); err != nil {
+		run.recordBlock("install_target_policy", err)
+		blockIncompleteInstall(err)
+		return
+	}
 
 	fromProject := len(requirementFilePaths(mgr, packageArgs)) > 0
 	packages, err := installPackages(mgr, packageArgs)
@@ -168,6 +173,79 @@ func blockIncompleteInstall(err error) {
 	styled := display.Red(message)
 	fmt.Print(styled)
 	processExit(1)
+}
+
+func unknownInstallTargetError(mgr *manager.Manager, args, packageArgs []string) error {
+	if mgr == nil {
+		return nil
+	}
+	commandIndex := managerCommandIndex(mgr, args)
+	if commandIndex < 0 {
+		return nil
+	}
+	command := args[commandIndex]
+	commandArgs := args[commandIndex+1:]
+	if commandInstallsUnknownVersions(mgr, command, commandArgs, packageArgs) {
+		return fmt.Errorf("%s %s cannot be scanned before it resolves new versions", mgr.Name, command)
+	}
+	return nil
+}
+
+func commandInstallsUnknownVersions(mgr *manager.Manager, command string, commandArgs, packageArgs []string) bool {
+	switch mgr.Name {
+	case "brew":
+		return brewInstallsUnknownVersions(mgr, command, packageArgs)
+	case "npm", "pnpm", "bun":
+		return command == "update"
+	case "go":
+		return goInstallsUnknownVersions(command, packageArgs)
+	case "poetry":
+		return command == "update"
+	case "cargo":
+		return cargoInstallsUnknownVersions(mgr, command, commandArgs, packageArgs)
+	default:
+		return false
+	}
+}
+
+func brewInstallsUnknownVersions(mgr *manager.Manager, command string, packageArgs []string) bool {
+	if command != "upgrade" {
+		return false
+	}
+	return len(extractPackages(mgr, packageArgs)) == 0
+}
+
+func goInstallsUnknownVersions(command string, packageArgs []string) bool {
+	if command != "get" {
+		return false
+	}
+	return hasGoUpdateFlag(packageArgs)
+}
+
+func cargoInstallsUnknownVersions(mgr *manager.Manager, command string, commandArgs, packageArgs []string) bool {
+	if command != "update" {
+		return false
+	}
+	hasPrecisePackage := len(cargoUpdatePackages(mgr, packageArgs)) > 0
+	if hasPrecisePackage {
+		return false
+	}
+	targets := cargoUpdateTargets(mgr, commandArgs)
+	return len(targets) == 0
+}
+
+func hasGoUpdateFlag(args []string) bool {
+	for _, arg := range args {
+		isShortUpdate := arg == "-u"
+		isLongUpdate := strings.HasPrefix(arg, "-u=")
+		if isShortUpdate {
+			return true
+		}
+		if isLongUpdate {
+			return true
+		}
+	}
+	return false
 }
 
 func scanApprovalReason(results []scanResult) string {

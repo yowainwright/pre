@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/yowainwright/pre/internal/fileutil"
 	"github.com/yowainwright/pre/internal/manager"
 )
 
@@ -117,7 +118,7 @@ func Setup() {
 			return
 		}
 		appended := append([]byte(cleaned), []byte(buildShellHook())...)
-		if err := os.WriteFile(rcFile, appended, 0600); err != nil {
+		if err := writeRCFile(rcFile, appended); err != nil {
 			fmt.Fprintf(os.Stderr, "pre setup: %v\n", err)
 			processExit(1)
 			return
@@ -128,7 +129,7 @@ func Setup() {
 	}
 
 	appended := append(content, []byte(buildShellHook())...)
-	if err := os.WriteFile(rcFile, appended, 0600); err != nil {
+	if err := writeRCFile(rcFile, appended); err != nil {
 		fmt.Fprintf(os.Stderr, "pre setup: %v\n", err)
 		processExit(1)
 		return
@@ -241,10 +242,48 @@ func RemoveShellHooks() (string, bool, error) {
 	if !removed {
 		return rcFile, false, nil
 	}
-	if err := os.WriteFile(rcFile, []byte(cleaned), 0600); err != nil {
+	if err := writeRCFile(rcFile, []byte(cleaned)); err != nil {
 		return rcFile, false, err
 	}
 	return rcFile, true, nil
+}
+
+func writeRCFile(path string, data []byte) error {
+	target, err := rcWriteTarget(path)
+	if err != nil {
+		return err
+	}
+	perm, err := rcWritePerm(target)
+	if err != nil {
+		return err
+	}
+	return fileutil.AtomicWriteFile(target, data, perm)
+}
+
+func rcWriteTarget(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return path, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	isSymlink := info.Mode()&os.ModeSymlink != 0
+	if !isSymlink {
+		return path, nil
+	}
+	return filepath.EvalSymlinks(path)
+}
+
+func rcWritePerm(path string) (os.FileMode, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0o600, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return info.Mode().Perm(), nil
 }
 
 func removeShellHookBlock(content string) (string, bool) {

@@ -8,10 +8,10 @@ decide, and verify.
 1. Read relevant files, tests, docs, and history before proposing changes.
 2. Explain the finding briefly.
 3. Propose the smallest useful edit.
-4. Show the proposed diff for one file.
-5. Wait for approval before applying that file's change.
-6. Make only the approved file edit.
-7. Repeat one file at a time.
+4. Apply one file change.
+5. Show the actual diff.
+6. Wait for human approval before touching the next file.
+7. If the diff is rejected, revise that same file before moving on.
 8. Verify with the cheapest relevant check.
 9. Summarize touched files and what changed.
 

@@ -3,6 +3,7 @@ package proxy
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -316,12 +317,63 @@ func npmInstallError(mgr *manager.Manager, args []string) error {
 	if mgr == nil || mgr.Ecosystem != "npm" {
 		return nil
 	}
+	if err := npmSourceFlagError(mgr, args); err != nil {
+		return err
+	}
 	for _, arg := range npmPackageArguments(mgr, args) {
 		if unsupportedNPMPackageSource(arg) {
 			return fmt.Errorf("%s dependency source %q cannot be scanned", mgr.Name, arg)
 		}
 	}
 	return nil
+}
+
+func npmSourceFlagError(mgr *manager.Manager, args []string) error {
+	for index := 0; index < len(args); index++ {
+		flag, value, found := npmSourceFlagAt(args, index)
+		if !found {
+			continue
+		}
+		if !strings.Contains(args[index], "=") {
+			index++
+		}
+		if flag == "--userconfig" {
+			return fmt.Errorf("%s userconfig %q cannot be scanned", mgr.Name, value)
+		}
+		if !isPublicNPMRegistry(value) {
+			return fmt.Errorf("%s registry %q cannot be scanned", mgr.Name, value)
+		}
+	}
+	return nil
+}
+
+func npmSourceFlagAt(args []string, index int) (string, string, bool) {
+	for _, flag := range []string{"--registry", "--userconfig"} {
+		if value, ok := strings.CutPrefix(args[index], flag+"="); ok {
+			return flag, value, true
+		}
+		hasSeparateValue := args[index] == flag && index+1 < len(args)
+		if hasSeparateValue {
+			return flag, args[index+1], true
+		}
+		if args[index] == flag {
+			return flag, "", true
+		}
+	}
+	return "", "", false
+}
+
+func isPublicNPMRegistry(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return false
+	}
+	hasHTTPS := parsed.Scheme == "https"
+	hasAnonymousURL := parsed.User == nil
+	hasRegistryHost := strings.EqualFold(parsed.Hostname(), "registry.npmjs.org")
+	hasDefaultPort := parsed.Port() == ""
+	hasRegistryURL := hasHTTPS && hasAnonymousURL && hasRegistryHost
+	return hasRegistryURL && hasDefaultPort
 }
 
 func npmPackageArguments(mgr *manager.Manager, args []string) []string {

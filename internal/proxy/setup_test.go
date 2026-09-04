@@ -162,6 +162,27 @@ func TestSetupFresh(t *testing.T) {
 	}
 }
 
+func TestSetupPreservesExistingRCFileMode(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+
+	rcPath := filepath.Join(dir, ".zshrc")
+	if err := os.WriteFile(rcPath, []byte("export FOO=bar\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	Setup()
+
+	info, err := os.Stat(rcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Errorf("expected rc file mode 0644, got %o", info.Mode().Perm())
+	}
+}
+
 func TestSetupRefreshesExistingHooks(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)

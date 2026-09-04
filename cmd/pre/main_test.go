@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -590,22 +591,15 @@ func TestRunSelfUpdateManualInstall(t *testing.T) {
 	defer withExecutablePath(func() (string, error) { return exe, nil })()
 
 	scriptContent := []byte("#!/bin/sh\necho updating\n")
-	sum := sha256.Sum256(scriptContent)
-	fakeChecksums := []byte(hex.EncodeToString(sum[:]) + "  install.sh\n")
-	defer withHttpGetBytes(func(url string) ([]byte, error) {
-		if strings.Contains(url, "checksums") {
-			return fakeChecksums, nil
-		}
-		return scriptContent, nil
-	})()
+	defer withSelfUpdateDownloads(scriptContent)()
 
-	var gotName string
-	var gotArgs []string
-	var gotEnv []string
+	var commands []string
+	var installEnv []string
 	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
-		gotName = name
-		gotArgs = args
-		gotEnv = env
+		commands = append(commands, name)
+		if name == "sh" {
+			installEnv = env
+		}
 		return nil
 	})()
 
@@ -614,15 +608,30 @@ func TestRunSelfUpdateManualInstall(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if gotName != "sh" {
-		t.Fatalf("expected sh command, got %q", gotName)
+	wantCommands := []string{"cosign", "sh"}
+	if !slices.Equal(commands, wantCommands) {
+		t.Fatalf("expected cosign before sh, got %v", commands)
 	}
-	if len(gotArgs) != 1 || !strings.HasSuffix(gotArgs[0], ".sh") {
-		t.Errorf("expected verified script path, got %v", gotArgs)
+	hasInstallEnv := len(installEnv) == 1 && installEnv[0] == "PRE_BIN_DIR="+dir
+	if !hasInstallEnv {
+		t.Errorf("expected PRE_BIN_DIR env, got %v", installEnv)
 	}
-	if len(gotEnv) != 1 || gotEnv[0] != "PRE_BIN_DIR="+dir {
-		t.Errorf("expected PRE_BIN_DIR env, got %v", gotEnv)
-	}
+}
+
+func withSelfUpdateDownloads(scriptContent []byte) func() {
+	sum := sha256.Sum256(scriptContent)
+	fakeChecksums := []byte(hex.EncodeToString(sum[:]) + "  install.sh\n")
+	fakeBundle := []byte(`{"fake":"bundle"}`)
+	return withHttpGetBytes(func(url string) ([]byte, error) {
+		switch {
+		case strings.HasSuffix(url, ".bundle"):
+			return fakeBundle, nil
+		case strings.Contains(url, "checksums.txt"):
+			return fakeChecksums, nil
+		default:
+			return scriptContent, nil
+		}
+	})
 }
 
 func TestRunSkillsUsage(t *testing.T) {
@@ -1296,14 +1305,7 @@ func TestRunSelfUpdateManualCommandFails(t *testing.T) {
 	exe := filepath.Join(dir, "pre")
 	defer withExecutablePath(func() (string, error) { return exe, nil })()
 	scriptContent := []byte("#!/bin/sh\necho updating\n")
-	sum := sha256.Sum256(scriptContent)
-	fakeChecksums := []byte(hex.EncodeToString(sum[:]) + "  install.sh\n")
-	defer withHttpGetBytes(func(url string) ([]byte, error) {
-		if strings.Contains(url, "checksums") {
-			return fakeChecksums, nil
-		}
-		return scriptContent, nil
-	})()
+	defer withSelfUpdateDownloads(scriptContent)()
 	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
 		return os.ErrInvalid
 	})()
@@ -1311,6 +1313,33 @@ func TestRunSelfUpdateManualCommandFails(t *testing.T) {
 	code := run([]string{"self", "update"}, &out, &errOut)
 	if code != 1 {
 		t.Errorf("expected exit 1, got %d", code)
+	}
+}
+
+func TestRunSelfUpdateManualCosignFailsBeforeScript(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "pre")
+	defer withExecutablePath(func() (string, error) { return exe, nil })()
+	scriptContent := []byte("#!/bin/sh\necho updating\n")
+	defer withSelfUpdateDownloads(scriptContent)()
+	var ranScript bool
+	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
+		if name == "sh" {
+			ranScript = true
+		}
+		return os.ErrInvalid
+	})()
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "update"}, &out, &errOut)
+	if code != 1 {
+		t.Errorf("expected exit 1, got %d", code)
+	}
+	if ranScript {
+		t.Error("expected self update to block before running install.sh")
+	}
+	if !strings.Contains(errOut.String(), "cosign verification failed") {
+		t.Errorf("expected cosign failure in stderr, got: %s", errOut.String())
 	}
 }
 
