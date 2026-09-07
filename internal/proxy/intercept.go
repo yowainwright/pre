@@ -52,7 +52,7 @@ func Intercept(mgr *manager.Manager, args []string) {
 		blockIncompleteInstall(err)
 		return
 	}
-	if err := npmInstallError(mgr, packageArgs); err != nil {
+	if err := npmInstallError(mgr, npmPolicyArgs(mgr, args, packageArgs)); err != nil {
 		run.recordBlock("npm_policy", err)
 		blockIncompleteInstall(err)
 		return
@@ -173,6 +173,31 @@ func blockIncompleteInstall(err error) {
 	styled := display.Red(message)
 	fmt.Print(styled)
 	processExit(1)
+}
+
+func npmPolicyArgs(mgr *manager.Manager, args, packageArgs []string) []string {
+	skipNPMPolicy := mgr == nil || mgr.Ecosystem != "npm"
+	if skipNPMPolicy {
+		return packageArgs
+	}
+	sourceArgs := npmSourceArgs(args)
+	return append(sourceArgs, packageArgs...)
+}
+
+func npmSourceArgs(args []string) []string {
+	var sourceArgs []string
+	for index := 0; index < len(args); index++ {
+		_, value, found := npmSourceFlagAt(args, index)
+		if !found {
+			continue
+		}
+		sourceArgs = append(sourceArgs, args[index])
+		if !strings.Contains(args[index], "=") {
+			sourceArgs = append(sourceArgs, value)
+			index++
+		}
+	}
+	return sourceArgs
 }
 
 func unknownInstallTargetError(mgr *manager.Manager, args, packageArgs []string) error {

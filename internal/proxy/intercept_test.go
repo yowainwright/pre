@@ -658,6 +658,68 @@ func TestInterceptNPMManifestExternalSourceBlocks(t *testing.T) {
 	}
 }
 
+func TestInterceptNPMSourceFlagsBlock(t *testing.T) {
+	tests := [][]string{
+		{"install", "--registry", "https://registry.example", "react"},
+		{"--registry=https://registry.example", "install", "react"},
+		{"install", "--userconfig", ".npmrc", "react"},
+		{"--userconfig=.npmrc", "install", "react"},
+	}
+	for _, args := range tests {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			defer withExecFn(func(string, []string) { t.Fatal("unexpected install") })()
+			defer withLoadCache(func() cache.Cache {
+				t.Fatal("expected source flag rejection before scanning")
+				return nil
+			})()
+
+			expectProcessExit(t, 1, func() {
+				Intercept(npmMgr(), args)
+			})
+		})
+	}
+}
+
+func TestInterceptNPMPublicRegistry(t *testing.T) {
+	tests := [][]string{
+		{"npm", "install", "--registry=https://registry.npmjs.org", "react@18.2.0"},
+		{"npm", "--registry=https://registry.npmjs.org", "install", "react@18.2.0"},
+		{"npm", "install", "--registry", "https://registry.npmjs.org", "react@18.2.0"},
+		{"npm", "--registry", "https://registry.npmjs.org", "install", "react@18.2.0"},
+		{"npm", "ci", "--registry=https://registry.npmjs.org"},
+		{"npm", "--registry=https://registry.npmjs.org", "ci"},
+		{"pnpm", "add", "--registry=https://registry.npmjs.org", "react@18.2.0"},
+		{"bun", "add", "--registry=https://registry.npmjs.org", "react@18.2.0"},
+	}
+	for _, args := range tests {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			assertPublicRegistryInstall(t, manager.Get(args[0]), args[1:])
+		})
+	}
+}
+
+func assertPublicRegistryInstall(t *testing.T, mgr *manager.Manager, args []string) {
+	t.Helper()
+	scanned, executed := false, false
+	defer withStdinInput("y\n")()
+	defer withExecFn(func(string, []string) { executed = true })()
+	defer withLoadCache(emptyCache)()
+	defer withUpdateCache(noopUpdate)()
+	defer withReadManifestDir(func(*manager.Manager, string) []string { return []string{"react@18.2.0"} })()
+	defer withSecurityBatchCheck(func(queries []security.Query) ([][]security.Vulnerability, error) {
+		want := []security.Query{{Ecosystem: "npm", Name: "react", Version: "18.2.0"}}
+		scanned = slices.Equal(queries, want)
+		return [][]security.Vulnerability{nil}, nil
+	})()
+	Intercept(mgr, args)
+	if !scanned {
+		t.Error("expected public registry package to be scanned")
+	}
+	if !executed {
+		t.Error("expected approved install to execute")
+	}
+}
+
 func TestInterceptUVPipInstall(t *testing.T) {
 	securityCalled := false
 	defer withStdinInput("y\n")()

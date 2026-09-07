@@ -81,7 +81,7 @@ func managerGlobalValueFlags(mgr *manager.Manager) []string {
 	}
 	switch mgr.Name {
 	case "npm":
-		return append(flags, "--workspace", "-w")
+		return append(flags, "--workspace", "-w", "--registry", "--userconfig")
 	case "pnpm":
 		return append(flags, "--filter")
 	case "go":
