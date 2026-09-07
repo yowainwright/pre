@@ -4,7 +4,10 @@ set -e
 GOLANGCI_LINT_VERSION="${GOLANGCI_LINT_VERSION:-v2.12.2}"
 LEGIBILITY_BIN="${LEGIBILITY_BIN:-./bin/legibility-golangci-lint}"
 SHELLCHECK_BIN="${SHELLCHECK_BIN:-shellcheck}"
-SHELL_LEGIBILITY_BIN="${SHELL_LEGIBILITY_BIN:-./bin/shellcheck-legibility-0.2.1/bin/shellcheck-legibility}"
+SHELL_LEGIBILITY_VERSION="0.2.1"
+SHELL_LEGIBILITY_SHA256="137942db1000e72ce8f8e2fbe8c10e334c70dc554ad2ef08aa49f0778f0302c0"
+SHELL_LEGIBILITY_DIR="./bin/shellcheck-legibility-${SHELL_LEGIBILITY_VERSION}"
+SHELL_LEGIBILITY_BIN="${SHELL_LEGIBILITY_BIN:-${SHELL_LEGIBILITY_DIR}/bin/shellcheck-legibility}"
 LINT_BASE_REV="${LINT_BASE_REV:-HEAD}"
 
 strict=0
@@ -66,6 +69,32 @@ ensure_legibility() {
   test -x "$LEGIBILITY_BIN"
 }
 
+install_shell_legibility() {
+  archive="${SHELL_LEGIBILITY_DIR}.tar.gz"
+  release_url="https://github.com/yowainwright/shellcheck_legibility/releases/download/v${SHELL_LEGIBILITY_VERSION}"
+  mkdir -p ./bin || return "$?"
+  curl --fail --location --silent --show-error --retry 3 \
+    --proto '=https' --proto-redir '=https' \
+    --output "$archive" "${release_url}/shellcheck-legibility-${SHELL_LEGIBILITY_VERSION}.tar.gz" || return "$?"
+  printf '%s  %s\n' "$SHELL_LEGIBILITY_SHA256" "$archive" | shasum -a 256 -c - || return "$?"
+  tar -xzf "$archive" -C ./bin
+}
+
+ensure_shell_legibility() {
+  command -v "$SHELL_LEGIBILITY_BIN" >/dev/null 2>&1 && return 0
+  install_shell_legibility || return "$?"
+  test -x "$SHELL_LEGIBILITY_BIN"
+}
+
+setup_linters() {
+  command -v "$SHELLCHECK_BIN" >/dev/null 2>&1 || {
+    printf 'missing ShellCheck: install shellcheck before running lint setup\n' >&2
+    return 127
+  }
+  ensure_legibility || return "$?"
+  ensure_shell_legibility
+}
+
 has_changed_go_inputs() {
   git diff --name-only --diff-filter=ACMR "$LINT_BASE_REV" -- \
     '*.go' go.mod go.sum .golangci.yml .custom-gcl.yml Makefile scripts/lint.sh scripts/agent/lint.sh |
@@ -101,7 +130,7 @@ shell_files() {
 
 run_shellcheck() {
   check_status=0
-  "$SHELLCHECK_BIN" -- "$@" || check_status=$?
+  "$SHELLCHECK_BIN" --external-sources -- "$@" || check_status=$?
   case "$check_status:$strict" in
     1:0) return 0 ;;
     *) return "$check_status" ;;
@@ -126,7 +155,7 @@ run_shell_lint() {
 run_lint() {
   run_fmt_check || return "$?"
   run_vet || return "$?"
-  [ "$setup_only" -eq 1 ] && { ensure_legibility; return; }
+  [ "$setup_only" -eq 1 ] && { setup_linters; return; }
   run_legibility || return "$?"
   run_shell_lint
 }
