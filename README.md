@@ -62,17 +62,6 @@ Runtime switches:
 ask once when needed, then either start the package manager or exit before the
 install begins.
 
-```mermaid
-flowchart LR
-  Install["install command"] --> Cache["approved exact-version cache"]
-  Cache -->|single exact hit| Run["run package manager"]
-  Cache -->|misses or batch| Scan["one batch preflight"]
-  Scan --> Decision["ask once or block"]
-  Decision -->|approved| Save["cache exact versions"]
-  Save --> Run
-  Decision -->|denied, failed, or over limit| Stop["do not start install"]
-```
-
 `PRE_MAX_PACKAGES` protects the machine by stopping installs that are too large
 to preflight safely. `PRE_DISABLE=1` is the explicit bypass.
 
@@ -328,40 +317,6 @@ pre self uninstall --purge # also removes config/cache data
 ```
 
 Homebrew installs run `brew uninstall --cask pre`. Manual installs remove the current `pre` binary after removing shell hooks.
-
-## Runtime architecture
-
-```mermaid
-flowchart LR
-    CLI["cmd/pre<br/>CLI entry point"]
-    PROXY["internal/proxy<br/>interception and orchestration"]
-    CONFIG["internal/config<br/>user settings"]
-    MANAGER["internal/manager<br/>package parsing and resolution"]
-    SECURITY["internal/security<br/>OSV queries and CVSS scoring"]
-    CACHE["internal/cache<br/>trusted scan results"]
-    DISPLAY["internal/display<br/>terminal output"]
-
-    CLI --> PROXY
-    CLI --> CONFIG
-    PROXY --> MANAGER
-    PROXY --> SECURITY
-    PROXY --> CACHE
-    PROXY --> DISPLAY
-
-    classDef entry fill:#89b4fa,stroke:#2563eb,color:#111827,stroke-width:2px
-    classDef core fill:#cba6f7,stroke:#9333ea,color:#111827,stroke-width:2px
-    classDef manager fill:#94e2d5,stroke:#0f766e,color:#111827,stroke-width:2px
-    classDef security fill:#f38ba8,stroke:#be123c,color:#111827,stroke-width:2px
-    classDef state fill:#f9e2af,stroke:#b45309,color:#111827,stroke-width:2px
-    classDef output fill:#a6e3a1,stroke:#15803d,color:#111827,stroke-width:2px
-
-    class CLI entry
-    class PROXY core
-    class MANAGER manager
-    class SECURITY security
-    class CONFIG,CACHE state
-    class DISPLAY output
-```
 
 ## Repository layout
 
