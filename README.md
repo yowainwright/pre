@@ -10,41 +10,53 @@ Zero config. One runtime binary.
 
 ## Install
 
+### Homebrew
 
 ```sh
-# Homebrew
 brew install --cask yowainwright/tap/pre
+```
 
-# or curl (macOS + Linux; requires cosign on PATH)
+The macOS cask is checksum-verified but not notarized; its install hook removes quarantine only from the staged `pre` binary.
+
+### Curl
+
+For macOS and Linux; requires `cosign` on `PATH`.
+
+```sh
 curl -fsSL https://raw.githubusercontent.com/yowainwright/pre/main/install.sh | sh
 ```
 
 Every release includes SHA-256 checksums and a Cosign signature. The curl installer requires `cosign` and verifies both before writing the binary. A missing bundle, missing `cosign` binary, or failed signature blocks installation.
 
-The macOS cask is checksum-verified but not notarized; its install hook removes quarantine only from the staged `pre` binary.
-
 ## Setup
 
 ```sh
-pre setup    # adds shell hooks to ~/.zshrc or ~/.bashrc
-pre teardown # removes them
-pre status   # shows install state, cache, managers, and scan status
+pre setup
 ```
 
-After setup, supported install commands in interactive Zsh and Bash sessions go through `pre` automatically. Scripts and CI can call `pre <manager> ...` directly.
+Adds shell hooks to `~/.zshrc` or `~/.bashrc`. Supported install commands in interactive Zsh and Bash sessions then go through `pre` automatically. Scripts and CI can call `pre <manager> ...` directly.
+
+[Check status](#pre-status) or [remove the hooks](#pre-teardown).
 
 ## Emergency controls
 
 If anything goes wrong, bypass `pre` without editing shell files:
 
+### Bypass one command
+
 ```sh
-PRE_DISABLE=1 npm install react      # one command
-export PRE_DISABLE=1                 # current shell session
-pre teardown                         # remove shell hooks
-pre self uninstall                   # remove the binary
+PRE_DISABLE=1 npm install react
 ```
 
-Runtime switches:
+### Bypass the current session
+
+```sh
+export PRE_DISABLE=1
+```
+
+To remove interception permanently, [remove the hooks](#pre-teardown) or [uninstall pre](#uninstall-pre).
+
+### Runtime switches
 
 | Env var | What it does |
 |---------|--------------|
@@ -69,11 +81,9 @@ to preflight safely. `PRE_DISABLE=1` is the explicit bypass.
 
 ```sh
 pre manage
-# or
-pre m
 ```
 
-`pre manage` opens a full-screen view of installed packages across detected managers.
+`pre manage` opens a full-screen view of installed packages across detected managers. Short alias: `pre m`.
 
 | Key | Action |
 |-----|--------|
@@ -90,28 +100,23 @@ Actions run through `pre <manager> ...`, so installs and downgrades are scanned 
 
 `uv` targets the active environment with `uv pip`. Cargo edits project dependencies with `cargo add`, `cargo update`, and `cargo remove`.
 
-Non-interactive package commands are available too:
-
-```sh
-pre installed                    # package inventory
-pre manage --package react --manager npm --upgrade
-pre manage --package react --manager npm --downgrade 18.2.0
-pre manage --package ripgrep --uninstall
-pre install npm react
-pre update npm react
-pre downgrade pip urllib3 1.24.1
-pre uninstall brew ripgrep
-```
+For non-interactive package actions, see [Commands](#commands).
 
 ## Docker E2E tests
 
-```sh
-make test-e2e-list
-make test-e2e-docker E2E_TEST=npm
-make test-e2e-docker E2E_TEST=pip
-```
-
 Requires Docker. Each scenario builds the same E2E container with `pre` installed and shell hooks active, then covers clean scanning, CVE detection, and a blocked install for one package manager.
+
+### `make test-e2e-list`
+
+List available Docker scenarios.
+
+### `make test-e2e-docker E2E_TEST=npm`
+
+Run the npm scenario.
+
+### `make test-e2e-docker E2E_TEST=pip`
+
+Run the pip scenario.
 
 ## How it works
 
@@ -209,31 +214,93 @@ Workspace-wide `cargo fetch` requires the shared `Cargo.lock`; run `cargo genera
 
 ## Commands
 
-```sh
-pre setup                     # inject shell hooks
-pre teardown                  # remove shell hooks
-pre status                    # pre install state, managers, cache size, last manual system scan
-pre manage                    # package manager TUI
-pre m                         # short alias for pre manage
-pre installed                 # package inventory
-pre manage --package <pkg> --manager <mgr> --upgrade [version]
-pre manage --package <pkg> --manager <mgr> --downgrade <version>
-pre manage --package <pkg> --manager <mgr> --uninstall
-pre install <mgr> <pkg>       # install a package through pre
-pre update <mgr> [pkg]        # update a package, or all where supported
-pre downgrade <mgr> <pkg> <v> # install an older package version
-pre uninstall <mgr> <pkg>     # remove a package
-pre config                    # show current config
-pre config set <key> <value>  # update a config value
-pre obs                       # local cache/process/scan summary plus events
-pre obs --json                # same response as JSON
-pre obs --events [query]      # event list, optionally filtered by text
-pre skills add [--global]     # install the agent skill to .claude/skills (~/.claude with --global)
-pre skills show               # print the agent skill to stdout
-pre scan system               # scan all cached packages now
-pre self update               # update the pre binary
-pre self uninstall [--purge]  # remove pre itself
-```
+### `pre setup`
+
+Add shell hooks to `~/.zshrc` or `~/.bashrc`.
+
+### `pre teardown`
+
+Remove the shell hooks.
+
+### `pre status`
+
+Show install state, managers, cache size, and the last manual system scan.
+
+### `pre manage`
+
+Open the package manager UI. Short alias: `pre m`.
+
+### `pre installed`
+
+List installed packages across detected managers.
+
+### `pre manage --package <pkg> --manager <mgr> --upgrade [version]`
+
+Upgrade a package without opening the UI, optionally to a specific version.
+
+### `pre manage --package <pkg> --manager <mgr> --downgrade <version>`
+
+Downgrade a package without opening the UI.
+
+### `pre manage --package <pkg> --manager <mgr> --uninstall`
+
+Remove a package without opening the UI.
+
+### `pre install <mgr> <pkg>`
+
+Install a package through `pre`.
+
+### `pre update <mgr> [pkg]`
+
+Update a package, or all packages where supported.
+
+### `pre downgrade <mgr> <pkg> <v>`
+
+Install an older package version.
+
+### `pre uninstall <mgr> <pkg>`
+
+Remove a package.
+
+### `pre config`
+
+Show the current API endpoint and cache TTL.
+
+### `pre config set <key> <value>`
+
+Update `api.endpoint` or `cache.ttl`.
+
+### `pre obs`
+
+Show the local cache, process, and scan summary plus events.
+
+### `pre obs --json`
+
+Return the observability response as JSON.
+
+### `pre obs --events [query]`
+
+List local events, optionally filtered by text.
+
+### `pre skills add [--global]`
+
+Install the agent skill to `.claude/skills`, or `~/.claude/skills` with `--global`.
+
+### `pre skills show`
+
+Print the agent skill to stdout.
+
+### `pre scan system`
+
+Run a manual scan of cached packages.
+
+### `pre self update`
+
+Update the `pre` binary.
+
+### `pre self uninstall [--purge]`
+
+Remove `pre` itself. Add `--purge` to also remove config and cache data.
 
 ## Configuration
 
@@ -245,13 +312,22 @@ pre self uninstall [--purge]  # remove pre itself
 | `cache.ttl` | `24h` | How long a clean result is trusted |
 | `managers` | — | Add or override managers |
 
-**Quick examples:**
+### Set the cache lifetime
 
 ```sh
 pre config set cache.ttl 12h
-PRE_CACHE_TTL=0s npm install   # bypass cache for one install
-PRE_QUIET=1 npm install        # hide clean scan output
-PRE_DISABLE=1 npm install      # emergency bypass
+```
+
+### Bypass the cache for one install
+
+```sh
+PRE_CACHE_TTL=0s npm install
+```
+
+### Hide clean scan output
+
+```sh
+PRE_QUIET=1 npm install
 ```
 
 ## Observability
@@ -261,9 +337,9 @@ without exposing private work:
 
 ```sh
 pre obs
-pre obs --json
-pre obs --events scan
 ```
+
+See [JSON output](#pre-obs---json) and [filtered events](#pre-obs---events-query) for other formats.
 
 Obs stays on your machine unless you explicitly copy and share the command
 output. Events include manager names, command categories, decision reasons,
@@ -313,8 +389,9 @@ Homebrew installs run `brew upgrade --cask pre`. Curl/manual installs rerun the 
 
 ```sh
 pre self uninstall
-pre self uninstall --purge # also removes config/cache data
 ```
+
+Add `--purge` to also remove config and cache data.
 
 Homebrew installs run `brew uninstall --cask pre`. Manual installs remove the current `pre` binary after removing shell hooks.
 
@@ -339,25 +416,65 @@ entry point packaged with each release.
 
 ## Development
 
-```sh
-make setup            # install deps, verify secrets, install git hooks
-mise install          # install the pinned release versioning tool
-make test             # unit tests
-make test-race        # unit tests with the race detector
-make test-e2e         # end-to-end (requires npm)
-make test-integration # live API calls (requires network)
-make test-scripts     # shell script tests
-make lint             # format check + vet
-make gosec            # static security checks (requires Go 1.26+)
-make vuln             # govulncheck scan (requires network)
-make security         # govulncheck + gosec
-make screenshots      # generate TUI SVG screenshots in dist/screenshots
-make snapshot         # local release dry-run (all 4 binaries, no publish)
-make release-preview  # full beta release validation, no publish
-make release          # interactive version prompt, validation, tag, and CI release
-make test-e2e-list    # list Docker E2E tests
-make test-e2e-docker E2E_TEST=npm # run one Docker E2E test
-```
+### `make setup`
+
+Install pinned tools, check prerequisites and secrets, and install Git and agent hooks.
+
+### `mise install`
+
+Install the pinned release versioning tool.
+
+### `make test`
+
+Run unit tests.
+
+### `make test-race`
+
+Run unit tests with the race detector.
+
+### `make test-e2e`
+
+Run end-to-end tests. Requires npm. See [Docker E2E tests](#docker-e2e-tests) for container scenarios.
+
+### `make test-integration`
+
+Run live API tests. Requires network access.
+
+### `make test-scripts`
+
+Run shell script tests.
+
+### `make lint`
+
+Run format checks, vet, and the configured Go and shell linters.
+
+### `make gosec`
+
+Run static security checks. Requires Go 1.26+.
+
+### `make vuln`
+
+Run govulncheck. Requires network access.
+
+### `make security`
+
+Run govulncheck and gosec.
+
+### `make screenshots`
+
+Generate TUI SVG screenshots in `dist/screenshots`.
+
+### `make snapshot`
+
+Build all four release binaries locally without publishing.
+
+### `make release-preview`
+
+Run the full release validation without publishing.
+
+### `make release`
+
+Prompt for a version, validate, tag, and trigger the CI release.
 
 ## License
 
