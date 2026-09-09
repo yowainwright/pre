@@ -36,6 +36,13 @@ pre setup
 
 Adds shell hooks to `~/.zshrc` or `~/.bashrc`. Supported install commands in interactive Zsh and Bash sessions then go through `pre` automatically. Scripts and CI can call `pre <manager> ...` directly.
 
+Example output (Zsh):
+
+```text
+pre: added hooks to /home/user/.zshrc
+pre: restart your shell or run: source /home/user/.zshrc
+```
+
 [Check status](#pre-status) or [remove the hooks](#pre-teardown).
 
 ## Emergency controls
@@ -54,7 +61,19 @@ PRE_DISABLE=1 npm install react
 export PRE_DISABLE=1
 ```
 
-To remove interception permanently, [remove the hooks](#pre-teardown) or [uninstall pre](#uninstall-pre).
+To remove interception permanently, [remove the hooks](#pre-teardown) or [uninstall pre](#pre-self-uninstall).
+
+### Bypass the cache for one install
+
+```sh
+PRE_CACHE_TTL=0s npm install
+```
+
+### Hide clean scan output
+
+```sh
+PRE_QUIET=1 npm install
+```
 
 ### Runtime switches
 
@@ -67,56 +86,6 @@ To remove interception permanently, [remove the hooks](#pre-teardown) or [uninst
 | `PRE_CACHE_MAX_BYTES=N` | Prunes the approval cache to at most `N` bytes |
 | `PRE_OBS=0` | Disables local obs event recording |
 | `PRE_OBS_DIR=PATH` | Writes obs events to an alternate local state directory |
-
-## Install safety flow
-
-`pre` does its work inline: load the bounded approval cache, scan cache misses,
-ask once when needed, then either start the package manager or exit before the
-install begins.
-
-`PRE_MAX_PACKAGES` protects the machine by stopping installs that are too large
-to preflight safely. `PRE_DISABLE=1` is the explicit bypass.
-
-## Package manager UI
-
-```sh
-pre manage
-```
-
-`pre manage` opens a full-screen view of installed packages across detected managers. Short alias: `pre m`.
-
-| Key | Action |
-|-----|--------|
-| `↑` / `↓` or `j` / `k` | Move between packages |
-| `/` | Search as you type |
-| `m` | Toggle managers |
-| `enter` or `o` | Open package actions |
-| `x` or `esc` | Close a dialog |
-| `q` or `ctrl+c` | Exit |
-
-The default theme uses Catppuccin Mocha colors. Set `PRE_MANAGE_THEME=contrast` for a brighter theme or `PRE_MANAGE_THEME=mono` for no color.
-
-Actions run through `pre <manager> ...`, so installs and downgrades are scanned first.
-
-`uv` targets the active environment with `uv pip`. Cargo edits project dependencies with `cargo add`, `cargo update`, and `cargo remove`.
-
-For non-interactive package actions, see [Commands](#commands).
-
-## Docker E2E tests
-
-Requires Docker. Each scenario builds the same E2E container with `pre` installed and shell hooks active, then covers clean scanning, CVE detection, and a blocked install for one package manager.
-
-### `make test-e2e-list`
-
-List available Docker scenarios.
-
-### `make test-e2e-docker E2E_TEST=npm`
-
-Run the npm scenario.
-
-### `make test-e2e-docker E2E_TEST=pip`
-
-Run the pip scenario.
 
 ## How it works
 
@@ -163,207 +132,415 @@ sequenceDiagram
     end
 ```
 
-### What you'll see
+Supports brew, npm, pnpm, Bun, Go, Cargo, pip/pip3, uv, and Poetry.
 
-| Situation | Output |
-|-----------|--------|
-| Everything cached and clean | Silent — install proceeds |
-| New packages, no issues | Clean table, then approval prompt |
-| Low/medium CVE | Vulnerability table, then approval prompt |
-| High/critical CVE | CVE detail box, then approval prompt |
-| OSV or version-resolution error | Install blocked; `PRE_DISABLE=1` is the explicit bypass |
+Trusted cached packages proceed silently. Other scans show findings and ask for approval. Scan or version-resolution errors block the command; `PRE_DISABLE=1` bypasses scanning.
 
-### Supported managers
+### Resolution limits
 
+- npm sources must use `https://registry.npmjs.org` and match the lockfile package identity. Aliases, links, local files, tarballs, and custom registries are blocked.
+- Cargo supports crates.io releases, not local/Git dependencies, alternate registries, offline resolution, or resolution-changing configuration and unstable options. `--config` and `--lockfile-path` are blocked.
+- Workspace-wide `cargo fetch` needs a shared `Cargo.lock`; create it with `cargo generate-lockfile` first.
+- `uv sync` and lockfile-wide Poetry commands need existing lockfiles. Create them with `uv lock` or `poetry lock` first.
 
-`pre` reads existing lockfiles first because they contain exact direct and transitive versions. Without a usable lockfile, it falls back to the project manifest.
-
-| Manager | Lockfile | Intercepted commands |
-|---------|----------|----------------------|
-| brew | `Brewfile.lock.json` | `install`, `reinstall`, `upgrade` |
-| npm | `package-lock.json` | `install`, `add`, `i`, `update`, `ci` |
-| pnpm | `pnpm-lock.yaml` | `install`, `add`, `i`, `update` |
-| bun | `bun.lock` | `install`, `add`, `i`, `update` |
-| go | `go.sum` | `get`, `install` |
-| cargo | `Cargo.lock` | `add`, `install`, `update`, `fetch` |
-| pip / pip3 | `Pipfile.lock` | `install` |
-| uv | `uv.lock` | `add`, `sync`, `pip install` |
-| poetry | `poetry.lock` | `add`, `update`, `install` |
-
-If a command creates or changes a lockfile, `pre` checks the requested packages before the install and exits when the package manager exits.
-
-### Commands that require exact resolution
-
-`pre` blocks commands when it cannot map a dependency to an exact package and version.
-
-Cargo scans crates.io dependencies from `Cargo.lock` or `Cargo.toml`. It resolves version requirements against non-yanked crates.io releases.
-
-npm lockfile entries must match their `node_modules` package identity and resolve from `https://registry.npmjs.org`. Aliases, links, local files, tarball URLs, and custom registries block the command because OSV cannot identify their contents reliably; `PRE_DISABLE=1` is the explicit bypass.
-
-Cargo commands are blocked for:
-
-- Local path or Git dependencies
-- Custom registries or an alternate default registry
-- Offline resolution
-- Resolution-changing unstable options or Cargo configuration
-- `--config` or `--lockfile-path`
-
-Workspace-wide `cargo fetch` requires the shared `Cargo.lock`; run `cargo generate-lockfile` first when creating a workspace lockfile.
-
-`uv sync` and lockfile-wide Poetry commands require an existing `uv.lock` or `poetry.lock`. Run `uv lock` or `poetry lock` first so the pre-install scan has exact versions.
-
-## Commands
-
-### `pre setup`
-
-Add shell hooks to `~/.zshrc` or `~/.bashrc`.
+## CLI API
 
 ### `pre teardown`
 
-Remove the shell hooks.
+Remove the shell hooks added by [setup](#setup).
+
+```sh
+pre teardown
+```
+
+Example output (Zsh):
+
+```text
+pre: removed hooks from /home/user/.zshrc
+pre: restart your shell or run: source /home/user/.zshrc
+```
 
 ### `pre status`
 
 Show install state, managers, cache size, and the last manual system scan.
 
+```sh
+pre status
+```
+
+Example output (excerpt):
+
+```text
+cached: 2 packages
+system scan: no manual scan yet
+```
+
 ### `pre manage`
 
-Open the package manager UI. Short alias: `pre m`.
+Browse installed packages and manage them in a full-screen UI. Alias: `pre m`.
+
+```sh
+pre manage
+```
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` or `j` / `k` | Move between packages |
+| `/` | Search as you type |
+| `m` | Toggle managers |
+| `enter` or `o` | Open package actions |
+| `x` or `esc` | Close a dialog |
+| `q` or `ctrl+c` | Exit |
+
+Set `PRE_MANAGE_THEME=contrast` for a brighter theme or `PRE_MANAGE_THEME=mono` for no color. Installs and downgrades are scanned first.
+
+`uv` targets the active environment with `uv pip`; Cargo actions edit project dependencies.
+
+#### `--upgrade`
+
+Upgrade without opening the UI. An optional version selects a specific release.
+
+```sh
+pre manage --package react --manager npm --upgrade 19.0.0
+```
+
+Example `package.json` change:
+
+```diff
+ {
+   "dependencies": {
+-    "react": "^18.2.0",
++    "react": "^19.0.0",
+     "zod": "^3.24.1"
+   }
+ }
+```
+
+#### `--downgrade`
+
+Install a specific older version without opening the UI.
+
+```sh
+pre manage --package react --manager npm --downgrade 18.2.0
+```
+
+Example `package.json` change:
+
+```diff
+ {
+   "dependencies": {
+-    "react": "^19.0.0",
++    "react": "^18.2.0",
+     "zod": "^3.24.1"
+   }
+ }
+```
+
+#### `--uninstall`
+
+Remove a package without opening the UI.
+
+```sh
+pre manage --package react --manager npm --uninstall
+```
+
+Example `package.json` change:
+
+```diff
+ {
+   "dependencies": {
+-    "react": "^18.2.0",
+     "zod": "^3.24.1"
+   }
+ }
+```
 
 ### `pre installed`
 
 List installed packages across detected managers.
 
-### `pre manage --package <pkg> --manager <mgr> --upgrade [version]`
+```sh
+pre installed
+```
 
-Upgrade a package without opening the UI, optionally to a specific version.
+Example output:
 
-### `pre manage --package <pkg> --manager <mgr> --downgrade <version>`
+```text
+installed packages:
+    1  npm      react                                18.2.0
+    2  npm      zod                                  3.24.1
+```
 
-Downgrade a package without opening the UI.
+### `pre install`
 
-### `pre manage --package <pkg> --manager <mgr> --uninstall`
+Scan a package, then install it with the named manager after approval.
 
-Remove a package without opening the UI.
+```sh
+pre install npm react@18.2.0
+```
 
-### `pre install <mgr> <pkg>`
+Example `package.json` change:
 
-Install a package through `pre`.
+```diff
+ {
+   "dependencies": {
++    "react": "^18.2.0",
+     "zod": "^3.24.1"
+   }
+ }
+```
 
-### `pre update <mgr> [pkg]`
+### `pre update`
 
-Update a package, or all packages where supported.
+Update a package. Omitting the package requests a manager-wide update, which is blocked when exact versions cannot be resolved before installation.
 
-### `pre downgrade <mgr> <pkg> <v>`
+```sh
+pre update npm react
+```
+
+Example `package.json` change (the resolved version varies):
+
+```diff
+ {
+   "dependencies": {
+-    "react": "^18.2.0",
++    "react": "^19.0.0",
+     "zod": "^3.24.1"
+   }
+ }
+```
+
+### `pre downgrade`
 
 Install an older package version.
 
-### `pre uninstall <mgr> <pkg>`
+```sh
+pre downgrade npm react 18.2.0
+```
 
-Remove a package.
+Example `package.json` change:
+
+```diff
+ {
+   "dependencies": {
+-    "react": "^19.0.0",
++    "react": "^18.2.0",
+     "zod": "^3.24.1"
+   }
+ }
+```
+
+### `pre uninstall`
+
+Remove a package with the named manager.
+
+```sh
+pre uninstall npm react
+```
+
+Example `package.json` change:
+
+```diff
+ {
+   "dependencies": {
+-    "react": "^18.2.0",
+     "zod": "^3.24.1"
+   }
+ }
+```
 
 ### `pre config`
 
-Show the current API endpoint and cache TTL.
+Show the API endpoint and cache TTL.
 
-### `pre config set <key> <value>`
+```sh
+pre config
+```
 
-Update `api.endpoint` or `cache.ttl`.
+Default output:
 
-### `pre obs`
+```text
+api.endpoint  https://api.osv.dev/v1/query
+cache.ttl     24h
+```
 
-Show the local cache, process, and scan summary plus events.
+### `pre config set`
 
-### `pre obs --json`
-
-Return the observability response as JSON.
-
-### `pre obs --events [query]`
-
-List local events, optionally filtered by text.
-
-### `pre skills add [--global]`
-
-Install the agent skill to `.claude/skills`, or `~/.claude/skills` with `--global`.
-
-### `pre skills show`
-
-Print the agent skill to stdout.
-
-### `pre scan system`
-
-Run a manual scan of cached packages.
-
-### `pre self update`
-
-Update the `pre` binary.
-
-### `pre self uninstall [--purge]`
-
-Remove `pre` itself. Add `--purge` to also remove config and cache data.
-
-## Configuration
-
-`~/.config/pre/config.json` — edit directly or use `pre config set`.
-
-| Key | Default | What it does |
-|-----|---------|--------------|
-| `api.endpoint` | `https://api.osv.dev/v1/query` | OSV-compatible API to query |
-| `cache.ttl` | `24h` | How long a clean result is trusted |
-| `managers` | — | Add or override managers |
-
-### Set the cache lifetime
+Set `api.endpoint` or `cache.ttl`. [pre status](#pre-status) shows the config file's location.
 
 ```sh
 pre config set cache.ttl 12h
 ```
 
-### Bypass the cache for one install
+Example `config.json` change (excerpt):
 
-```sh
-PRE_CACHE_TTL=0s npm install
+```diff
+ {
+   "cache": {
+-    "ttl": "24h"
++    "ttl": "12h"
+   }
+ }
 ```
 
-### Hide clean scan output
+#### Custom managers
 
-```sh
-PRE_QUIET=1 npm install
+Add an entry to the config's `managers` array. A matching name replaces a built-in manager; a new name extends the list.
+
+Example `config.json` change (excerpt):
+
+```diff
+ {
+-  "managers": []
++  "managers": [
++    {
++      "name": "composer",
++      "ecosystem": "Packagist",
++      "installCmds": ["install", "require"]
++    }
++  ]
+ }
 ```
 
-## Observability
+### `pre obs`
 
-`pre obs` records local events so developers can see what the tool decided
-without exposing private work:
+Show cache, process, and scan summaries with local events.
 
 ```sh
 pre obs
 ```
 
-See [JSON output](#pre-obs---json) and [filtered events](#pre-obs---events-query) for other formats.
+Example output (excerpt):
 
-Obs stays on your machine unless you explicitly copy and share the command
-output. Events include manager names, command categories, decision reasons,
-package counts, cache sizes, durations, exit codes, and Go runtime memory /
-goroutine samples.
+```text
+process:
+  background: none
+scans:
+  allowed: 2
+  blocked: 1
+  failed: 0
+```
 
-Obs does not record command text, full arguments, paths, environment
-variables, package names by default, OSV response bodies, prompts, completions,
-or plugin contents. Event logs are bounded and rotated locally.
+Logs stay local and rotate automatically. Events omit command arguments, paths, environment variables, and package names by default.
 
-**Custom manager** (add to `managers` array in config):
+#### `--json`
+
+Return the same response as JSON.
+
+```sh
+pre obs --json
+```
+
+Example output (excerpt):
 
 ```json
 {
-  "name": "composer",
-  "ecosystem": "Packagist",
-  "installCmds": ["install", "require"]
+  "scans": {
+    "allowed": 2,
+    "blocked": 1,
+    "failed": 0
+  }
 }
 ```
 
-Entries matching a built-in `name` replace it; new names extend the list.
+#### `--events`
+
+List events matching a text query. Omit the query to list all events.
+
+```sh
+pre obs --events scan
+```
+
+Example output:
+
+```text
+  - 2026-09-07T12:00:00Z pre.scan.completed
+  - 2026-09-07T12:00:01Z pre.scan.approved
+```
+
+### `pre skills add`
+
+Install the agent skill in `.claude/skills/pre`. Add `--global` to install under your home directory instead.
+
+```sh
+pre skills add
+```
+
+New `.claude/skills/pre/SKILL.md` (excerpt):
+
+```diff
++---
++name: pre
++description: >
++  Use when installing, configuring, or troubleshooting pre, the security
++  proxy that scans packages against the OSV database before package
++  managers install them.
++---
+```
+
+### `pre skills show`
+
+Print the bundled agent skill.
+
+```sh
+pre skills show
+```
+
+Output excerpt:
+
+```text
+# pre
+
+Run `pre setup` once to install shell hooks in ~/.zshrc or ~/.bashrc.
+Run `pre status` for read-only install state, managers, and cache info.
+Run `pre teardown` to remove shell hooks.
+```
+
+### `pre scan system`
+
+Scan cached packages, not a full inventory of installed software. Runs silently; view results with [pre status](#pre-status).
+
+```sh
+pre scan system
+```
+
+Example `pre status` change after a successful scan:
+
+```diff
+-system scan: no manual scan yet
++system scan: 2 total · 0 crit · 0 warn · last run 2026-09-07 12:00
+```
+
+### `pre self update`
+
+Update `pre` through Homebrew or the verified curl installer. Curl/manual installs require `cosign` on `PATH`.
+
+```sh
+pre self update
+```
+
+Example progress output (Homebrew):
+
+```text
+pre: updating with Homebrew
+```
+
+### `pre self uninstall`
+
+Remove shell hooks and `pre` itself. Add `--purge` to also remove config and cache data.
+
+```sh
+pre self uninstall
+```
+
+Example output (manual install):
+
+```text
+pre: removed hooks from /home/user/.zshrc
+pre: removed binary /usr/local/bin/pre
+```
 
 ## Security model
-
 
 - Queries [OSV.dev](https://osv.dev), a free service operated by Google
 - Sends only the package name and version; no code leaves your machine
@@ -375,25 +552,6 @@ Entries matching a built-in `name` replace it; new names extend the list.
 - Curl installs require successful Cosign verification of the release checksums
 
 `pre` is a vulnerability guardrail, not a sandbox or full supply-chain policy. Keep lockfiles, review dependency changes, and run ecosystem-native audit tools in CI.
-
-## Update pre
-
-
-```sh
-pre self update
-```
-
-Homebrew installs run `brew upgrade --cask pre`. Curl/manual installs rerun the checksum-and-signature-verifying installer into the current binary directory and require `cosign` on `PATH`.
-
-## Uninstall pre
-
-```sh
-pre self uninstall
-```
-
-Add `--purge` to also remove config and cache data.
-
-Homebrew installs run `brew uninstall --cask pre`. Manual installs remove the current `pre` binary after removing shell hooks.
 
 ## Repository layout
 
@@ -416,65 +574,53 @@ entry point packaged with each release.
 
 ## Development
 
-### `make setup`
+Follow [AGENTS.md](AGENTS.md): change one file, show the diff, and wait for human approval before changing another.
+
+### Setup
 
 Install pinned tools, check prerequisites and secrets, and install Git and agent hooks.
 
-### `mise install`
+```sh
+make setup
+```
 
-Install the pinned release versioning tool.
+### Unit tests
 
-### `make test`
+```sh
+make test
+```
 
-Run unit tests.
+### Lint
 
-### `make test-race`
+Check formatting, vet Go code, and lint Go and shell files.
 
-Run unit tests with the race detector.
+```sh
+make lint
+```
 
-### `make test-e2e`
+See the [Makefile](Makefile) for other tests, security checks, and release commands.
 
-Run end-to-end tests. Requires npm. See [Docker E2E tests](#docker-e2e-tests) for container scenarios.
+## Docker E2E tests
 
-### `make test-integration`
+Requires Docker. Each scenario tests clean scanning, CVE detection, and blocked installs with shell hooks active in a container.
 
-Run live API tests. Requires network access.
+### List scenarios
 
-### `make test-scripts`
+```sh
+make test-e2e-list
+```
 
-Run shell script tests.
+### npm scenario
 
-### `make lint`
+```sh
+make test-e2e-docker E2E_TEST=npm
+```
 
-Run format checks, vet, and the configured Go and shell linters.
+### pip scenario
 
-### `make gosec`
-
-Run static security checks. Requires Go 1.26+.
-
-### `make vuln`
-
-Run govulncheck. Requires network access.
-
-### `make security`
-
-Run govulncheck and gosec.
-
-### `make screenshots`
-
-Generate TUI SVG screenshots in `dist/screenshots`.
-
-### `make snapshot`
-
-Build all four release binaries locally without publishing.
-
-### `make release-preview`
-
-Run the full release validation without publishing.
-
-### `make release`
-
-Prompt for a version, validate, tag, and trigger the CI release.
+```sh
+make test-e2e-docker E2E_TEST=pip
+```
 
 ## License
 

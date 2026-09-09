@@ -658,6 +658,71 @@ func TestInterceptNPMManifestExternalSourceBlocks(t *testing.T) {
 	}
 }
 
+func TestInterceptUnknownVersionUpdatesBlock(t *testing.T) {
+	tests := [][]string{
+		{"brew", "upgrade"},
+		{"npm", "update", "react"},
+		{"pnpm", "update", "react"},
+		{"bun", "update", "react"},
+		{"poetry", "update", "requests"},
+		{"go", "get", "-u", "example.com/tool"},
+		{"go", "get", "-u=patch", "example.com/tool"},
+		{"cargo", "update"},
+	}
+	for _, args := range tests {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			assertUnknownVersionUpdateBlocked(t, args)
+		})
+	}
+}
+
+func assertUnknownVersionUpdateBlocked(t *testing.T, args []string) {
+	t.Helper()
+	t.Setenv(envDisable, "0")
+	const wantError = true
+	assertInstallTargetPolicy(t, args, wantError)
+	defer withExecFn(func(string, []string) { t.Fatal("unexpected install") })()
+	defer withLoadCache(func() cache.Cache {
+		t.Fatal("expected update rejection before scanning")
+		return nil
+	})()
+	expectProcessExit(t, 1, func() {
+		Intercept(manager.Get(args[0]), args[1:])
+	})
+}
+
+func TestInstallTargetPolicyAllowsKnownTargets(t *testing.T) {
+	const wantError = false
+	tests := [][]string{
+		{"", "install"},
+		{"go"},
+		{"brew", "install", "wget"},
+		{"brew", "upgrade", "wget"},
+		{"go", "get", "example.com/tool@v1.2.3"},
+		{"go", "install", "example.com/tool@v1.2.3"},
+		{"npm", "install", "react@18.2.0"},
+		{"poetry", "add", "requests"},
+		{"cargo", "add", "serde"},
+		{"cargo", "update", "serde"},
+		{"cargo", "update", "-p", "serde", "--precise", "1.0.217"},
+		{"pip", "install", "requests"},
+	}
+	for _, args := range tests {
+		assertInstallTargetPolicy(t, args, wantError)
+	}
+}
+
+func assertInstallTargetPolicy(t *testing.T, args []string, wantError bool) {
+	t.Helper()
+	mgr := manager.Get(args[0])
+	packageArgs, _ := installPackageArgs(mgr, args[1:])
+	err := unknownInstallTargetError(mgr, args[1:], packageArgs)
+	hasError := err != nil
+	if hasError != wantError {
+		t.Fatalf("%v: policy error = %v, want error = %v", args, err, wantError)
+	}
+}
+
 func TestInterceptNPMSourceFlagsBlock(t *testing.T) {
 	tests := [][]string{
 		{"install", "--registry", "https://registry.example", "react"},

@@ -1344,15 +1344,26 @@ func TestRunSelfUpdateManualCosignFailsBeforeScript(t *testing.T) {
 }
 
 func TestRunSelfUpdateManualDownloadFails(t *testing.T) {
-	dir := t.TempDir()
-	exe := filepath.Join(dir, "pre")
+	bundleURL := installChecksumsURL + ".bundle"
+	tests := []struct{ asset, url string }{
+		{"install.sh", installScriptURL},
+		{"checksums.txt", installChecksumsURL},
+		{"checksums.txt.bundle", bundleURL},
+	}
+	for _, tt := range tests {
+		t.Run(tt.asset, func(t *testing.T) {
+			assertSelfUpdateDownloadFailure(t, tt.asset, tt.url)
+		})
+	}
+}
+
+func assertSelfUpdateDownloadFailure(t *testing.T, asset, url string) {
+	t.Helper()
+	exe := filepath.Join(t.TempDir(), "pre")
 	defer withExecutablePath(func() (string, error) { return exe, nil })()
-	defer withHttpGetBytes(func(url string) ([]byte, error) {
-		return nil, os.ErrInvalid
-	})()
-	var calls int
+	defer withFailedSelfUpdateDownload(url)()
 	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
-		calls++
+		t.Fatalf("unexpected command after download failure: %s", name)
 		return nil
 	})()
 	var out, errOut bytes.Buffer
@@ -1360,11 +1371,53 @@ func TestRunSelfUpdateManualDownloadFails(t *testing.T) {
 	if code != 1 {
 		t.Errorf("expected exit 1, got %d", code)
 	}
-	if calls != 0 {
-		t.Errorf("expected no commands run when download fails, got %d", calls)
+	wantMessage := "downloading " + asset
+	if !strings.Contains(errOut.String(), wantMessage) {
+		t.Errorf("expected %q in stderr, got: %s", wantMessage, errOut.String())
 	}
-	if !strings.Contains(errOut.String(), "downloading install.sh") {
-		t.Errorf("expected download failure in stderr, got: %s", errOut.String())
+}
+
+func withFailedSelfUpdateDownload(failedURL string) func() {
+	return withHttpGetBytes(func(url string) ([]byte, error) {
+		if url == failedURL {
+			return nil, os.ErrNotExist
+		}
+		return nil, nil
+	})
+}
+
+func TestSelfUpdateMissingTempDirectory(t *testing.T) {
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	defer withSelfUpdateDownloads(nil)()
+	defer withCommandRunner(func(name string, args []string, env []string, stdout, stderr io.Writer) error {
+		t.Fatalf("unexpected command without temporary files: %s", name)
+		return nil
+	})()
+	err := downloadVerifyAndRun(installScriptURL, installChecksumsURL, nil, io.Discard, io.Discard)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected missing checksum directory error, got %v", err)
+	}
+	err = runInstallScript(nil, nil, io.Discard, io.Discard)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected missing script directory error, got %v", err)
+	}
+}
+
+func TestCloseTempWithErrorPreservesFailures(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "write-error-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	writeErr := errors.New("write failed")
+	err = closeTempWithError(file, writeErr)
+	if err != writeErr {
+		t.Fatalf("expected original write error, got %v", err)
+	}
+	err = closeTempWithError(file, writeErr)
+	hasBothErrors := errors.Is(err, writeErr) && errors.Is(err, os.ErrClosed)
+	if !hasBothErrors {
+		t.Fatalf("expected write and close errors, got %v", err)
 	}
 }
 

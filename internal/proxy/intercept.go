@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -305,7 +306,7 @@ func approvalAttrs(results []scanResult) map[string]any {
 }
 
 func hasCriticalResults(results []scanResult) bool {
-	return len(criticalResults(results)) > 0
+	return slices.ContainsFunc(results, hasCriticalVulns)
 }
 
 func criticalResults(results []scanResult) []scanResult {
