@@ -138,6 +138,7 @@ run_shellcheck() {
 }
 
 run_shell_legibility() {
+  ensure_shell_legibility || return "$?"
   set -- check "$@"
   [ "$strict" -eq 1 ] || set -- "$@" --exit-zero
   "$SHELL_LEGIBILITY_BIN" "$@"
