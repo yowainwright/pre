@@ -83,7 +83,7 @@ install_hook() {
 
 agent_lint_hook_path() {
   root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
-  echo "${root}/scripts/agent-lint-hook.sh"
+  echo "${root}/scripts/agent/lint.sh"
 }
 
 codex_hooks_path() {
@@ -100,14 +100,14 @@ codex_agent_hook_installed() {
   root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
   hook="$(agent_lint_hook_path "$root")"
   settings="$(codex_hooks_path "$root")"
-  [ -x "$hook" ] && [ -f "$settings" ] && grep -Fq "scripts/agent-lint-hook.sh" "$settings"
+  [ -x "$hook" ] && [ -f "$settings" ] && grep -Fq "scripts/agent/lint.sh" "$settings"
 }
 
 claude_agent_hook_installed() {
   root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
   hook="$(agent_lint_hook_path "$root")"
   settings="$(claude_settings_path "$root")"
-  [ -x "$hook" ] && [ -f "$settings" ] && grep -Fq "scripts/agent-lint-hook.sh" "$settings"
+  [ -x "$hook" ] && [ -f "$settings" ] && grep -Fq "scripts/agent/lint.sh" "$settings"
 }
 
 merge_agent_hook_config() {
@@ -161,7 +161,7 @@ write_agent_lint_matcher() {
   printf '        "hooks": [\n'
   printf '          {\n'
   printf '            "type": "command",\n'
-  printf '            "command": "sh scripts/agent-lint-hook.sh"\n'
+  printf '            "command": "sh scripts/agent/lint.sh"\n'
   printf '          }\n'
   printf '        ]\n'
   printf '      }\n'
@@ -239,10 +239,10 @@ check_agent_hooks() {
   echo "--- agent hooks"
   install_codex_agent_hook "$root" &&
     ok "Codex agent lint hook installed" ||
-    fail "Codex agent lint hook" "could not merge scripts/agent-lint-hook.sh into .codex/hooks.json"
+    fail "Codex agent lint hook" "could not merge scripts/agent/lint.sh into .codex/hooks.json"
   install_claude_agent_hook "$root" &&
     ok "Claude agent lint hook installed" ||
-    fail "Claude agent lint hook" "could not merge scripts/agent-lint-hook.sh into .claude/settings.json"
+    fail "Claude agent lint hook" "could not merge scripts/agent/lint.sh into .claude/settings.json"
 }
 
 main() {

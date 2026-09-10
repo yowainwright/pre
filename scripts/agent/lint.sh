@@ -11,7 +11,7 @@ fi
 
 _PRE_LINT_SOURCED=1
 . scripts/lint.sh
-if ! has_changed_go_inputs; then
+if ! has_changed_inputs; then
   printf '{}\n'
   exit 0
 fi
