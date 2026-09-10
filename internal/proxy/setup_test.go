@@ -183,6 +183,110 @@ func TestSetupPreservesExistingRCFileMode(t *testing.T) {
 	}
 }
 
+func TestWriteRCFileFollowsSymlinks(t *testing.T) {
+	for _, kind := range []string{"relative", "absolute", "chain"} {
+		t.Run(kind, func(t *testing.T) {
+			path, target := profileSymlinkFixture(t, kind)
+			assertRCWrite(t, path, target, 0o600)
+			if err := os.Chmod(target, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			assertRCWrite(t, path, target, 0o644)
+		})
+	}
+}
+
+func profileSymlinkFixture(t *testing.T, kind string) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	target := filepath.Join(dir, "profile")
+	linkTarget := target
+	switch kind {
+	case "relative":
+		linkTarget = "profile"
+	case "chain":
+		linkTarget = filepath.Join(dir, "profile-link")
+		createProfileSymlink(t, "profile", linkTarget)
+	}
+	path := filepath.Join(dir, ".zshrc")
+	createProfileSymlink(t, linkTarget, path)
+	return path, target
+}
+
+func createProfileSymlink(t *testing.T, target, path string) {
+	t.Helper()
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertRCWrite(t *testing.T, path, target string, perm os.FileMode) {
+	t.Helper()
+	link, err := os.Readlink(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRCFile(path, []byte("updated profile\n")); err != nil {
+		t.Fatal(err)
+	}
+	assertRCFile(t, target, perm)
+	got, err := os.Readlink(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != link {
+		t.Errorf("symlink target = %q, want %q", got, link)
+	}
+}
+
+func assertRCFile(t *testing.T, path string, perm os.FileMode) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "updated profile\n" {
+		t.Errorf("unexpected profile contents: %q", content)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != perm {
+		t.Errorf("profile mode = %o, want %o", info.Mode().Perm(), perm)
+	}
+}
+
+func TestWriteRCFileResolvesParentBeforeDotDot(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "actual", "nested")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(dir, "alias")
+	createProfileSymlink(t, nested, alias)
+	path := filepath.Join(dir, ".zshrc")
+	createProfileSymlink(t, "alias/../profile", path)
+	target := filepath.Join(dir, "actual", "profile")
+	assertRCWrite(t, path, target, 0o600)
+}
+
+func TestWriteRCFileRejectsInvalidSymlinks(t *testing.T) {
+	for _, target := range []string{".zshrc", "missing/profile"} {
+		t.Run(target, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, ".zshrc")
+			createProfileSymlink(t, target, path)
+			if err := writeRCFile(path, []byte("updated profile\n")); err == nil {
+				t.Fatal("expected invalid symlink target to fail")
+			}
+			if _, err := os.Readlink(path); err != nil {
+				t.Fatalf("profile symlink was replaced: %v", err)
+			}
+		})
+	}
+}
+
 func TestSetupRefreshesExistingHooks(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)

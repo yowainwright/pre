@@ -261,18 +261,33 @@ func writeRCFile(path string, data []byte) error {
 }
 
 func rcWriteTarget(path string) (string, error) {
-	info, err := os.Lstat(path)
+	target, err := filepath.EvalSymlinks(path)
+	missing := errors.Is(err, os.ErrNotExist)
+	if !missing {
+		return target, err
+	}
+	dir, name := filepath.Split(path)
+	parent, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", err
+	}
+	return rcMissingWriteTarget(filepath.Join(parent, name))
+}
+
+func rcMissingWriteTarget(path string) (string, error) {
+	target, err := os.Readlink(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return path, nil
 	}
 	if err != nil {
 		return "", err
 	}
-	isSymlink := info.Mode()&os.ModeSymlink != 0
-	if !isSymlink {
-		return path, nil
+	relative := !filepath.IsAbs(target)
+	if relative {
+		dir, _ := filepath.Split(path)
+		target = dir + target
 	}
-	return filepath.EvalSymlinks(path)
+	return rcWriteTarget(target)
 }
 
 func rcWritePerm(path string) (os.FileMode, error) {
