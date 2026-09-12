@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -97,6 +98,129 @@ func npmLockValidationDir(t *testing.T, section, requirement string) string {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	return dir
+}
+
+func TestNPMLockOptions(t *testing.T) {
+	tests := []struct{ args, want []string }{
+		{[]string{"install", "--legacy-peer-deps", "--omit", "dev"}, []string{"--legacy-peer-deps=true", "--omit=dev"}},
+		{[]string{"--install-links=false", "install", "--force"}, []string{"--install-links=false", "--force=true"}},
+		{[]string{"install", "--legacy-peer-deps", "false", "--no-strict-peer-deps"}, []string{"--legacy-peer-deps=false", "--no-strict-peer-deps=true"}},
+		{[]string{"install", "-f=false", "-w", "app"}, []string{"--force=false", "--workspace=app"}},
+		{[]string{"ci", "--help", "--versions", "--no-dry-run", "--ignore-scripts=false", "--no-offline"}, nil},
+		{[]string{"install", "--", "--force"}, nil},
+		{[]string{"install", "---", "--force"}, nil},
+	}
+	for _, test := range tests {
+		got, err := npmLockOptions(test.args)
+		matches := slices.Equal(got, test.want)
+		unexpected := err != nil || !matches
+		if unexpected {
+			t.Errorf("npmLockOptions(%v) = %v, %v; want %v", test.args, got, err, test.want)
+		}
+	}
+}
+
+func TestNPMLockOptionsRejectMissingValue(t *testing.T) {
+	_, err := npmLockOptions([]string{"install", "--omit", "--help"})
+	if err == nil {
+		t.Fatal("expected missing option value to fail validation")
+	}
+}
+
+func TestNPMLockCheckRejectsOptionInjection(t *testing.T) {
+	original := runCmd
+	runCmd = func(string, ...string) ([]byte, error) {
+		t.Error("unsafe options must be rejected before starting npm")
+		return nil, nil
+	}
+	defer func() { runCmd = original }()
+	flags := []string{"--legacy-peer-deps=--", "--legacy-peer-deps=---", "--legacy-peer-deps=--help", "--force=--ignore-scripts=false", "--omit=--", "--install-strategy=--versions"}
+	dir := t.TempDir()
+	for _, flag := range flags {
+		err := runNPMLockCheck(dir, []string{"install", flag})
+		if err == nil {
+			t.Errorf("expected %s to fail before npm executes", flag)
+		}
+	}
+}
+
+func TestValidateManifestPreservesLegacyPeerDeps(t *testing.T) {
+	dir := npmPeerConflictDir(t)
+	mgr := &Manager{Name: "npm", Ecosystem: "npm"}
+	if err := ValidateManifest(mgr, dir); err == nil {
+		t.Fatal("expected conflicting peers to fail without legacy-peer-deps")
+	}
+	err := ValidateManifest(mgr, dir, "install", "--legacy-peer-deps")
+	if err != nil {
+		t.Fatalf("expected legacy-peer-deps to preserve the valid install, got %v", err)
+	}
+}
+
+func npmPeerConflictDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	manifest := `{"name":"demo","dependencies":{"host":"1.0.0","plugin":"1.0.0"}}`
+	lockfile := `{"name":"demo","lockfileVersion":3,"packages":{"":{"name":"demo","dependencies":{"host":"1.0.0","plugin":"1.0.0"}},"node_modules/host":{"version":"1.0.0","resolved":"https://registry.npmjs.org/host/-/host-1.0.0.tgz"},"node_modules/plugin":{"version":"1.0.0","resolved":"https://registry.npmjs.org/plugin/-/plugin-1.0.0.tgz","peerDependencies":{"host":"^2.0.0"}}}}`
+	files := map[string]string{"package.json": manifest, "package-lock.json": lockfile}
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		data := []byte(content)
+		err := os.WriteFile(path, data, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestValidateManifestCannotSkipLockCheck(t *testing.T) {
+	flags := []string{"--help", "--version", "--versions", "--usage"}
+	for _, flag := range flags {
+		t.Run(flag, func(t *testing.T) {
+			dir := npmLockValidationDir(t, "dependencies", "^6.0.0")
+			mgr := &Manager{Name: "npm", Ecosystem: "npm"}
+			err := ValidateManifest(mgr, dir, "install", flag)
+			if err == nil {
+				t.Fatal("expected stale lockfile to fail despite informational flag")
+			}
+		})
+	}
+}
+
+func TestValidateManifestDoesNotInstallOrRunScripts(t *testing.T) {
+	dir := npmGuardValidationDir(t)
+	mgr := &Manager{Name: "npm", Ecosystem: "npm"}
+	err := ValidateManifest(mgr, dir, "install", "--no-dry-run", "--ignore-scripts=false", "--no-offline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"script-ran", "node_modules/is-number"} {
+		_, err := os.Stat(filepath.Join(dir, name))
+		if !os.IsNotExist(err) {
+			t.Errorf("validation unexpectedly created %s: %v", name, err)
+		}
+	}
+	_, err = os.Stat(filepath.Join(dir, "node_modules/keep"))
+	if err != nil {
+		t.Fatalf("validation removed an existing node_modules entry: %v", err)
+	}
+}
+
+func npmGuardValidationDir(t *testing.T) string {
+	t.Helper()
+	dir := npmLockValidationDir(t, "dependencies", "^7.0.0")
+	manifest := `{"name":"demo","dependencies":{"is-number":"^7.0.0"},"scripts":{"preinstall":"touch script-ran"}}`
+	path := filepath.Join(dir, "package.json")
+	err := os.WriteFile(path, []byte(manifest), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path = filepath.Join(dir, "node_modules/keep")
+	err = os.MkdirAll(path, 0o755)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return dir
 }

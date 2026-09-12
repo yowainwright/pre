@@ -485,7 +485,7 @@ func installFallbackPackages(mgr *manager.Manager, args []string) ([]string, err
 		if err != nil {
 			return nil, err
 		}
-		if err := validateManifestFn(mgr, dir); err != nil {
+		if err := validateManifestFn(mgr, dir, args...); err != nil {
 			return nil, err
 		}
 		return readManifestDirFn(mgr, dir), nil

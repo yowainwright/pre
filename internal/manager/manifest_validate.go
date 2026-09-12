@@ -9,18 +9,19 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
 const npmRegistryHost = "registry.npmjs.org"
 
-func ValidateManifest(mgr *Manager, dir string) error {
+func ValidateManifest(mgr *Manager, dir string, args ...string) error {
 	if mgr == nil {
 		return errors.New("package manager is required")
 	}
 	switch mgr.Ecosystem {
 	case "npm":
-		return validateNPMProject(mgr.Name, dir)
+		return validateNPMProject(mgr.Name, dir, args)
 	case "Go":
 		return validateTextFiles(dir, "go.sum", "go.mod")
 	case "PyPI":
@@ -34,7 +35,7 @@ func ValidateManifest(mgr *Manager, dir string) error {
 	}
 }
 
-func validateNPMProject(name, dir string) error {
+func validateNPMProject(name, dir string, args []string) error {
 	err := validateNPMProjectFiles(name, dir)
 	if err != nil {
 		return err
@@ -42,7 +43,7 @@ func validateNPMProject(name, dir string) error {
 	if name != "npm" {
 		return nil
 	}
-	return validateNPMLockConsistency(dir)
+	return validateNPMLockConsistency(dir, args)
 }
 
 func validateNPMProjectFiles(name, dir string) error {
@@ -63,7 +64,7 @@ func validateNPMProjectFiles(name, dir string) error {
 	return validatePackageJSON(filepath.Join(dir, "package.json"))
 }
 
-func validateNPMLockConsistency(dir string) error {
+func validateNPMLockConsistency(dir string, args []string) error {
 	for _, name := range []string{"package.json", npmPackageLockFilename} {
 		_, exists, err := readOptionalProjectFile(filepath.Join(dir, name))
 		if err != nil {
@@ -73,10 +74,10 @@ func validateNPMLockConsistency(dir string) error {
 			return nil
 		}
 	}
-	return checkNPMLockConsistency(dir)
+	return checkNPMLockConsistency(dir, args)
 }
 
-func checkNPMLockConsistency(dir string) error {
+func checkNPMLockConsistency(dir string, args []string) error {
 	_, shrinkwrap, err := readOptionalProjectFile(filepath.Join(dir, "npm-shrinkwrap.json"))
 	if err != nil {
 		return err
@@ -84,19 +85,118 @@ func checkNPMLockConsistency(dir string) error {
 	if shrinkwrap {
 		return errors.New("npm-shrinkwrap.json overrides package-lock.json and cannot be scanned")
 	}
-	return runNPMLockCheck(dir)
+	return runNPMLockCheck(dir, args)
 }
 
-func runNPMLockCheck(dir string) error {
+func runNPMLockCheck(dir string, args []string) error {
 	projectDir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return err
 	}
-	_, err = runCmd("npm", "ci", "--prefix", projectDir, "--dry-run", "--ignore-scripts", "--no-audit", "--no-fund", "--offline")
+	options, err := npmLockOptions(args)
+	if err != nil {
+		return err
+	}
+	command := append([]string{"ci"}, options...)
+	command = append(command, "--prefix", projectDir, "--dry-run", "--ignore-scripts", "--no-audit", "--no-fund", "--offline")
+	_, err = runCmd("npm", command...)
 	if err != nil {
 		return fmt.Errorf("validate package-lock.json against package.json with npm ci: %w", err)
 	}
 	return nil
+}
+
+func npmLockOptions(args []string) ([]string, error) {
+	var options []string
+	for index := 0; index < len(args); index++ {
+		isTerminator := strings.HasPrefix(args[index], "--") && strings.Trim(args[index], "-") == ""
+		if isTerminator {
+			break
+		}
+		option, consumed, err := npmLockOption(args, index)
+		if err != nil {
+			return nil, err
+		}
+		if option != "" {
+			options = append(options, option)
+		}
+		if consumed {
+			index++
+		}
+	}
+	return options, nil
+}
+
+func npmLockOption(args []string, index int) (string, bool, error) {
+	flag, value, inline := strings.Cut(args[index], "=")
+	flag = npmLockOptionName(flag)
+	known, needsValue := npmLockOptionKind(flag)
+	if !known {
+		return "", false, nil
+	}
+	if inline {
+		consumed := false
+		return npmLockOptionResult(flag, value, consumed, needsValue)
+	}
+	value, consumed, err := npmLockOptionValue(args, index, needsValue)
+	if err != nil {
+		return "", false, err
+	}
+	return npmLockOptionResult(flag, value, consumed, needsValue)
+}
+
+func npmLockOptionResult(flag, value string, consumed, needsValue bool) (string, bool, error) {
+	valid := value != "" && !strings.HasPrefix(value, "-")
+	if !needsValue {
+		valid = value == "true" || value == "false"
+	}
+	if !valid {
+		return "", false, fmt.Errorf("%s has an invalid value for lockfile validation", flag)
+	}
+	option := flag + "=" + value
+	return option, consumed, nil
+}
+
+func npmLockOptionName(flag string) string {
+	switch flag {
+	case "-f":
+		return "--force"
+	case "-w":
+		return "--workspace"
+	default:
+		return flag
+	}
+}
+
+func npmLockOptionValue(args []string, index int, needsValue bool) (string, bool, error) {
+	if index+1 < len(args) {
+		value := args[index+1]
+		isBoolean := value == "true" || value == "false"
+		isValue := !strings.HasPrefix(value, "-") && (needsValue || isBoolean)
+		if isValue {
+			return value, true, nil
+		}
+	}
+	if needsValue {
+		return "", false, fmt.Errorf("%s requires a value for lockfile validation", args[index])
+	}
+	return "true", false, nil
+}
+
+func npmLockOptionKind(flag string) (bool, bool) {
+	valueFlags := []string{"--install-strategy", "--omit", "--include", "--only", "--also", "--cpu", "--os", "--libc", "--before", "--workspace"}
+	if slices.Contains(valueFlags, flag) {
+		return true, true
+	}
+	positive := "--" + strings.TrimPrefix(flag, "--no-")
+	if strings.HasPrefix(flag, "--no-") {
+		flag = positive
+	}
+	booleanFlags := []string{
+		"--legacy-peer-deps", "--strict-peer-deps", "--install-links", "--legacy-bundling", "--global-style",
+		"--prefer-dedupe", "--force", "--engine-strict", "--production", "--prod", "--workspaces", "--include-workspace-root",
+	}
+	return slices.Contains(booleanFlags, flag), false
 }
 
 func validateAllNPMLocks(dir string) error {
