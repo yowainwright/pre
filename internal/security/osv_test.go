@@ -235,10 +235,15 @@ type osvBatchTestHandler struct {
 	requests             int
 	batchSizes           []int
 	includeVulnerability bool
+	detailStatus         int
 }
 
 func (handler *osvBatchTestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	handler.requests++
+	if request.URL.Path == "/v1/query" {
+		handler.serveDetails(writer)
+		return
+	}
 	var payload osvBatchRequest
 	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
@@ -247,10 +252,18 @@ func (handler *osvBatchTestHandler) ServeHTTP(writer http.ResponseWriter, reques
 	handler.batchSizes = append(handler.batchSizes, len(payload.Queries))
 	results := make([]osvResponse, len(payload.Queries))
 	if handler.includeVulnerability && len(results) > 0 {
-		vulnerability := osvVulnerability{ID: "CVE-2026-1234", Summary: "batch test"}
+		vulnerability := osvVulnerability{ID: "CVE-2026-1234"}
 		results[0].Vulns = []osvVulnerability{vulnerability}
 	}
 	_ = json.NewEncoder(writer).Encode(osvBatchResponse{Results: results})
+}
+
+func (handler *osvBatchTestHandler) serveDetails(writer http.ResponseWriter) {
+	if handler.detailStatus != 0 {
+		http.Error(writer, "detail lookup failed", handler.detailStatus)
+		return
+	}
+	_, _ = fmt.Fprintln(writer, `{"vulns":[{"id":"CVE-2026-1234","summary":"batch test","database_specific":{"severity":"CRITICAL"}}]}`)
 }
 
 type osvSingleTestHandler struct {
@@ -276,11 +289,34 @@ func TestCheckBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if handler.requests != 1 || len(results) != 2 {
-		t.Fatalf("expected one request and two results, got %d and %d", handler.requests, len(results))
+	if len(results) != 2 {
+		t.Fatalf("expected two results, got %d", len(results))
 	}
 	if len(results[0]) != 1 || results[0][0].ID != "CVE-2026-1234" {
 		t.Fatalf("unexpected first result: %+v", results[0])
+	}
+	hasFullDetails := results[0][0].Severity == SeverityCritical && results[0][0].Summary == "batch test"
+	if !hasFullDetails {
+		t.Errorf("expected full vulnerability details, got %+v", results[0][0])
+	}
+	hasExpectedBatchResult := handler.requests == 2 && len(results[1]) == 0
+	if !hasExpectedBatchResult {
+		t.Errorf("expected one detail lookup and a clean second result, got %d requests and %+v", handler.requests, results[1])
+	}
+}
+
+func TestCheckBatchDetailFailure(t *testing.T) {
+	handler := &osvBatchTestHandler{includeVulnerability: true, detailStatus: http.StatusServiceUnavailable}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	originalEndpoint := Endpoint
+	Endpoint = server.URL + "/v1/query"
+	defer func() { Endpoint = originalEndpoint }()
+
+	query := Query{Ecosystem: "npm", Name: "lodash", Version: "4.17.20"}
+	results, err := CheckBatch([]Query{query})
+	if err == nil {
+		t.Fatalf("expected failed detail lookup to fail the scan, got %+v", results)
 	}
 }
 

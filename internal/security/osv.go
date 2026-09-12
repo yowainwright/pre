@@ -121,9 +121,21 @@ func checkBatchChunk(endpoint string, queries []Query) ([][]Vulnerability, error
 	if len(response.Results) != len(queries) {
 		return nil, fmt.Errorf("decode: expected %d batch results, got %d", len(queries), len(response.Results))
 	}
-	results := make([][]Vulnerability, len(response.Results))
-	for index, result := range response.Results {
-		results[index] = vulnerabilitiesFrom(result.Vulns)
+	return checkBatchDetails(queries, response.Results)
+}
+
+func checkBatchDetails(queries []Query, matches []osvResponse) ([][]Vulnerability, error) {
+	results := make([][]Vulnerability, len(matches))
+	for index, match := range matches {
+		if len(match.Vulns) == 0 {
+			continue
+		}
+		query := queries[index]
+		vulnerabilities, err := Check(query.Ecosystem, query.Name, query.Version)
+		if err != nil {
+			return nil, err
+		}
+		results[index] = vulnerabilities
 	}
 	return results, nil
 }

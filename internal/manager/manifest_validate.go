@@ -35,6 +35,17 @@ func ValidateManifest(mgr *Manager, dir string) error {
 }
 
 func validateNPMProject(name, dir string) error {
+	err := validateNPMProjectFiles(name, dir)
+	if err != nil {
+		return err
+	}
+	if name != "npm" {
+		return nil
+	}
+	return validateNPMLockConsistency(dir)
+}
+
+func validateNPMProjectFiles(name, dir string) error {
 	var err error
 	switch name {
 	case "npm":
@@ -50,6 +61,42 @@ func validateNPMProject(name, dir string) error {
 		return err
 	}
 	return validatePackageJSON(filepath.Join(dir, "package.json"))
+}
+
+func validateNPMLockConsistency(dir string) error {
+	for _, name := range []string{"package.json", npmPackageLockFilename} {
+		_, exists, err := readOptionalProjectFile(filepath.Join(dir, name))
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return nil
+		}
+	}
+	return checkNPMLockConsistency(dir)
+}
+
+func checkNPMLockConsistency(dir string) error {
+	_, shrinkwrap, err := readOptionalProjectFile(filepath.Join(dir, "npm-shrinkwrap.json"))
+	if err != nil {
+		return err
+	}
+	if shrinkwrap {
+		return errors.New("npm-shrinkwrap.json overrides package-lock.json and cannot be scanned")
+	}
+	return runNPMLockCheck(dir)
+}
+
+func runNPMLockCheck(dir string) error {
+	projectDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return err
+	}
+	_, err = runCmd("npm", "ci", "--prefix", projectDir, "--dry-run", "--ignore-scripts", "--no-audit", "--no-fund", "--offline")
+	if err != nil {
+		return fmt.Errorf("validate package-lock.json against package.json with npm ci: %w", err)
+	}
+	return nil
 }
 
 func validateAllNPMLocks(dir string) error {

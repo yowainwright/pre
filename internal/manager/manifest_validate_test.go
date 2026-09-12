@@ -56,6 +56,51 @@ func TestValidateManifestAllowsRegistryPackageLockEntry(t *testing.T) {
 	}
 }
 
+func TestValidateManifestRejectsStalePackageLock(t *testing.T) {
+	sections := []string{"dependencies", "devDependencies", "optionalDependencies"}
+	for _, section := range sections {
+		t.Run(section, func(t *testing.T) {
+			dir := npmLockValidationDir(t, section, "^6.0.0")
+			mgr := &Manager{Name: "npm", Ecosystem: "npm"}
+			err := ValidateManifest(mgr, dir)
+			if err == nil {
+				t.Fatal("expected manifest requiring is-number 6.x to reject lockfile containing 7.0.0")
+			}
+		})
+	}
+}
+
+func TestValidateManifestAllowsCompatiblePackageLock(t *testing.T) {
+	requirements := []string{"^7.0.0", ">=7.0.0 <8.0.0"}
+	for _, requirement := range requirements {
+		t.Run(requirement, func(t *testing.T) {
+			dir := npmLockValidationDir(t, "dependencies", requirement)
+			mgr := &Manager{Name: "npm", Ecosystem: "npm"}
+			err := ValidateManifest(mgr, dir)
+			if err != nil {
+				t.Fatalf("expected compatible lockfile to pass, got %v", err)
+			}
+		})
+	}
+}
+
+func npmLockValidationDir(t *testing.T, section, requirement string) string {
+	t.Helper()
+	dir := t.TempDir()
+	manifest := fmt.Sprintf(`{"name":"demo",%q:{"is-number":%q}}`, section, requirement)
+	lockfile := fmt.Sprintf(`{"name":"demo","lockfileVersion":3,"packages":{"":{"name":"demo",%q:{"is-number":"^7.0.0"}},"node_modules/is-number":{"version":"7.0.0","resolved":"https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz"}}}`, section)
+	files := map[string]string{"package.json": manifest, "package-lock.json": lockfile}
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		data := []byte(content)
+		err := os.WriteFile(path, data, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
 func TestNPMRegistryURL(t *testing.T) {
 	tests := map[string]struct {
 		name     string
