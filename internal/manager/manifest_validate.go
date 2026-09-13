@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -85,7 +86,42 @@ func checkNPMLockConsistency(dir string, args []string) error {
 	if shrinkwrap {
 		return errors.New("npm-shrinkwrap.json overrides package-lock.json and cannot be scanned")
 	}
+	if err := validateNPMOptionalLock(dir); err != nil {
+		return err
+	}
 	return runNPMLockCheck(dir, args)
+}
+
+func validateNPMOptionalLock(dir string) error {
+	manifest, _, err := readOptionalProjectFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return err
+	}
+	lockfile, _, err := readOptionalProjectFile(filepath.Join(dir, npmPackageLockFilename))
+	if err != nil {
+		return err
+	}
+	return validateNPMOptionalDeclarations(manifest, lockfile)
+}
+
+func validateNPMOptionalDeclarations(manifestData, lockData []byte) error {
+	var manifest npmPackageManifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		return fmt.Errorf("parse package.json optional dependencies: %w", err)
+	}
+	var lockfile struct {
+		Packages map[string]npmPackageManifest `json:"packages"`
+	}
+	if err := json.Unmarshal(lockData, &lockfile); err != nil {
+		return fmt.Errorf("parse package-lock.json optional dependencies: %w", err)
+	}
+	locked := lockfile.Packages[""].OptionalDependencies
+	// Offline npm ci can silently drop unresolved optional dependencies.
+	matches := maps.Equal(manifest.OptionalDependencies, locked)
+	if !matches {
+		return errors.New("package.json optionalDependencies differ from package-lock.json; refresh the lockfile before installing")
+	}
+	return nil
 }
 
 func runNPMLockCheck(dir string, args []string) error {

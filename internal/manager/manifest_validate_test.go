@@ -85,6 +85,48 @@ func TestValidateManifestAllowsCompatiblePackageLock(t *testing.T) {
 	}
 }
 
+func TestValidateManifestChecksOptionalDeclarationsBeforeNPM(t *testing.T) {
+	original := runCmd
+	t.Cleanup(func() { runCmd = original })
+	tests := []struct {
+		name, manifest, lockfile string
+		wantError                bool
+	}{
+		{"changed", `{"optionalDependencies":{"is-number":"^6.0.0"}}`, `{"packages":{"":{"optionalDependencies":{"is-number":"^7.0.0"}}}}`, true},
+		{"equivalent range", `{"optionalDependencies":{"is-number":">=7.0.0 <8.0.0"}}`, `{"packages":{"":{"optionalDependencies":{"is-number":"^7.0.0"}}}}`, true},
+		{"added", `{"optionalDependencies":{"is-number":"^7.0.0"}}`, `{"packages":{"":{}}}`, true},
+		{"removed", `{}`, `{"packages":{"":{"optionalDependencies":{"is-number":"^7.0.0"}}}}`, true},
+		{"missing lock root", `{"optionalDependencies":{"is-number":"^7.0.0"}}`, `{"lockfileVersion":1,"dependencies":{}}`, true},
+		{"unchanged", `{"optionalDependencies":{"is-number":"^7.0.0"}}`, `{"packages":{"":{"optionalDependencies":{"is-number":"^7.0.0"}}}}`, false},
+		{"empty", `{"optionalDependencies":{}}`, `{"packages":{"":{}}}`, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assertNPMOptionalDeclarations(t, test.manifest, test.lockfile, test.wantError)
+		})
+	}
+}
+
+func assertNPMOptionalDeclarations(t *testing.T, manifest, lockfile string, wantError bool) {
+	t.Helper()
+	dir := t.TempDir()
+	for name, content := range map[string]string{"package.json": manifest, "package-lock.json": lockfile} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	called := false
+	runCmd = func(string, ...string) ([]byte, error) { called = true; return nil, nil }
+	err := ValidateManifest(&Manager{Name: "npm", Ecosystem: "npm"}, dir)
+	failed := err != nil
+	if failed != wantError {
+		t.Fatalf("expected validation error=%t, got %v", wantError, err)
+	}
+	if called == wantError {
+		t.Fatalf("npm called=%t; changed optional declarations must fail before npm runs", called)
+	}
+}
+
 func npmLockValidationDir(t *testing.T, section, requirement string) string {
 	t.Helper()
 	dir := t.TempDir()
