@@ -66,6 +66,13 @@ func validateNPMProjectFiles(name, dir string) error {
 }
 
 func validateNPMLockConsistency(dir string, args []string) error {
+	_, shrinkwrap, err := readOptionalProjectFile(filepath.Join(dir, "npm-shrinkwrap.json"))
+	if err != nil {
+		return err
+	}
+	if shrinkwrap {
+		return errors.New("npm-shrinkwrap.json overrides package-lock.json and cannot be scanned")
+	}
 	for _, name := range []string{"package.json", npmPackageLockFilename} {
 		_, exists, err := readOptionalProjectFile(filepath.Join(dir, name))
 		if err != nil {
@@ -79,13 +86,6 @@ func validateNPMLockConsistency(dir string, args []string) error {
 }
 
 func checkNPMLockConsistency(dir string, args []string) error {
-	_, shrinkwrap, err := readOptionalProjectFile(filepath.Join(dir, "npm-shrinkwrap.json"))
-	if err != nil {
-		return err
-	}
-	if shrinkwrap {
-		return errors.New("npm-shrinkwrap.json overrides package-lock.json and cannot be scanned")
-	}
 	if err := validateNPMOptionalLock(dir); err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func checkNPMLockConsistency(dir string, args []string) error {
 }
 
 func validateNPMOptionalLock(dir string) error {
-	manifest, _, err := readOptionalProjectFile(filepath.Join(dir, "package.json"))
+	manifestData, _, err := readOptionalProjectFile(filepath.Join(dir, "package.json"))
 	if err != nil {
 		return err
 	}
@@ -101,25 +101,71 @@ func validateNPMOptionalLock(dir string) error {
 	if err != nil {
 		return err
 	}
-	return validateNPMOptionalDeclarations(manifest, lockfile)
-}
-
-func validateNPMOptionalDeclarations(manifestData, lockData []byte) error {
 	var manifest npmPackageManifest
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
 		return fmt.Errorf("parse package.json optional dependencies: %w", err)
 	}
+	return validateNPMOptionalDeclarations(dir, manifest, lockfile)
+}
+
+func validateNPMOptionalDeclarations(dir string, manifest npmPackageManifest, lockData []byte) error {
 	var lockfile struct {
-		Packages map[string]npmPackageManifest `json:"packages"`
+		LockfileVersion int                           `json:"lockfileVersion"`
+		Packages        map[string]npmPackageManifest `json:"packages"`
 	}
 	if err := json.Unmarshal(lockData, &lockfile); err != nil {
 		return fmt.Errorf("parse package-lock.json optional dependencies: %w", err)
+	}
+	if lockfile.LockfileVersion == 1 {
+		return validateNPMLegacyOptionalLock(dir, manifest.OptionalDependencies)
 	}
 	locked := lockfile.Packages[""].OptionalDependencies
 	// Offline npm ci can silently drop unresolved optional dependencies.
 	matches := maps.Equal(manifest.OptionalDependencies, locked)
 	if !matches {
 		return errors.New("package.json optionalDependencies differ from package-lock.json; refresh the lockfile before installing")
+	}
+	return nil
+}
+
+func validateNPMLegacyOptionalLock(dir string, requirements map[string]string) error {
+	if len(requirements) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(requirements))
+	for name := range requirements {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	projectDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return err
+	}
+	args := []string{"ls", "--prefix", projectDir, "--package-lock-only", "--json", "--all", "--depth=Infinity", "--include=prod", "--include=dev", "--include=optional", "--omit=peer", "--global=false", "--link=false", "--ignore-scripts", "--offline"}
+	output, err := runCmd("npm", args...)
+	if err != nil {
+		return fmt.Errorf("validate legacy package-lock.json optional dependencies: %w", err)
+	}
+	return validateNPMLegacyOptionalResult(output, names)
+}
+
+func validateNPMLegacyOptionalResult(output []byte, names []string) error {
+	var result struct {
+		Dependencies map[string]struct {
+			Version string `json:"version"`
+			Invalid string `json:"invalid"`
+			Missing bool   `json:"missing"`
+		} `json:"dependencies"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		return fmt.Errorf("read legacy package-lock.json validation: %w", err)
+	}
+	for _, name := range names {
+		entry := result.Dependencies[name]
+		invalid := entry.Version == "" || entry.Invalid != "" || entry.Missing
+		if invalid {
+			return fmt.Errorf("cannot validate optional dependency %s in legacy package-lock.json; refresh the lockfile before installing", name)
+		}
 	}
 	return nil
 }

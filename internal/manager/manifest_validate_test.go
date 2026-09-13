@@ -57,6 +57,46 @@ func TestValidateManifestAllowsRegistryPackageLockEntry(t *testing.T) {
 	}
 }
 
+func TestValidateManifestRejectsNPMShrinkwrap(t *testing.T) {
+	original := runCmd
+	t.Cleanup(func() { runCmd = original })
+	runCmd = func(string, ...string) ([]byte, error) {
+		t.Fatal("shrinkwrap must be rejected before npm runs")
+		return nil, nil
+	}
+	tests := map[string][]string{
+		"shrinkwrap only":   nil,
+		"with manifest":     {"package.json"},
+		"with package lock": {"package-lock.json"},
+		"with both":         {"package.json", "package-lock.json"},
+	}
+	for name, files := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := npmShrinkwrapValidationDir(t, files)
+			err := ValidateManifest(&Manager{Name: "npm", Ecosystem: "npm"}, dir)
+			if err == nil {
+				t.Fatal("expected npm-shrinkwrap.json to block validation")
+			}
+			if !strings.Contains(err.Error(), "npm-shrinkwrap.json") {
+				t.Fatalf("expected shrinkwrap error, got %v", err)
+			}
+		})
+	}
+}
+
+func npmShrinkwrapValidationDir(t *testing.T, files []string) string {
+	t.Helper()
+	dir := t.TempDir()
+	files = append(files, "npm-shrinkwrap.json")
+	for _, name := range files {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(`{}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
 func TestValidateManifestRejectsStalePackageLock(t *testing.T) {
 	sections := []string{"dependencies", "devDependencies", "optionalDependencies"}
 	for _, section := range sections {
@@ -96,7 +136,7 @@ func TestValidateManifestChecksOptionalDeclarationsBeforeNPM(t *testing.T) {
 		{"equivalent range", `{"optionalDependencies":{"is-number":">=7.0.0 <8.0.0"}}`, `{"packages":{"":{"optionalDependencies":{"is-number":"^7.0.0"}}}}`, true},
 		{"added", `{"optionalDependencies":{"is-number":"^7.0.0"}}`, `{"packages":{"":{}}}`, true},
 		{"removed", `{}`, `{"packages":{"":{"optionalDependencies":{"is-number":"^7.0.0"}}}}`, true},
-		{"missing lock root", `{"optionalDependencies":{"is-number":"^7.0.0"}}`, `{"lockfileVersion":1,"dependencies":{}}`, true},
+		{"missing lock root", `{"optionalDependencies":{"is-number":"^7.0.0"}}`, `{"lockfileVersion":3,"packages":{}}`, true},
 		{"unchanged", `{"optionalDependencies":{"is-number":"^7.0.0"}}`, `{"packages":{"":{"optionalDependencies":{"is-number":"^7.0.0"}}}}`, false},
 		{"empty", `{"optionalDependencies":{}}`, `{"packages":{"":{}}}`, false},
 	}
@@ -142,6 +182,97 @@ func npmLockValidationDir(t *testing.T, section, requirement string) string {
 		}
 	}
 	return dir
+}
+
+func TestValidateManifestLegacyOptionalLock(t *testing.T) {
+	t.Setenv("npm_config_cache", t.TempDir())
+	tests := []struct {
+		requirement string
+		wantError   bool
+	}{
+		{"^7.0.0", false},
+		{">=7.0.0 <8.0.0", false},
+		{"^6.0.0", true},
+	}
+	for _, test := range tests {
+		t.Run(test.requirement, func(t *testing.T) {
+			dir := npmLegacyOptionalLockDir(t, test.requirement)
+			err := ValidateManifest(&Manager{Name: "npm", Ecosystem: "npm"}, dir)
+			failed := err != nil
+			if failed != test.wantError {
+				t.Fatalf("expected error=%t, got %v", test.wantError, err)
+			}
+		})
+	}
+}
+
+func npmLegacyOptionalLockDir(t *testing.T, requirement string) string {
+	t.Helper()
+	dir := npmLockValidationDir(t, "optionalDependencies", requirement)
+	lockfile := `{"name":"demo","lockfileVersion":1,"requires":true,"dependencies":{"is-number":{"version":"7.0.0","resolved":"https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz","optional":true}}}`
+	path := filepath.Join(dir, "package-lock.json")
+	if err := os.WriteFile(path, []byte(lockfile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestValidateNPMLegacyOptionalResultRejectsIncomplete(t *testing.T) {
+	outputs := []string{
+		`not json`, `null`, `{}`, `{"dependencies":{"is-number":{}}}`,
+		`{"dependencies":{"is-number":{"version":"7.0.0","invalid":"^6.0.0"}}}`,
+		`{"dependencies":{"is-number":{"version":"7.0.0","missing":true}}}`,
+	}
+	for _, output := range outputs {
+		err := validateNPMLegacyOptionalResult([]byte(output), []string{"is-number"})
+		if err == nil {
+			t.Errorf("expected incomplete legacy validation to fail: %s", output)
+		}
+	}
+}
+
+func TestValidateManifestLegacyOptionalOverride(t *testing.T) {
+	t.Setenv("npm_config_cache", t.TempDir())
+	dir := t.TempDir()
+	files := map[string]string{
+		"package.json":      `{"name":"demo","optionalDependencies":{"is-odd":"3.0.1"},"overrides":{"is-number":"^7.0.0"}}`,
+		"package-lock.json": `{"name":"demo","lockfileVersion":1,"requires":true,"dependencies":{"is-odd":{"version":"3.0.1","resolved":"https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz","requires":{"is-number":"^6.0.0"},"optional":true},"is-number":{"version":"6.0.0","resolved":"https://registry.npmjs.org/is-number/-/is-number-6.0.0.tgz","optional":true}}}`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := ValidateManifest(&Manager{Name: "npm", Ecosystem: "npm"}, dir)
+	if err == nil {
+		t.Fatal("expected stale transitive optional dependency override to fail validation")
+	}
+}
+
+func TestValidateManifestLegacyOptionalLockMissingPackage(t *testing.T) {
+	t.Setenv("npm_config_cache", t.TempDir())
+	dir := npmLegacyOptionalLockDir(t, "^7.0.0")
+	lockfile := `{"name":"demo","lockfileVersion":1,"requires":true,"dependencies":{}}`
+	if err := os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte(lockfile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := ValidateManifest(&Manager{Name: "npm", Ecosystem: "npm"}, dir)
+	if err == nil {
+		t.Fatal("expected missing optional dependency in legacy lockfile to fail validation")
+	}
+}
+
+func TestValidateManifestLegacyOptionalPeerOptions(t *testing.T) {
+	t.Setenv("npm_config_cache", t.TempDir())
+	dir := npmLegacyOptionalLockDir(t, "^7.0.0")
+	manifest := `{"name":"demo","optionalDependencies":{"is-number":"^7.0.0"},"peerDependencies":{"missing-peer":"1.0.0"}}`
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := ValidateManifest(&Manager{Name: "npm", Ecosystem: "npm"}, dir, "install", "--legacy-peer-deps")
+	if err != nil {
+		t.Fatalf("expected legacy peer option to remain supported: %v", err)
+	}
 }
 
 func TestNPMLockOptions(t *testing.T) {

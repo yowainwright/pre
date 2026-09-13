@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestCheckWithVulns(t *testing.T) {
@@ -318,6 +319,127 @@ func TestCheckBatchDetailFailure(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected failed detail lookup to fail the scan, got %+v", results)
 	}
+}
+
+func TestCheckBatchDetailsConcurrent(t *testing.T) {
+	for _, failure := range []string{"", "package-2"} {
+		t.Run("failure="+failure, func(t *testing.T) {
+			checkConcurrentOSVDetails(t, failure)
+		})
+	}
+}
+
+func checkConcurrentOSVDetails(t *testing.T, failure string) {
+	t.Helper()
+	const count = 9
+	started := make(chan string, count)
+	release := make(chan struct{}, count)
+	setupOSVHeldDetails(t, started, release, failure)
+	queries, matches := osvConcurrentDetailQueries(count)
+	resultCh := make(chan [][]Vulnerability, 1)
+	errorCh := make(chan error, 1)
+	go func() {
+		results, err := checkBatchDetails(queries, matches)
+		resultCh <- results
+		errorCh <- err
+	}()
+	assertOSVDetailOverlap(t, started)
+	for index := 0; index < count; index++ {
+		release <- struct{}{}
+	}
+	results := <-resultCh
+	err := <-errorCh
+	if len(started) != count-5 {
+		t.Errorf("expected exactly %d detail requests, including the four held requests", count-1)
+	}
+	assertOSVConcurrentResults(t, queries, results, err, failure)
+}
+
+func setupOSVHeldDetails(t *testing.T, started chan string, release chan struct{}, failure string) {
+	t.Helper()
+	server := httptest.NewServer(osvHeldDetailHandler(started, release, failure))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(release) })
+	original := Endpoint
+	Endpoint = server.URL
+	t.Cleanup(func() { Endpoint = original })
+}
+
+func assertOSVConcurrentResults(t *testing.T, queries []Query, results [][]Vulnerability, err error, failure string) {
+	t.Helper()
+	if failure != "" {
+		unsafe := err == nil || results != nil
+		if unsafe {
+			t.Fatalf("failed lookup must fail the whole scan: results=%v error=%v", results, err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOSVDetailOrder(t, queries, results)
+}
+
+func assertOSVDetailOrder(t *testing.T, queries []Query, results [][]Vulnerability) {
+	t.Helper()
+	last := len(queries) - 1
+	for index, query := range queries[:last] {
+		misordered := len(results[index]) != 1 || results[index][0].ID != query.Name
+		if misordered {
+			t.Fatalf("misordered result for %s: %v", query.Name, results[index])
+		}
+	}
+	if len(results[last]) != 0 {
+		t.Fatal("clean query must remain clean without a detail lookup")
+	}
+}
+
+func assertOSVDetailOverlap(t *testing.T, started <-chan string) {
+	t.Helper()
+	for index := 0; index < 4; index++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Error("expected four overlapping detail requests")
+			return
+		}
+	}
+	select {
+	case name := <-started:
+		t.Errorf("concurrency limit exceeded by %s", name)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func osvConcurrentDetailQueries(count int) ([]Query, []osvResponse) {
+	queries := make([]Query, count)
+	matches := make([]osvResponse, count)
+	for index := range queries {
+		name := fmt.Sprintf("package-%d", index)
+		queries[index] = Query{Ecosystem: "npm", Name: name, Version: "1.0.0"}
+		if index < count-1 {
+			matches[index].Vulns = []osvVulnerability{{ID: name}}
+		}
+	}
+	return queries, matches
+}
+
+func osvHeldDetailHandler(started chan<- string, release <-chan struct{}, failure string) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var query osvQuery
+		if err := json.NewDecoder(request.Body).Decode(&query); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		started <- query.Package.Name
+		<-release
+		if query.Package.Name == failure {
+			http.Error(writer, "detail failed", http.StatusServiceUnavailable)
+			return
+		}
+		response := osvResponse{Vulns: []osvVulnerability{{ID: query.Package.Name}}}
+		_ = json.NewEncoder(writer).Encode(response)
+	})
 }
 
 func TestCheckBatchChunksQueries(t *testing.T) {
