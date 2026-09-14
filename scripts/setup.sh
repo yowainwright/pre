@@ -120,39 +120,27 @@ write_agent_hook_config() {
   dir="$(dirname "$settings")"
   mkdir -p "$dir" || return 1
   tmp="${settings}.$$"
-  write_agent_hook_json "$settings" > "$tmp" &&
-    mv "$tmp" "$settings"
+  if ! write_agent_hook_json "$settings" > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv "$tmp" "$settings"
 }
 
 write_agent_hook_json() {
   settings="$1"
-  printf '{\n'
-  printf '  "hooks": {\n'
-  printf '    "PostToolUse": [\n'
-  write_existing_agent_matchers "$settings"
-  write_agent_lint_matcher
-  printf '    ]\n'
-  printf '  }\n'
-  printf '}\n'
-}
-
-write_existing_agent_matchers() {
-  settings="$1"
-  [ -f "$settings" ] || return 0
-  extract_agent_matchers "$settings" |
-    while IFS= read -r matcher; do
-      [ -n "$matcher" ] || continue
-      [ "$matcher" = "Edit|MultiEdit|Write" ] && continue
-      printf '      {\n'
-      printf '        "matcher": "%s",\n' "$matcher"
-      printf '        "hooks": []\n'
-      printf '      },\n'
-    done
-}
-
-extract_agent_matchers() {
-  grep -o '"matcher"[[:space:]]*:[[:space:]]*"[^"]*"' "$1" 2>/dev/null |
-    sed 's/.*"matcher"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/'
+  matcher="$(write_agent_lint_matcher)"
+  if [ ! -e "$settings" ]; then
+    jq --null-input --argjson matcher "$matcher" '{hooks: {PostToolUse: [$matcher]}}'
+    return
+  fi
+  jq --slurp --exit-status --argjson matcher "$matcher" '
+    if length != 1 or (.[0] | type) != "object" then
+      error("expected one settings JSON object")
+    else
+      .[0] | .hooks.PostToolUse += [$matcher]
+    end
+  ' "$settings"
 }
 
 write_agent_lint_matcher() {
@@ -189,6 +177,7 @@ check_deps() {
   cmd_exists git  && ok "git"  || fail "git"  "not found — brew install git"
   cmd_exists make && ok "make" || fail "make" "not found — brew install make"
   cmd_exists gh   && ok "gh"   || fail "gh"   "not found — brew install gh"
+  cmd_exists jq   && ok "jq"   || fail "jq"   "not found — install jq for agent settings"
   cmd_exists op   && ok "op"   || fail "op"   "not found — brew install 1password-cli"
   cmd_exists svu  && ok "svu"  || fail "svu"  "not found — run: mise install"
   cmd_exists goreleaser && ok "goreleaser (release)" || warn "goreleaser (release)" "brew install goreleaser for local release snapshots"
