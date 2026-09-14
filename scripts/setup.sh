@@ -129,7 +129,8 @@ write_agent_hook_json() {
   matcher="$(write_agent_lint_matcher)"
   [ -e "$settings" ] || { write_new_agent_hook_json "$matcher"; return; }
   jq --slurp --exit-status --argjson matcher "$matcher" '
-    select(length == 1) | .[0] | objects | .hooks.PostToolUse += [$matcher]
+    select(length == 1) | .[0] | objects |
+    .hooks.PostToolUse |= ((. // []) as $existing | $existing + ([$matcher] - $existing))
   ' "$settings"
 }
 
