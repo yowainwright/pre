@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,6 +23,7 @@ const (
 	maxOSVResponseBytes      = 4 << 20
 	maxOSVBatchResponseBytes = 64 << 20
 	maxOSVBatchQueries       = 1000
+	maxOSVDetailConcurrency  = 4
 	SeverityCritical         = "CRITICAL"
 	SeverityHigh             = "HIGH"
 	SeverityMedium           = "MEDIUM"
@@ -121,9 +124,34 @@ func checkBatchChunk(endpoint string, queries []Query) ([][]Vulnerability, error
 	if len(response.Results) != len(queries) {
 		return nil, fmt.Errorf("decode: expected %d batch results, got %d", len(queries), len(response.Results))
 	}
-	results := make([][]Vulnerability, len(response.Results))
-	for index, result := range response.Results {
-		results[index] = vulnerabilitiesFrom(result.Vulns)
+	return checkBatchDetails(queries, response.Results)
+}
+
+func checkBatchDetails(queries []Query, matches []osvResponse) ([][]Vulnerability, error) {
+	results := make([][]Vulnerability, len(matches))
+	failures := make([]error, len(matches))
+	jobs := make(chan int, len(matches))
+	for index, match := range matches {
+		if len(match.Vulns) > 0 {
+			jobs <- index
+		}
+	}
+	close(jobs)
+	workers := min(maxOSVDetailConcurrency, len(jobs))
+	var pending sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		pending.Add(1)
+		go func() {
+			defer pending.Done()
+			for index := range jobs {
+				query := queries[index]
+				results[index], failures[index] = Check(query.Ecosystem, query.Name, query.Version)
+			}
+		}()
+	}
+	pending.Wait()
+	if err := errors.Join(failures...); err != nil {
+		return nil, err
 	}
 	return results, nil
 }

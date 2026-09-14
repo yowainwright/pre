@@ -123,7 +123,9 @@ func withReadManifestDir(fn func(*manager.Manager, string) []string) func() {
 
 func withValidateManifest(fn func(*manager.Manager, string) error) func() {
 	orig := validateManifestFn
-	validateManifestFn = fn
+	validateManifestFn = func(mgr *manager.Manager, dir string, _ ...string) error {
+		return fn(mgr, dir)
+	}
 	return func() { validateManifestFn = orig }
 }
 
@@ -522,6 +524,25 @@ func TestInterceptInvalidManifestBlocks(t *testing.T) {
 	})
 	if execCalled {
 		t.Error("expected invalid manifest to block npm ci")
+	}
+}
+
+func TestInstallFallbackForwardsManifestOptions(t *testing.T) {
+	args := []string{"install", "--legacy-peer-deps", "--omit", "dev"}
+	var received []string
+	original := validateManifestFn
+	validateManifestFn = func(_ *manager.Manager, _ string, options ...string) error {
+		received = options
+		return nil
+	}
+	defer func() { validateManifestFn = original }()
+	defer withReadManifestDir(func(*manager.Manager, string) []string { return nil })()
+	_, err := installFallbackPackages(npmMgr(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(received, args) {
+		t.Fatalf("expected original install options %v, got %v", args, received)
 	}
 }
 

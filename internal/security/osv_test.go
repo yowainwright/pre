@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestCheckWithVulns(t *testing.T) {
@@ -235,10 +236,15 @@ type osvBatchTestHandler struct {
 	requests             int
 	batchSizes           []int
 	includeVulnerability bool
+	detailStatus         int
 }
 
 func (handler *osvBatchTestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	handler.requests++
+	if request.URL.Path == "/v1/query" {
+		handler.serveDetails(writer)
+		return
+	}
 	var payload osvBatchRequest
 	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
@@ -247,10 +253,18 @@ func (handler *osvBatchTestHandler) ServeHTTP(writer http.ResponseWriter, reques
 	handler.batchSizes = append(handler.batchSizes, len(payload.Queries))
 	results := make([]osvResponse, len(payload.Queries))
 	if handler.includeVulnerability && len(results) > 0 {
-		vulnerability := osvVulnerability{ID: "CVE-2026-1234", Summary: "batch test"}
+		vulnerability := osvVulnerability{ID: "CVE-2026-1234"}
 		results[0].Vulns = []osvVulnerability{vulnerability}
 	}
 	_ = json.NewEncoder(writer).Encode(osvBatchResponse{Results: results})
+}
+
+func (handler *osvBatchTestHandler) serveDetails(writer http.ResponseWriter) {
+	if handler.detailStatus != 0 {
+		http.Error(writer, "detail lookup failed", handler.detailStatus)
+		return
+	}
+	_, _ = fmt.Fprintln(writer, `{"vulns":[{"id":"CVE-2026-1234","summary":"batch test","database_specific":{"severity":"CRITICAL"}}]}`)
 }
 
 type osvSingleTestHandler struct {
@@ -276,12 +290,156 @@ func TestCheckBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if handler.requests != 1 || len(results) != 2 {
-		t.Fatalf("expected one request and two results, got %d and %d", handler.requests, len(results))
+	if len(results) != 2 {
+		t.Fatalf("expected two results, got %d", len(results))
 	}
 	if len(results[0]) != 1 || results[0][0].ID != "CVE-2026-1234" {
 		t.Fatalf("unexpected first result: %+v", results[0])
 	}
+	hasFullDetails := results[0][0].Severity == SeverityCritical && results[0][0].Summary == "batch test"
+	if !hasFullDetails {
+		t.Errorf("expected full vulnerability details, got %+v", results[0][0])
+	}
+	hasExpectedBatchResult := handler.requests == 2 && len(results[1]) == 0
+	if !hasExpectedBatchResult {
+		t.Errorf("expected one detail lookup and a clean second result, got %d requests and %+v", handler.requests, results[1])
+	}
+}
+
+func TestCheckBatchDetailFailure(t *testing.T) {
+	handler := &osvBatchTestHandler{includeVulnerability: true, detailStatus: http.StatusServiceUnavailable}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	originalEndpoint := Endpoint
+	Endpoint = server.URL + "/v1/query"
+	defer func() { Endpoint = originalEndpoint }()
+
+	query := Query{Ecosystem: "npm", Name: "lodash", Version: "4.17.20"}
+	results, err := CheckBatch([]Query{query})
+	if err == nil {
+		t.Fatalf("expected failed detail lookup to fail the scan, got %+v", results)
+	}
+}
+
+func TestCheckBatchDetailsConcurrent(t *testing.T) {
+	for _, failure := range []string{"", "package-2"} {
+		t.Run("failure="+failure, func(t *testing.T) {
+			checkConcurrentOSVDetails(t, failure)
+		})
+	}
+}
+
+func checkConcurrentOSVDetails(t *testing.T, failure string) {
+	t.Helper()
+	const count = 9
+	started := make(chan string, count)
+	release := make(chan struct{}, count)
+	setupOSVHeldDetails(t, started, release, failure)
+	queries, matches := osvConcurrentDetailQueries(count)
+	resultCh := make(chan [][]Vulnerability, 1)
+	errorCh := make(chan error, 1)
+	go func() {
+		results, err := checkBatchDetails(queries, matches)
+		resultCh <- results
+		errorCh <- err
+	}()
+	assertOSVDetailOverlap(t, started)
+	for index := 0; index < count; index++ {
+		release <- struct{}{}
+	}
+	results := <-resultCh
+	err := <-errorCh
+	if len(started) != count-5 {
+		t.Errorf("expected exactly %d detail requests, including the four held requests", count-1)
+	}
+	assertOSVConcurrentResults(t, queries, results, err, failure)
+}
+
+func setupOSVHeldDetails(t *testing.T, started chan string, release chan struct{}, failure string) {
+	t.Helper()
+	server := httptest.NewServer(osvHeldDetailHandler(started, release, failure))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(release) })
+	original := Endpoint
+	Endpoint = server.URL
+	t.Cleanup(func() { Endpoint = original })
+}
+
+func assertOSVConcurrentResults(t *testing.T, queries []Query, results [][]Vulnerability, err error, failure string) {
+	t.Helper()
+	if failure != "" {
+		unsafe := err == nil || results != nil
+		if unsafe {
+			t.Fatalf("failed lookup must fail the whole scan: results=%v error=%v", results, err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOSVDetailOrder(t, queries, results)
+}
+
+func assertOSVDetailOrder(t *testing.T, queries []Query, results [][]Vulnerability) {
+	t.Helper()
+	last := len(queries) - 1
+	for index, query := range queries[:last] {
+		misordered := len(results[index]) != 1 || results[index][0].ID != query.Name
+		if misordered {
+			t.Fatalf("misordered result for %s: %v", query.Name, results[index])
+		}
+	}
+	if len(results[last]) != 0 {
+		t.Fatal("clean query must remain clean without a detail lookup")
+	}
+}
+
+func assertOSVDetailOverlap(t *testing.T, started <-chan string) {
+	t.Helper()
+	for index := 0; index < 4; index++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Error("expected four overlapping detail requests")
+			return
+		}
+	}
+	select {
+	case name := <-started:
+		t.Errorf("concurrency limit exceeded by %s", name)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func osvConcurrentDetailQueries(count int) ([]Query, []osvResponse) {
+	queries := make([]Query, count)
+	matches := make([]osvResponse, count)
+	for index := range queries {
+		name := fmt.Sprintf("package-%d", index)
+		queries[index] = Query{Ecosystem: "npm", Name: name, Version: "1.0.0"}
+		if index < count-1 {
+			matches[index].Vulns = []osvVulnerability{{ID: name}}
+		}
+	}
+	return queries, matches
+}
+
+func osvHeldDetailHandler(started chan<- string, release <-chan struct{}, failure string) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var query osvQuery
+		if err := json.NewDecoder(request.Body).Decode(&query); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		started <- query.Package.Name
+		<-release
+		if query.Package.Name == failure {
+			http.Error(writer, "detail failed", http.StatusServiceUnavailable)
+			return
+		}
+		response := osvResponse{Vulns: []osvVulnerability{{ID: query.Package.Name}}}
+		_ = json.NewEncoder(writer).Encode(response)
+	})
 }
 
 func TestCheckBatchChunksQueries(t *testing.T) {
