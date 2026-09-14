@@ -43,7 +43,7 @@ check_deps_missing_release_tools_counts() (
   printf "%s/%s/%s" "$passed" "$warned" "$failed"
 )
 
-check "check_deps requires svu" "5/2/1" "$(check_deps_missing_release_tools_counts)"
+check "check_deps requires svu" "6/2/1" "$(check_deps_missing_release_tools_counts)"
 
 # gh_authed
 check "gh_authed passes with true"  "0" "$(exit_code gh_authed "true")"

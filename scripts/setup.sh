@@ -24,14 +24,14 @@ op_authed() {
 }
 
 op_ref_resolves() {
-  label="$1"
-  env_file="$2"
+  label="${1:?}"
+  env_file="${2:?}"
   val="$(op run --env-file "$env_file" -- sh -c "echo \$$label" 2>/dev/null)"
   [ -n "$val" ]
 }
 
 gh_secret_exists() {
-  secret="$1"
+  secret="${1:?}"
   repo="${2:-yowainwright/pre}"
   gh secret list --repo "$repo" 2>/dev/null | grep -q "^$secret"
 }
@@ -62,7 +62,7 @@ post_merge_content() {
   cat <<'HOOK'
 #!/usr/bin/env sh
 set -e
-sh scripts/setup.sh
+./scripts/setup.sh
 HOOK
 }
 
@@ -75,7 +75,7 @@ hook_content() {
 }
 
 install_hook() {
-  hook="$1"
+  hook="${1:?}"
   name="${2:-pre-commit}"
   hook_content "$name" > "$hook"
   chmod +x "$hook"
@@ -111,36 +111,30 @@ claude_agent_hook_installed() {
 }
 
 merge_agent_hook_config() {
-  settings="$2"
+  settings="${2:?}"
   write_agent_hook_config "$settings"
 }
 
 write_agent_hook_config() {
-  settings="$1"
+  settings="${1:?}"
   dir="$(dirname "$settings")"
   mkdir -p "$dir" || return 1
   tmp="${settings}.$$"
-  if ! write_agent_hook_json "$settings" > "$tmp"; then
-    rm -f "$tmp"
-    return 1
-  fi
+  write_agent_hook_json "$settings" > "$tmp" || { rm -f "$tmp"; return 1; }
   mv "$tmp" "$settings"
 }
 
 write_agent_hook_json() {
-  settings="$1"
+  settings="${1:?}"
   matcher="$(write_agent_lint_matcher)"
-  if [ ! -e "$settings" ]; then
-    jq --null-input --argjson matcher "$matcher" '{hooks: {PostToolUse: [$matcher]}}'
-    return
-  fi
+  [ -e "$settings" ] || { write_new_agent_hook_json "$matcher"; return; }
   jq --slurp --exit-status --argjson matcher "$matcher" '
-    if length != 1 or (.[0] | type) != "object" then
-      error("expected one settings JSON object")
-    else
-      .[0] | .hooks.PostToolUse += [$matcher]
-    end
+    select(length == 1) | .[0] | objects | .hooks.PostToolUse += [$matcher]
   ' "$settings"
+}
+
+write_new_agent_hook_json() {
+  jq --null-input --argjson matcher "${1:?}" '{hooks: {PostToolUse: [$matcher]}}'
 }
 
 write_agent_lint_matcher() {
@@ -171,43 +165,87 @@ install_claude_agent_hook() {
     claude_agent_hook_installed "$root"
 }
 
+check_required_command() {
+  cmd_exists "${1:?}" || {
+    fail "$1" "not found — ${2:?}"
+    return
+  }
+  ok "$1"
+}
+
+check_optional_command() {
+  cmd_exists "${1:?}" || {
+    warn "${2:?}" "${3:?}"
+    return
+  }
+  ok "${2:?}"
+}
+
 check_deps() {
   echo "--- deps"
-  cmd_exists go   && ok "go"   || fail "go"   "not found — https://go.dev/dl"
-  cmd_exists git  && ok "git"  || fail "git"  "not found — brew install git"
-  cmd_exists make && ok "make" || fail "make" "not found — brew install make"
-  cmd_exists gh   && ok "gh"   || fail "gh"   "not found — brew install gh"
-  cmd_exists jq   && ok "jq"   || fail "jq"   "not found — install jq for agent settings"
-  cmd_exists op   && ok "op"   || fail "op"   "not found — brew install 1password-cli"
-  cmd_exists svu  && ok "svu"  || fail "svu"  "not found — run: mise install"
-  cmd_exists goreleaser && ok "goreleaser (release)" || warn "goreleaser (release)" "brew install goreleaser for local release snapshots"
-  cmd_exists cosign     && ok "cosign (optional)"    || warn "cosign (optional)"    "brew install cosign"
+  check_required_command go "https://go.dev/dl"
+  check_required_command git "brew install git"
+  check_required_command make "brew install make"
+  check_required_command gh "brew install gh"
+  check_required_command jq "install jq for agent settings"
+  check_required_command op "brew install 1password-cli"
+  check_required_command svu "run: mise install"
+  check_optional_command goreleaser "goreleaser (release)" "brew install goreleaser for local release snapshots"
+  check_optional_command cosign "cosign (optional)" "brew install cosign"
+}
+
+check_gh_auth() {
+  gh_authed || {
+    fail "gh authenticated" "run: gh auth login"
+    return
+  }
+  ok "gh authenticated"
+}
+
+check_op_auth() {
+  op_authed || {
+    fail "op authenticated" "run: op signin"
+    return
+  }
+  ok "op authenticated"
 }
 
 check_auth() {
   echo "--- auth"
-  gh_authed  && ok "gh authenticated" || fail "gh authenticated" "run: gh auth login"
-  op_authed  && ok "op authenticated" || fail "op authenticated" "run: op signin"
+  check_gh_auth
+  check_op_auth
 }
 
 check_env() {
   env_file="${1:-$(dirname "$0")/../.env.example}"
   echo "--- env secrets"
-  if cmd_exists op && op_authed; then
-    op_ref_resolves "HOMEBREW_TAP_TOKEN" "$env_file" && ok "HOMEBREW_TAP_TOKEN resolves" || fail "HOMEBREW_TAP_TOKEN resolves" "check op:// ref in $env_file"
-  else
-    warn "env secrets" "skipped — op not authenticated"
-  fi
+  op_authed || { warn "env secrets" "skipped — op not authenticated"; return; }
+  op_ref_resolves "HOMEBREW_TAP_TOKEN" "$env_file" || {
+    fail "HOMEBREW_TAP_TOKEN resolves" "check op:// ref in $env_file"
+    return
+  }
+  ok "HOMEBREW_TAP_TOKEN resolves"
 }
 
 check_secrets() {
   repo="${1:-yowainwright/pre}"
   echo "--- github secrets"
-  if cmd_exists gh && gh_authed; then
-    gh_secret_exists "HOMEBREW_TAP_TOKEN" "$repo" && ok "HOMEBREW_TAP_TOKEN set" || warn "HOMEBREW_TAP_TOKEN set" "run: op run --env-file .env.example -- make secrets"
-  else
-    warn "github secrets" "skipped — gh not authenticated"
-  fi
+  gh_authed || { warn "github secrets" "skipped — gh not authenticated"; return; }
+  gh_secret_exists "HOMEBREW_TAP_TOKEN" "$repo" || {
+    warn "HOMEBREW_TAP_TOKEN set" "run: op run --env-file .env.example -- make secrets"
+    return
+  }
+  ok "HOMEBREW_TAP_TOKEN set"
+}
+
+check_hook() {
+  hook="${1:?}"
+  name="${2:?}"
+  hook_installed "$hook" || install_hook "$hook" "$name" || {
+    fail "$name hook" "could not write $hook"
+    return
+  }
+  ok "$name hook installed"
 }
 
 check_hooks() {
@@ -215,26 +253,35 @@ check_hooks() {
   echo "--- git hooks"
   for name in pre-commit post-merge; do
     hook="$(hook_path "$root" "$name")"
-    if hook_installed "$hook"; then
-      ok "$name hook installed"
-    else
-      install_hook "$hook" "$name" && ok "$name hook installed" || fail "$name hook" "could not write $hook"
-    fi
+    check_hook "$hook" "$name"
   done
+}
+
+check_codex_agent_hook() {
+  install_codex_agent_hook "${1:?}" || {
+    fail "Codex agent lint hook" "could not merge scripts/agent/lint.sh into .codex/hooks.json"
+    return
+  }
+  ok "Codex agent lint hook installed"
+}
+
+check_claude_agent_hook() {
+  install_claude_agent_hook "${1:?}" || {
+    fail "Claude agent lint hook" "could not merge scripts/agent/lint.sh into .claude/settings.json"
+    return
+  }
+  ok "Claude agent lint hook installed"
 }
 
 check_agent_hooks() {
   root="${1:-$(git rev-parse --show-toplevel 2>/dev/null)}"
   echo "--- agent hooks"
-  install_codex_agent_hook "$root" &&
-    ok "Codex agent lint hook installed" ||
-    fail "Codex agent lint hook" "could not merge scripts/agent/lint.sh into .codex/hooks.json"
-  install_claude_agent_hook "$root" &&
-    ok "Claude agent lint hook installed" ||
-    fail "Claude agent lint hook" "could not merge scripts/agent/lint.sh into .claude/settings.json"
+  check_codex_agent_hook "$root"
+  check_claude_agent_hook "$root"
 }
 
 main() {
+  [ "${_PRE_SETUP_SOURCED:-0}" = "1" ] && return 0
   check_deps
   echo ""; check_auth
   echo ""; check_env
@@ -246,6 +293,4 @@ main() {
   [ "$failed" -eq 0 ]
 }
 
-if [ "${_PRE_SETUP_SOURCED:-0}" != "1" ]; then
-  main "$@"
-fi
+main "$@"
