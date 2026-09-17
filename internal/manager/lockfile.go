@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 // ReadNPMProject validates npm project files and prefers locked package versions.
@@ -62,7 +64,6 @@ type cargoLockState struct {
 	current           cargoLockPackage
 	seen              map[string]bool
 	result            []string
-	active            bool
 	unsupportedSource bool
 }
 
@@ -80,75 +81,66 @@ func readCargoLock(dir string) []string {
 }
 
 func parseCargoLock(data []byte) (cargoLockState, error) {
-	content := string(data)
-	reader := strings.NewReader(content)
-	scanner := bufio.NewScanner(reader)
 	state := newCargoLockState()
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		state.consume(line)
+	if err := checkCargoLockLineLimit(data); err != nil {
+		return state, err
 	}
-	state.flush()
-	return state, scanner.Err()
+	err := state.decodeTOML(data)
+	return state, err
+}
+
+func (s *cargoLockState) decodeTOML(data []byte) error {
+	var document map[string]toml.Primitive
+	metadata, err := toml.Decode(string(data), &document)
+	if err != nil {
+		return err
+	}
+	raw, exists := document["package"]
+	if !exists {
+		return nil
+	}
+	var entries []map[string]toml.Primitive
+	if err := metadata.PrimitiveDecode(raw, &entries); err != nil {
+		return err
+	}
+	return s.appendTOMLPackages(&metadata, entries)
+}
+
+func (s *cargoLockState) appendTOMLPackages(metadata *toml.MetaData, entries []map[string]toml.Primitive) error {
+	for _, fields := range entries {
+		if err := s.decodeTOMLFields(metadata, fields); err != nil {
+			return err
+		}
+		s.flush()
+	}
+	return nil
+}
+
+func (s *cargoLockState) decodeTOMLFields(metadata *toml.MetaData, fields map[string]toml.Primitive) error {
+	for _, key := range []string{"name", "version", "source"} {
+		raw, exists := fields[key]
+		if !exists {
+			continue
+		}
+		var value string
+		if err := metadata.PrimitiveDecode(raw, &value); err != nil {
+			return err
+		}
+		s.set(key, value)
+	}
+	return nil
+}
+
+func checkCargoLockLineLimit(data []byte) error {
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+	}
+	return scanner.Err()
 }
 
 func newCargoLockState() cargoLockState {
 	seen := make(map[string]bool)
 	return cargoLockState{seen: seen}
-}
-
-func (s *cargoLockState) consume(line string) {
-	if isCargoLockPackageHeader(line) {
-		s.flush()
-		s.active = true
-		return
-	}
-	if !s.active {
-		return
-	}
-	if strings.HasPrefix(line, "[") {
-		s.flush()
-		s.active = false
-		return
-	}
-	s.consumeField(line)
-}
-
-func isCargoLockPackageHeader(line string) bool {
-	if !strings.HasPrefix(line, "[[") || !strings.HasSuffix(line, "]]") {
-		return false
-	}
-	name := strings.TrimSpace(line[2 : len(line)-2])
-	return strings.Trim(name, `"'`) == "package"
-}
-
-func (s *cargoLockState) consumeField(line string) {
-	key, value, ok := strings.Cut(line, "=")
-	if !ok {
-		return
-	}
-	key = strings.TrimSpace(key)
-	trimmedValue := cargoLockString(value)
-	s.set(key, trimmedValue)
-}
-
-func cargoLockString(value string) string {
-	trimmed := strings.TrimSpace(value)
-	if len(trimmed) < 2 || (trimmed[0] != '"' && trimmed[0] != '\'') {
-		return ""
-	}
-	quote := trimmed[0]
-	escaped := false
-	for index := 1; index < len(trimmed); index++ {
-		if trimmed[index] == quote && !escaped {
-			return trimmed[1:index]
-		}
-		escaped = trimmed[index] == '\\' && !escaped
-		if trimmed[index] != '\\' {
-			escaped = false
-		}
-	}
-	return ""
 }
 
 func (s *cargoLockState) set(key, value string) {
