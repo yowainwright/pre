@@ -480,17 +480,30 @@ func cargoSeparateManifestPath(args []string, index int) (string, bool, error) {
 }
 
 func installFallbackPackages(mgr *manager.Manager, args []string) ([]string, error) {
-	if mgr == nil || mgr.Name != "cargo" {
-		dir, err := installProjectDir(mgr, args)
-		if err != nil {
-			return nil, err
-		}
-		if err := validateManifestFn(mgr, dir, args...); err != nil {
-			return nil, err
-		}
-		return readManifestDirFn(mgr, dir), nil
+	isCargo := mgr != nil && mgr.Name == "cargo"
+	if isCargo {
+		return cargoFallbackPackages(mgr, args)
 	}
-	return cargoFallbackPackages(mgr, args)
+	dir, err := installProjectDir(mgr, args)
+	if err != nil {
+		return nil, err
+	}
+	return readProjectPackages(mgr, dir, args)
+}
+
+func readProjectPackages(mgr *manager.Manager, dir string, args []string) ([]string, error) {
+	isNPM := false
+	if mgr != nil {
+		isNPM = mgr.Name == "npm" && mgr.Ecosystem == "npm"
+	}
+	if isNPM {
+		packages, _, err := manager.ReadNPMProject(dir, args...)
+		return packages, err
+	}
+	if err := validateManifestFn(mgr, dir, args...); err != nil {
+		return nil, err
+	}
+	return readManifestDirFn(mgr, dir), nil
 }
 
 func installProjectDir(mgr *manager.Manager, args []string) (string, error) {

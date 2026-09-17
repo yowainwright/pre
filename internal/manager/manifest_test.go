@@ -1,8 +1,11 @@
 package manager
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"testing"
 )
@@ -30,6 +33,144 @@ func TestReadPackageJSONMissing(t *testing.T) {
 	if names != nil {
 		t.Errorf("expected nil for missing file, got %v", names)
 	}
+}
+
+func TestReadPackageJSONResultMissing(t *testing.T) {
+	packages, exists, err := readPackageJSONResult(t.TempDir())
+	unexpectedResult := packages != nil || exists || err != nil
+	if unexpectedResult {
+		t.Fatalf("expected absent manifest without error, got %v, %t, %v", packages, exists, err)
+	}
+}
+
+func TestReadPackageJSONResultEmpty(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	packages, exists, err := readPackageJSONResult(dir)
+	validResult := len(packages) == 0 && exists && err == nil
+	if !validResult {
+		t.Fatalf("expected present empty manifest, got %v, %t, %v", packages, exists, err)
+	}
+}
+
+func TestReadPackageJSONResultBadJSON(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte(`{"dependencies":{"react":"18.0.0"},"devDependencies":`)
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	packages, exists, err := readPackageJSONResult(dir)
+	var syntaxError *json.SyntaxError
+	validResult := packages == nil && exists && errors.As(err, &syntaxError)
+	if !validResult {
+		t.Fatalf("expected present manifest with syntax error and no packages, got %v, %t, %v", packages, exists, err)
+	}
+}
+
+func TestReadPackageJSONResultReadError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "package.json")
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	packages, _, err := readPackageJSONResult(dir)
+	var pathError *os.PathError
+	validResult := packages == nil && errors.As(err, &pathError)
+	if !validResult {
+		t.Fatalf("expected file read error and no packages, got %v, %v", packages, err)
+	}
+}
+
+func TestReadNPMProjectMissing(t *testing.T) {
+	packages, exists, err := ReadNPMProject(t.TempDir())
+	unexpectedResult := packages != nil || exists || err != nil
+	if unexpectedResult {
+		t.Fatalf("expected absent project without error, got %v, %t, %v", packages, exists, err)
+	}
+}
+
+func TestReadNPMProjectEmpty(t *testing.T) {
+	for _, name := range []string{"package.json", "package-lock.json"} {
+		t.Run(name, func(t *testing.T) {
+			dir := npmProjectFile(t, name, `{}`)
+			packages, exists, err := ReadNPMProject(dir)
+			validResult := len(packages) == 0 && exists && err == nil
+			if !validResult {
+				t.Fatalf("expected present empty project, got %v, %t, %v", packages, exists, err)
+			}
+		})
+	}
+}
+
+func TestReadNPMProjectManifest(t *testing.T) {
+	manifest := `{"dependencies":{"react":"^18.0.0"}}`
+	dir := npmProjectFile(t, "package.json", manifest)
+	packages, exists, err := ReadNPMProject(dir)
+	expected := []string{"react@^18.0.0"}
+	validResult := exists && err == nil && slices.Equal(packages, expected)
+	if !validResult {
+		t.Fatalf("expected manifest requirements, got %v, %t, %v", packages, exists, err)
+	}
+}
+
+func TestReadNPMProjectPrefersLock(t *testing.T) {
+	dir := npmLockValidationDir(t, "dependencies", "^7.0.0")
+	packages, exists, err := ReadNPMProject(dir)
+	expected := []string{"is-number@7.0.0"}
+	validResult := exists && err == nil && slices.Equal(packages, expected)
+	if !validResult {
+		t.Fatalf("expected locked version instead of manifest range, got %v, %t, %v", packages, exists, err)
+	}
+}
+
+func TestReadNPMProjectRejectsStaleLock(t *testing.T) {
+	dir := npmLockValidationDir(t, "dependencies", "^6.0.0")
+	packages, _, err := ReadNPMProject(dir)
+	unexpectedResult := packages != nil || err == nil
+	if unexpectedResult {
+		t.Fatalf("expected stale lock error and no packages, got %v, %v", packages, err)
+	}
+}
+
+func TestReadNPMProjectRejectsInvalidFiles(t *testing.T) {
+	for _, name := range []string{"package.json", "package-lock.json"} {
+		t.Run(name, func(t *testing.T) {
+			dir := npmProjectFile(t, name, `not json`)
+			packages, _, err := ReadNPMProject(dir)
+			unexpectedResult := packages != nil || err == nil
+			if unexpectedResult {
+				t.Fatalf("expected parse error and no packages, got %v, %v", packages, err)
+			}
+		})
+	}
+}
+
+func TestReadNPMProjectPreservesValidationOptions(t *testing.T) {
+	dir := npmPeerConflictDir(t)
+	packages, _, err := ReadNPMProject(dir)
+	unexpectedResult := packages != nil || err == nil
+	if unexpectedResult {
+		t.Fatalf("expected peer conflict and no packages, got %v, %v", packages, err)
+	}
+	packages, exists, err := ReadNPMProject(dir, "install", "--legacy-peer-deps")
+	slices.Sort(packages)
+	expected := []string{"host@1.0.0", "plugin@1.0.0"}
+	validResult := exists && err == nil && slices.Equal(packages, expected)
+	if !validResult {
+		t.Fatalf("expected legacy-peer-deps to preserve valid install, got %v, %t, %v", packages, exists, err)
+	}
+}
+
+func npmProjectFile(t *testing.T, name, content string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func TestReadPackageJSONDeduplicates(t *testing.T) {

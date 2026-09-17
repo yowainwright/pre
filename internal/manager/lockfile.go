@@ -8,6 +8,21 @@ import (
 	"strings"
 )
 
+// ReadNPMProject validates npm project files and prefers locked package versions.
+// When err is nil, the boolean reports whether a supported project file exists.
+func ReadNPMProject(dir string, args ...string) ([]string, bool, error) {
+	if err := validateNPMProject("npm", dir, args); err != nil {
+		return nil, false, err
+	}
+	packages, lockExists, err := readPackageLockResult(dir)
+	hasLockResult := err != nil || len(packages) > 0
+	if hasLockResult {
+		return packages, lockExists, err
+	}
+	packages, manifestExists, err := readPackageJSONResult(dir)
+	return packages, lockExists || manifestExists, err
+}
+
 func ReadLockfile(mgr *Manager, dir string) []string {
 	switch mgr.Ecosystem {
 	case "npm":
@@ -212,38 +227,54 @@ func readNPMLockfile(dir string) []string {
 }
 
 func readPackageLockJSON(dir string) []string {
-	data, err := os.ReadFile(filepath.Join(dir, npmPackageLockFilename))
-	if err != nil {
-		return nil
+	packages, _, _ := readPackageLockResult(dir)
+	return packages
+}
+
+func readPackageLockResult(dir string) ([]string, bool, error) {
+	lockfile, err := readPackageLock(filepath.Join(dir, npmPackageLockFilename))
+	lockUnavailable := err != nil || lockfile == nil
+	if lockUnavailable {
+		return nil, false, err
 	}
-	var lockfile packageLock
-	if err := json.Unmarshal(data, &lockfile); err != nil {
-		return nil
-	}
+	return packageLockPackages(lockfile), true, nil
+}
+
+func packageLockPackages(lockfile *packageLock) []string {
 	seen := make(map[string]bool, len(lockfile.Packages)+len(lockfile.Dependencies))
-	var result []string
-	if len(lockfile.Packages) > 0 {
-		for path, pkg := range lockfile.Packages {
-			if path == "" || pkg.Version == "" {
-				continue
-			}
-			name := packageLockPackageName(path)
-			if pkg.Name != "" {
-				name = pkg.Name
-			}
-			spec := name + "@" + pkg.Version
-			if seen[spec] {
-				continue
-			}
-			seen[spec] = true
-			result = append(result, spec)
-		}
-		if len(result) > 0 {
-			return result
-		}
+	result := packageLockEntries(lockfile.Packages, seen)
+	if len(result) > 0 {
+		return result
 	}
 	appendPackageLockDependencies(&result, seen, lockfile.Dependencies, 0)
 	return result
+}
+
+func packageLockEntries(entries map[string]packageLockEntry, seen map[string]bool) []string {
+	var result []string
+	for path, pkg := range entries {
+		spec := packageLockEntrySpec(path, pkg)
+		skipEntry := spec == "" || seen[spec]
+		if skipEntry {
+			continue
+		}
+		seen[spec] = true
+		result = append(result, spec)
+	}
+	return result
+}
+
+func packageLockEntrySpec(path string, pkg packageLockEntry) string {
+	missingVersion := path == "" || pkg.Version == ""
+	if missingVersion {
+		return ""
+	}
+	name := pkg.Name
+	if name == "" {
+		name = packageLockPackageName(path)
+	}
+	spec := name + "@" + pkg.Version
+	return spec
 }
 
 func packageLockPackageName(path string) string {
