@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -894,6 +897,113 @@ source = "git+https://example.com/repo"
 	if len(pkgs) != 2 || !set["serde@1.0.217"] || !set["regex@1.11.1"] {
 		t.Errorf("unexpected Cargo.lock packages: %v", pkgs)
 	}
+}
+
+const cargoLockFixture = "[[package]]\nname = \"serde\"\nversion = \"1.0.217\"\nsource = \"sparse+https://index.crates.io/\"\n"
+
+func TestReadCargoLockTOMLSyntax(t *testing.T) {
+	for name, input := range cargoLockSyntaxFixtures() {
+		t.Run(name, func(t *testing.T) {
+			want := []string{"serde@1.0.217"}
+			assertCargoLockPackages(t, input, want)
+		})
+	}
+}
+
+func cargoLockSyntaxFixtures() map[string]string {
+	quotedKey := strings.ReplaceAll(cargoLockFixture, "name =", `"name" =`)
+	escapedSource := strings.ReplaceAll(cargoLockFixture, "index.crates.io", `index\u002ecrates.io`)
+	commentedHeader := strings.ReplaceAll(cargoLockFixture, "[[package]]", "[[package]] # dependency")
+	literalStrings := strings.ReplaceAll(cargoLockFixture, `"`, "'")
+	quotedTable := strings.ReplaceAll(cargoLockFixture, "[[package]]", "[[ 'package' ]]")
+	metadata := cargoLockFixture + "dependencies = ['other 1.0.0']\n[package.metadata]\nnote = 'ignored'\n"
+	return map[string]string{
+		"quoted key": quotedKey, "escaped source": escapedSource,
+		"header comment": commentedHeader, "literal strings": literalStrings,
+		"quoted table": quotedTable, "extra metadata": metadata,
+	}
+}
+
+func TestReadCargoLockCaseSensitiveKeys(t *testing.T) {
+	for _, key := range []string{"package", "name", "version", "source"} {
+		t.Run(key, func(t *testing.T) {
+			uppercase := strings.ToUpper(key)
+			input := strings.ReplaceAll(cargoLockFixture, key, uppercase)
+			assertCargoLockPackages(t, input, nil)
+		})
+	}
+}
+
+func TestReadCargoLockIgnoresUppercaseSource(t *testing.T) {
+	input := cargoLockFixture + "SOURCE='git+https://example.com/repo'\n"
+	want := []string{"serde@1.0.217"}
+	assertCargoLockPackages(t, input, want)
+}
+
+func TestReadCargoLockUppercaseSourceCannotBypassRejection(t *testing.T) {
+	input := strings.ReplaceAll(cargoLockFixture, "sparse+https://index.crates.io/", "git+https://example.com/repo")
+	input += "SOURCE='sparse+https://index.crates.io/'\n"
+	assertCargoLockError(t, input, "unsupported Cargo source")
+}
+
+func TestReadCargoLockQuotedSourceCannotBypassRejection(t *testing.T) {
+	input := strings.ReplaceAll(cargoLockFixture, "sparse+https://index.crates.io/", "git+https://example.com/repo")
+	input = strings.ReplaceAll(input, "source =", `"source" =`)
+	assertCargoLockError(t, input, "unsupported Cargo source")
+}
+
+func TestReadCargoLockRejectsInvalidTOML(t *testing.T) {
+	inputs := []string{
+		cargoLockFixture + "source='git+https://example.com/repo'\n",
+		cargoLockFixture + "broken = [\n",
+		strings.ReplaceAll(cargoLockFixture, `"1.0.217"`, "42"),
+		strings.ReplaceAll(cargoLockFixture, `"sparse+https://index.crates.io/"`, "false"),
+		"package = 42\n",
+	}
+	for index, input := range inputs {
+		name := fmt.Sprintf("case-%d", index)
+		t.Run(name, func(t *testing.T) {
+			assertCargoLockError(t, input, "parse ")
+		})
+	}
+}
+
+func TestReadCargoLockPreservesOrderAndDeduplicates(t *testing.T) {
+	local := "[[package]]\nname='app'\nversion='1.0.0'\n"
+	second := strings.ReplaceAll(cargoLockFixture, "serde", "regex")
+	input := cargoLockFixture + local + second + cargoLockFixture
+	want := []string{"serde@1.0.217", "regex@1.0.217"}
+	assertCargoLockPackages(t, input, want)
+}
+
+func assertCargoLockPackages(t *testing.T, input string, want []string) {
+	t.Helper()
+	packages, err := readCargoLockFixture(t, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(packages, want) {
+		t.Fatalf("expected packages %v, got %v", want, packages)
+	}
+}
+
+func assertCargoLockError(t *testing.T, input, message string) {
+	t.Helper()
+	packages, err := readCargoLockFixture(t, input)
+	if err == nil {
+		t.Fatalf("expected %q error for %q", message, input)
+	}
+	valid := packages == nil && strings.Contains(err.Error(), message)
+	if !valid {
+		t.Fatalf("expected no packages and %q error, got packages=%v error=%v", message, packages, err)
+	}
+}
+
+func readCargoLockFixture(t *testing.T, input string) ([]string, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "Cargo.lock")
+	writeCargoTestFile(t, path, input)
+	return readCargoLockFile(path)
 }
 
 func toSet(ss []string) map[string]bool {

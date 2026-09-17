@@ -251,12 +251,24 @@ func (handler *osvBatchTestHandler) ServeHTTP(writer http.ResponseWriter, reques
 		return
 	}
 	handler.batchSizes = append(handler.batchSizes, len(payload.Queries))
-	results := make([]osvResponse, len(payload.Queries))
-	if handler.includeVulnerability && len(results) > 0 {
-		vulnerability := osvVulnerability{ID: "CVE-2026-1234"}
-		results[0].Vulns = []osvVulnerability{vulnerability}
+	matched := 0
+	if handler.includeVulnerability {
+		matched = 1
 	}
-	_ = json.NewEncoder(writer).Encode(osvBatchResponse{Results: results})
+	results := osvBatchFixtureResults(len(payload.Queries), matched)
+	response := map[string]any{"results": results}
+	_ = json.NewEncoder(writer).Encode(response)
+}
+
+func osvBatchFixtureResults(count, matched int) []json.RawMessage {
+	results := make([]json.RawMessage, count)
+	for index := range results {
+		results[index] = json.RawMessage(`{}`)
+		if index < matched {
+			results[index] = json.RawMessage(`{"vulns":[{"id":"CVE-2026-1234","modified":"2026-09-14T00:00:00Z"}]}`)
+		}
+	}
+	return results
 }
 
 func (handler *osvBatchTestHandler) serveDetails(writer http.ResponseWriter) {
@@ -335,11 +347,11 @@ func checkConcurrentOSVDetails(t *testing.T, failure string) {
 	started := make(chan string, count)
 	release := make(chan struct{}, count)
 	setupOSVHeldDetails(t, started, release, failure)
-	queries, matches := osvConcurrentDetailQueries(count)
+	queries, matches := osvConcurrentDetailQueries(t, count)
 	resultCh := make(chan [][]Vulnerability, 1)
 	errorCh := make(chan error, 1)
 	go func() {
-		results, err := checkBatchDetails(queries, matches)
+		results, err := checkBatchDetails(queries, matches.Results)
 		resultCh <- results
 		errorCh <- err
 	}()
@@ -411,15 +423,22 @@ func assertOSVDetailOverlap(t *testing.T, started <-chan string) {
 	}
 }
 
-func osvConcurrentDetailQueries(count int) ([]Query, []osvResponse) {
+func osvConcurrentDetailQueries(t *testing.T, count int) ([]Query, osvBatchResponse) {
+	t.Helper()
 	queries := make([]Query, count)
-	matches := make([]osvResponse, count)
 	for index := range queries {
 		name := fmt.Sprintf("package-%d", index)
 		queries[index] = Query{Ecosystem: "npm", Name: name, Version: "1.0.0"}
-		if index < count-1 {
-			matches[index].Vulns = []osvVulnerability{{ID: name}}
-		}
+	}
+	results := osvBatchFixtureResults(count, count-1)
+	payload := map[string]any{"results": results}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var matches osvBatchResponse
+	if err := json.Unmarshal(data, &matches); err != nil {
+		t.Fatal(err)
 	}
 	return queries, matches
 }

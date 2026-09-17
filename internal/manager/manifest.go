@@ -75,13 +75,20 @@ func readManifestDir(mgr *Manager, dir string) []string {
 }
 
 func readPackageJSON(dir string) []string {
-	data, err := os.ReadFile(dir + "/package.json")
-	if err != nil {
-		return nil
+	packages, _, _ := readPackageJSONResult(dir)
+	return packages
+}
+
+func readPackageJSONResult(dir string) ([]string, bool, error) {
+	path := dir + "/package.json"
+	data, exists, err := readOptionalProjectFile(path)
+	manifestUnavailable := err != nil || !exists
+	if manifestUnavailable {
+		return nil, exists, err
 	}
 	var pkg npmPackageManifest
 	if err := json.Unmarshal(data, &pkg); err != nil {
-		return nil
+		return nil, true, fmt.Errorf("parse %s: %w", path, err)
 	}
 	count := len(pkg.Dependencies) + len(pkg.DevDependencies) + len(pkg.OptionalDependencies)
 	seen := make(map[string]bool, count)
@@ -89,7 +96,7 @@ func readPackageJSON(dir string) []string {
 	names = appendNPMDependencySpecs(names, seen, pkg.Dependencies)
 	names = appendNPMDependencySpecs(names, seen, pkg.DevDependencies)
 	names = appendNPMDependencySpecs(names, seen, pkg.OptionalDependencies)
-	return names
+	return names, true, nil
 }
 
 func appendNPMDependencySpecs(names []string, seen map[string]bool, deps map[string]string) []string {

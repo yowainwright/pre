@@ -121,12 +121,17 @@ func withReadManifestDir(fn func(*manager.Manager, string) []string) func() {
 	return func() { readManifestDirFn = orig }
 }
 
-func withValidateManifest(fn func(*manager.Manager, string) error) func() {
-	orig := validateManifestFn
-	validateManifestFn = func(mgr *manager.Manager, dir string, _ ...string) error {
-		return fn(mgr, dir)
+func withNPMProject(t *testing.T, files map[string]string) func() {
+	t.Helper()
+	dir := t.TempDir()
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		data := []byte(content)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	return func() { validateManifestFn = orig }
+	return withWorkingDir(t, dir)
 }
 
 func withReadRequirementsFile(fn func(string) ([]string, error)) func() {
@@ -494,12 +499,13 @@ func TestInterceptEmptyArgs(t *testing.T) {
 }
 
 func TestInterceptNPMCI(t *testing.T) {
+	files := map[string]string{"package-lock.json": `{"packages":{"node_modules/react":{"version":"18.0.0"}}}`}
+	defer withNPMProject(t, files)()
 	securityCalled := false
 	defer withStdinInput("y\n")()
 	defer withExecFn(noopExec)()
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
-	defer withReadManifestDir(func(*manager.Manager, string) []string { return []string{"react@18.0.0"} })()
 	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) {
 		securityCalled = true
 		return nil, nil
@@ -513,11 +519,10 @@ func TestInterceptNPMCI(t *testing.T) {
 }
 
 func TestInterceptInvalidManifestBlocks(t *testing.T) {
+	files := map[string]string{"package-lock.json": `not json`}
+	defer withNPMProject(t, files)()
 	execCalled := false
 	defer withExecFn(func(string, []string) { execCalled = true })()
-	defer withValidateManifest(func(*manager.Manager, string) error {
-		return errors.New("invalid package-lock.json")
-	})()
 
 	expectProcessExit(t, 1, func() {
 		Intercept(npmMgr(), []string{"ci"})
@@ -527,23 +532,27 @@ func TestInterceptInvalidManifestBlocks(t *testing.T) {
 	}
 }
 
-func TestInstallFallbackForwardsManifestOptions(t *testing.T) {
-	args := []string{"install", "--legacy-peer-deps", "--omit", "dev"}
-	var received []string
-	original := validateManifestFn
-	validateManifestFn = func(_ *manager.Manager, _ string, options ...string) error {
-		received = options
-		return nil
+func TestInstallFallbackPreservesNPMResolutionOptions(t *testing.T) {
+	defer withNPMProject(t, npmPeerConflictFiles())()
+	if _, err := installFallbackPackages(npmMgr(), []string{"install"}); err == nil {
+		t.Fatal("expected conflicting peers to fail without legacy-peer-deps")
 	}
-	defer func() { validateManifestFn = original }()
-	defer withReadManifestDir(func(*manager.Manager, string) []string { return nil })()
-	_, err := installFallbackPackages(npmMgr(), args)
+	args := []string{"install", "--legacy-peer-deps", "--omit", "dev"}
+	packages, err := installFallbackPackages(npmMgr(), args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(received, args) {
-		t.Fatalf("expected original install options %v, got %v", args, received)
+	slices.Sort(packages)
+	want := []string{"host@1.0.0", "plugin@1.0.0"}
+	if !slices.Equal(packages, want) {
+		t.Fatalf("expected locked packages %v, got %v", want, packages)
 	}
+}
+
+func npmPeerConflictFiles() map[string]string {
+	manifest := `{"name":"demo","dependencies":{"host":"1.0.0","plugin":"1.0.0"}}`
+	lockfile := `{"name":"demo","lockfileVersion":3,"packages":{"":{"name":"demo","dependencies":{"host":"1.0.0","plugin":"1.0.0"}},"node_modules/host":{"version":"1.0.0","resolved":"https://registry.npmjs.org/host/-/host-1.0.0.tgz"},"node_modules/plugin":{"version":"1.0.0","resolved":"https://registry.npmjs.org/plugin/-/plugin-1.0.0.tgz","peerDependencies":{"host":"^2.0.0"}}}}`
+	return map[string]string{"package.json": manifest, "package-lock.json": lockfile}
 }
 
 func TestInterceptUnsafePackageLockBlocks(t *testing.T) {
@@ -786,12 +795,13 @@ func TestInterceptNPMPublicRegistry(t *testing.T) {
 
 func assertPublicRegistryInstall(t *testing.T, mgr *manager.Manager, args []string) {
 	t.Helper()
+	files := map[string]string{"package-lock.json": `{"packages":{"node_modules/react":{"version":"18.2.0"}}}`}
+	defer withNPMProject(t, files)()
 	scanned, executed := false, false
 	defer withStdinInput("y\n")()
 	defer withExecFn(func(string, []string) { executed = true })()
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
-	defer withReadManifestDir(func(*manager.Manager, string) []string { return []string{"react@18.2.0"} })()
 	defer withSecurityBatchCheck(func(queries []security.Query) ([][]security.Vulnerability, error) {
 		want := []security.Query{{Ecosystem: "npm", Name: "react", Version: "18.2.0"}}
 		scanned = slices.Equal(queries, want)
@@ -1327,6 +1337,8 @@ func TestInterceptMissingRequirementFileBlocks(t *testing.T) {
 }
 
 func TestInterceptInstallManifestFallback(t *testing.T) {
+	files := map[string]string{"package.json": `{"dependencies":{"lodash":"1.0.0","react":"18.0.0"}}`}
+	defer withNPMProject(t, files)()
 	execCalled := false
 	defer withStdinInput("y\n")()
 	defer withExecFn(func(name string, args []string) { execCalled = true })()
@@ -1338,9 +1350,6 @@ func TestInterceptInstallManifestFallback(t *testing.T) {
 	})()
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
-	defer withReadManifestDir(func(mgr *manager.Manager, _ string) []string {
-		return []string{"lodash@1.0.0", "react@18.0.0"}
-	})()
 	Intercept(npmMgr(), []string{"install"})
 	if !execCalled {
 		t.Error("expected ExecFn called after scanning manifest packages")
@@ -1348,9 +1357,10 @@ func TestInterceptInstallManifestFallback(t *testing.T) {
 }
 
 func TestInterceptInstallManifestEmpty(t *testing.T) {
+	files := map[string]string{"package.json": `{}`}
+	defer withNPMProject(t, files)()
 	execCalled := false
 	defer withExecFn(func(name string, args []string) { execCalled = true })()
-	defer withReadManifestDir(func(mgr *manager.Manager, _ string) []string { return nil })()
 
 	Intercept(npmMgr(), []string{"install"})
 	if !execCalled {

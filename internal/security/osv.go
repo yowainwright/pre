@@ -57,7 +57,17 @@ type osvBatchRequest struct {
 }
 
 type osvBatchResponse struct {
-	Results []osvResponse `json:"results"`
+	Results []osvBatchResult `json:"results"`
+}
+
+type osvBatchResult struct {
+	Vulns []osvMatch `json:"vulns"`
+}
+
+// Batch matches identify vulnerabilities; Check supplies their full details.
+type osvMatch struct {
+	ID       string `json:"id"`
+	Modified string `json:"modified"`
 }
 
 type severityEntry struct {
@@ -127,16 +137,10 @@ func checkBatchChunk(endpoint string, queries []Query) ([][]Vulnerability, error
 	return checkBatchDetails(queries, response.Results)
 }
 
-func checkBatchDetails(queries []Query, matches []osvResponse) ([][]Vulnerability, error) {
+func checkBatchDetails(queries []Query, matches []osvBatchResult) ([][]Vulnerability, error) {
 	results := make([][]Vulnerability, len(matches))
 	failures := make([]error, len(matches))
-	jobs := make(chan int, len(matches))
-	for index, match := range matches {
-		if len(match.Vulns) > 0 {
-			jobs <- index
-		}
-	}
-	close(jobs)
+	jobs := osvDetailJobs(matches)
 	workers := min(maxOSVDetailConcurrency, len(jobs))
 	var pending sync.WaitGroup
 	for worker := 0; worker < workers; worker++ {
@@ -154,6 +158,17 @@ func checkBatchDetails(queries []Query, matches []osvResponse) ([][]Vulnerabilit
 		return nil, err
 	}
 	return results, nil
+}
+
+func osvDetailJobs(matches []osvBatchResult) <-chan int {
+	jobs := make(chan int, len(matches))
+	for index, match := range matches {
+		if len(match.Vulns) > 0 {
+			jobs <- index
+		}
+	}
+	close(jobs)
+	return jobs
 }
 
 func checkIndividually(queries []Query) ([][]Vulnerability, error) {
