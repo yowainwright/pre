@@ -16,7 +16,6 @@ import (
 
 	precache "github.com/yowainwright/pre/internal/cache"
 	preconfig "github.com/yowainwright/pre/internal/config"
-	"github.com/yowainwright/pre/internal/manager"
 	preobs "github.com/yowainwright/pre/internal/obs"
 	"github.com/yowainwright/pre/internal/proxy"
 )
@@ -92,7 +91,8 @@ func TestRunConfig(t *testing.T) {
 		t.Errorf("expected exit 0, got %d", code)
 	}
 	o := out.String()
-	if !strings.Contains(o, "endpoint") || !strings.Contains(o, "ttl") {
+	hasConfigKeys := strings.Contains(o, "endpoint") && strings.Contains(o, "ttl")
+	if !hasConfigKeys {
 		t.Errorf("expected config keys in output, got: %s", o)
 	}
 }
@@ -182,7 +182,8 @@ func TestRunStatus(t *testing.T) {
 		t.Errorf("expected exit 0, got %d", code)
 	}
 	o := out.String()
-	if !strings.Contains(o, "managers") || !strings.Contains(o, "cached") {
+	hasStatusSummary := strings.Contains(o, "managers") && strings.Contains(o, "cached")
+	if !hasStatusSummary {
 		t.Errorf("expected managers and cached in status output, got: %s", o)
 	}
 }
@@ -304,19 +305,10 @@ func TestReadHomebrewPackagesFromFilesystem(t *testing.T) {
 	}
 	defer withHomebrewPrefixes(func() []string { return []string{prefix} })()
 
-	mgr := manager.Get("brew")
-	if mgr == nil {
-		t.Fatal("expected brew manager")
-	}
-
+	mgr := mustManager(t, "brew")
 	pkgs := readHomebrewPackages(mgr)
-	got := make(map[string]string, len(pkgs))
-	for _, pkg := range pkgs {
-		got[pkg.Name] = pkg.Version
-	}
-	if got["ripgrep"] != "14.1.1" || got["visual-studio-code"] != "1.99.0" {
-		t.Fatalf("expected Homebrew filesystem inventory, got %#v", pkgs)
-	}
+	assertPackage(t, pkgs, "ripgrep", "14.1.1")
+	assertPackage(t, pkgs, "visual-studio-code", "1.99.0")
 }
 
 func TestRunPackageInstall(t *testing.T) {
@@ -335,7 +327,8 @@ func TestRunPackageInstall(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if gotName != "/tmp/pre" || strings.Join(gotArgs, " ") != "npm install react" {
+	wrongCommand := gotName != "/tmp/pre" || strings.Join(gotArgs, " ") != "npm install react"
+	if wrongCommand {
 		t.Errorf("expected pre npm install react, got %q %v", gotName, gotArgs)
 	}
 }
@@ -356,7 +349,8 @@ func TestRunPackageUpdate(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if gotName != "/tmp/pre" || strings.Join(gotArgs, " ") != "npm install react@latest" {
+	wrongCommand := gotName != "/tmp/pre" || strings.Join(gotArgs, " ") != "npm install react@latest"
+	if wrongCommand {
 		t.Errorf("expected pre npm install react@latest, got %q %v", gotName, gotArgs)
 	}
 }
@@ -377,7 +371,8 @@ func TestRunPackageDowngrade(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if gotName != "/tmp/pre" || strings.Join(gotArgs, " ") != "pip install urllib3==1.24.1" {
+	wrongCommand := gotName != "/tmp/pre" || strings.Join(gotArgs, " ") != "pip install urllib3==1.24.1"
+	if wrongCommand {
 		t.Errorf("expected pre pip install urllib3==1.24.1, got %q %v", gotName, gotArgs)
 	}
 }
@@ -398,7 +393,8 @@ func TestRunPackageUninstall(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if gotName != "/tmp/pre" || strings.Join(gotArgs, " ") != "brew uninstall ripgrep" {
+	wrongCommand := gotName != "/tmp/pre" || strings.Join(gotArgs, " ") != "brew uninstall ripgrep"
+	if wrongCommand {
 		t.Errorf("expected pre brew uninstall ripgrep, got %q %v", gotName, gotArgs)
 	}
 }
@@ -448,7 +444,8 @@ func TestRunManageSearchDialog(t *testing.T) {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
 	o := out.String()
-	if !strings.Contains(o, " search ") || !strings.Contains(o, "/rea") {
+	hasSearchDialog := strings.Contains(o, " search ") && strings.Contains(o, "/rea")
+	if !hasSearchDialog {
 		t.Errorf("expected search dialog in output, got: %q", o)
 	}
 }
@@ -549,7 +546,8 @@ func TestRunManageFlagUpgradeWithVersion(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if gotName != "/tmp/pre" || strings.Join(gotArgs, " ") != "npm install react@18.3.1" {
+	wrongCommand := gotName != "/tmp/pre" || strings.Join(gotArgs, " ") != "npm install react@18.3.1"
+	if wrongCommand {
 		t.Errorf("expected pre npm install react@18.3.1, got %q %v", gotName, gotArgs)
 	}
 }
@@ -580,7 +578,8 @@ func TestRunManageFlagUninstallResolvesManagerFromInventory(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if gotName != "/tmp/pre" || strings.Join(gotArgs, " ") != "brew uninstall ripgrep" {
+	wrongCommand := gotName != "/tmp/pre" || strings.Join(gotArgs, " ") != "brew uninstall ripgrep"
+	if wrongCommand {
 		t.Errorf("expected pre brew uninstall ripgrep, got %q %v", gotName, gotArgs)
 	}
 }
@@ -608,6 +607,11 @@ func TestRunSelfUpdateManualInstall(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
+	assertSelfUpdateCommands(t, commands, installEnv, dir)
+}
+
+func assertSelfUpdateCommands(t *testing.T, commands, installEnv []string, dir string) {
+	t.Helper()
 	wantCommands := []string{"cosign", "sh"}
 	if !slices.Equal(commands, wantCommands) {
 		t.Fatalf("expected cosign before sh, got %v", commands)
@@ -622,7 +626,7 @@ func withSelfUpdateDownloads(scriptContent []byte) func() {
 	sum := sha256.Sum256(scriptContent)
 	fakeChecksums := []byte(hex.EncodeToString(sum[:]) + "  install.sh\n")
 	fakeBundle := []byte(`{"fake":"bundle"}`)
-	return withHttpGetBytes(func(url string) ([]byte, error) {
+	return withHTTPGetBytes(func(url string) ([]byte, error) {
 		switch {
 		case strings.HasSuffix(url, ".bundle"):
 			return fakeBundle, nil
@@ -660,18 +664,7 @@ func TestRunSkillsShow(t *testing.T) {
 
 func TestRunSkillsAdd(t *testing.T) {
 	dir := t.TempDir()
-	prev, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(prev); err != nil {
-			t.Errorf("restore wd: %v", err)
-		}
-	})
+	t.Cleanup(withWorkingDir(t, dir))
 	var out, errOut bytes.Buffer
 	code := run([]string{"skills", "add"}, &out, &errOut)
 	if code != 0 {
@@ -727,7 +720,8 @@ func TestRunSelfUpdateHomebrewInstall(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if gotName != "brew" || strings.Join(gotArgs, " ") != "upgrade pre" {
+	wrongCommand := gotName != "brew" || strings.Join(gotArgs, " ") != "upgrade pre"
+	if wrongCommand {
 		t.Errorf("expected brew upgrade pre, got %q %v", gotName, gotArgs)
 	}
 }
@@ -745,16 +739,14 @@ func TestRunSelfUpdateHomebrewCask(t *testing.T) {
 	})()
 
 	code := run([]string{"self", "update"}, &bytes.Buffer{}, &bytes.Buffer{})
-	if code != 0 || strings.Join(gotArgs, " ") != "upgrade --cask pre" {
+	upgradeFailed := code != 0 || strings.Join(gotArgs, " ") != "upgrade --cask pre"
+	if upgradeFailed {
 		t.Errorf("expected cask upgrade, got code=%d args=%v", code, gotArgs)
 	}
 }
 
 func TestRunSelfUninstallManualInstall(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
-
+	dir := setupShellTest(t)
 	exe := filepath.Join(dir, "bin", "pre")
 	defer withExecutablePath(func() (string, error) { return exe, nil })()
 
@@ -775,7 +767,23 @@ func TestRunSelfUninstallManualInstall(t *testing.T) {
 	if removedPath != exe {
 		t.Errorf("expected binary removal for %s, got %s", exe, removedPath)
 	}
-	content, _ := os.ReadFile(rcPath)
+	assertUninstalledHooks(t, rcPath)
+}
+
+func setupShellTest(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+	return dir
+}
+
+func assertUninstalledHooks(t *testing.T, rcPath string) {
+	t.Helper()
+	content, err := os.ReadFile(rcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if strings.Contains(string(content), "# pre security proxy") {
 		t.Error("expected uninstall to remove hooks")
 	}
@@ -834,7 +842,8 @@ func TestRunSelfUninstallHomebrewInstall(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
-	if gotName != "brew" || strings.Join(gotArgs, " ") != "uninstall pre" {
+	wrongCommand := gotName != "brew" || strings.Join(gotArgs, " ") != "uninstall pre"
+	if wrongCommand {
 		t.Errorf("expected brew uninstall pre, got %q %v", gotName, gotArgs)
 	}
 }
@@ -883,7 +892,8 @@ func TestRunSelfUninstallHomebrewCask(t *testing.T) {
 	})()
 
 	code := run([]string{"self", "uninstall"}, &bytes.Buffer{}, &bytes.Buffer{})
-	if code != 0 || strings.Join(gotArgs, " ") != "uninstall --cask pre" {
+	uninstallFailed := code != 0 || strings.Join(gotArgs, " ") != "uninstall --cask pre"
+	if uninstallFailed {
 		t.Errorf("expected cask uninstall, got code=%d args=%v", code, gotArgs)
 	}
 }
@@ -896,9 +906,7 @@ func TestDetectInstallSourceHomebrewCask(t *testing.T) {
 }
 
 func TestRunSelfUninstallPurge(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
+	dir := setupShellTest(t)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config-root"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache-root"))
 
@@ -919,6 +927,11 @@ func TestRunSelfUninstallPurge(t *testing.T) {
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
+	assertPurgedInstallDirs(t, removedDirs, configPath, cachePath)
+}
+
+func assertPurgedInstallDirs(t *testing.T, removedDirs []string, configPath, cachePath string) {
+	t.Helper()
 	joined := strings.Join(removedDirs, "\n")
 	if !strings.Contains(joined, filepath.Dir(configPath)) {
 		t.Errorf("expected config dir purge, got %v", removedDirs)
@@ -947,18 +960,8 @@ func TestRunSelfUninstallRefusesUnexpectedBinaryName(t *testing.T) {
 }
 
 func TestRunTeardown(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
-
-	run([]string{"setup"}, &bytes.Buffer{}, &bytes.Buffer{})
-
-	rcPath := dir + "/.zshrc"
-	before, _ := os.ReadFile(rcPath)
-	if !strings.Contains(string(before), "# pre security proxy") {
-		t.Fatal("expected setup to write hooks")
-	}
-
+	dir := setupShellTest(t)
+	rcPath := installTestHooks(t, dir)
 	code := run([]string{"teardown"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if code != 0 {
 		t.Errorf("expected exit 0, got %d", code)
@@ -968,6 +971,20 @@ func TestRunTeardown(t *testing.T) {
 	if strings.Contains(string(after), "# pre security proxy") {
 		t.Error("expected teardown to remove hooks from rc file")
 	}
+}
+
+func installTestHooks(t *testing.T, dir string) string {
+	t.Helper()
+	run([]string{"setup"}, &bytes.Buffer{}, &bytes.Buffer{})
+	rcPath := filepath.Join(dir, ".zshrc")
+	before, err := os.ReadFile(rcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(before), "# pre security proxy") {
+		t.Fatal("expected setup to write hooks")
+	}
+	return rcPath
 }
 
 func TestRunTeardownPropagatesHookRemovalFailure(t *testing.T) {
@@ -1048,16 +1065,7 @@ func TestRunStatusWithSystemStats(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CACHE_HOME", "")
-
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	statsDir := filepath.Join(cacheDir, "pre")
-	os.MkdirAll(statsDir, 0755)
-	statsData := `{"crit":2,"warn":3,"total":10,"lastUpdated":"2024-01-01T12:00:00Z"}`
-	os.WriteFile(filepath.Join(statsDir, "system.json"), []byte(statsData), 0644)
-
+	writeTestSystemStats(t)
 	var out, errOut bytes.Buffer
 	code := run([]string{"status"}, &out, &errOut)
 	if code != 0 {
@@ -1068,17 +1076,34 @@ func TestRunStatusWithSystemStats(t *testing.T) {
 	}
 }
 
+func writeTestSystemStats(t *testing.T) {
+	t.Helper()
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	statsDir := filepath.Join(cacheDir, "pre")
+	if err := os.MkdirAll(statsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	statsData := `{"crit":2,"warn":3,"total":10,"lastUpdated":"2024-01-01T12:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(statsDir, "system.json"), []byte(statsData), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunWithCustomManagers(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 
 	cfgDir := filepath.Join(dir, "Library", "Application Support", "pre")
 	os.MkdirAll(cfgDir, 0755)
-	cfgData, _ := json.Marshal(map[string]interface{}{
+	cfg := map[string]interface{}{
 		"managers": []map[string]interface{}{
 			{"name": "npm", "ecosystem": "npm", "installCmds": []string{"install"}},
 		},
-	})
+	}
+	cfgData, _ := json.Marshal(cfg)
 	os.WriteFile(filepath.Join(cfgDir, "config.json"), cfgData, 0644)
 
 	var out, errOut bytes.Buffer
@@ -1138,13 +1163,13 @@ func withCommandRunner(fn func(string, []string, []string, io.Writer, io.Writer)
 	return func() { commandRunnerFn = orig }
 }
 
-func withCommandRunnerWithInput(fn func(string, []string, []string, io.Reader, io.Writer, io.Writer) error) func() {
+func withCommandRunnerWithInput(fn func(string, []string, []string, commandStreams) error) func() {
 	orig := commandRunnerWithInputFn
 	commandRunnerWithInputFn = fn
 	return func() { commandRunnerWithInputFn = orig }
 }
 
-func withHttpGetBytes(fn func(string) ([]byte, error)) func() {
+func withHTTPGetBytes(fn func(string) ([]byte, error)) func() {
 	orig := httpGetBytesFn
 	httpGetBytesFn = fn
 	return func() { httpGetBytesFn = orig }
@@ -1378,7 +1403,7 @@ func assertSelfUpdateDownloadFailure(t *testing.T, asset, url string) {
 }
 
 func withFailedSelfUpdateDownload(failedURL string) func() {
-	return withHttpGetBytes(func(url string) ([]byte, error) {
+	return withHTTPGetBytes(func(url string) ([]byte, error) {
 		if url == failedURL {
 			return nil, os.ErrNotExist
 		}

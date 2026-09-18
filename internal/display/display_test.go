@@ -133,7 +133,8 @@ func TestTreeSingleNode(t *testing.T) {
 	ColorEnabled = false
 	defer func() { ColorEnabled = orig }()
 
-	result := Tree([]TreeNode{{Label: "react@18.0.0  clean"}})
+	nodes := []TreeNode{{Label: "react@18.0.0  clean"}}
+	result := Tree(nodes)
 	if !strings.Contains(result, "└── ") {
 		t.Errorf("expected last-node char, got %q", result)
 	}
@@ -161,10 +162,7 @@ func TestTreeMultipleNodes(t *testing.T) {
 }
 
 func TestTreeWithChildren(t *testing.T) {
-	orig := ColorEnabled
-	ColorEnabled = false
-	defer func() { ColorEnabled = orig }()
-
+	disableColor(t)
 	nodes := []TreeNode{
 		{
 			Label:    "lodash@4.17.4  2 vulnerabilities",
@@ -172,15 +170,19 @@ func TestTreeWithChildren(t *testing.T) {
 		},
 	}
 	result := Tree(nodes)
-	if !strings.Contains(result, "CVE-2021-23337") {
-		t.Error("expected first child in output")
+	want := "└── lodash@4.17.4  2 vulnerabilities\n" +
+		"    ├── CVE-2021-23337  command injection\n" +
+		"    └── CVE-2020-8203  prototype pollution\n"
+	if result != want {
+		t.Errorf("unexpected tree: got %q, want %q", result, want)
 	}
-	if !strings.Contains(result, "CVE-2020-8203") {
-		t.Error("expected last child in output")
-	}
-	if strings.Count(result, "└── ") < 1 {
-		t.Error("expected at least one last-item char")
-	}
+}
+
+func disableColor(t *testing.T) {
+	t.Helper()
+	orig := ColorEnabled
+	ColorEnabled = false
+	t.Cleanup(func() { ColorEnabled = orig })
 }
 
 func TestTreeEmpty(t *testing.T) {

@@ -1540,7 +1540,8 @@ func runPreManagerCommandWithInput(mgr *manager.Manager, args []string, stdin io
 	}
 	preArgs := append([]string{mgr.Name}, args...)
 	if stdin != nil {
-		return commandRunnerWithInputFn(self, preArgs, nil, stdin, stdout, stderr)
+		streams := commandStreams{stdin: stdin, stdout: stdout, stderr: stderr}
+		return commandRunnerWithInputFn(self, preArgs, nil, streams)
 	}
 	return commandRunnerFn(self, preArgs, nil, stdout, stderr)
 }

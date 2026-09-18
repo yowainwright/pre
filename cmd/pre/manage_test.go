@@ -200,8 +200,8 @@ func TestManageUIRunActionUsesTerminalInput(t *testing.T) {
 
 	var gotInput io.Reader
 	var gotArgs []string
-	defer withCommandRunnerWithInput(func(name string, args []string, env []string, stdin io.Reader, stdout, stderr io.Writer) error {
-		gotInput = stdin
+	defer withCommandRunnerWithInput(func(name string, args []string, env []string, streams commandStreams) error {
+		gotInput = streams.stdin
 		gotArgs = append([]string(nil), args...)
 		return nil
 	})()
