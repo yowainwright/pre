@@ -21,8 +21,16 @@ import (
 var version = "dev"
 
 func run(args []string, stdout, stderr io.Writer) int {
-	obs.SetVersion(version)
+	cfg := configureCommand()
+	if len(args) < 1 {
+		printUsage(stderr)
+		return 1
+	}
+	return dispatchCommand(args, cfg, stdout, stderr)
+}
 
+func configureCommand() *config.Config {
+	obs.SetVersion(version)
 	cfg := config.Load()
 	security.Endpoint = cfg.API.Endpoint
 	cache.SetTTL(cfg.Cache.TTL)
@@ -33,15 +41,37 @@ func run(args []string, stdout, stderr io.Writer) int {
 		mgrs[i] = manager.Manager{Name: m.Name, Ecosystem: m.Ecosystem, InstallCmds: m.InstallCmds}
 	}
 	manager.SetUserManagers(mgrs)
+	return cfg
+}
 
-	if len(args) < 1 {
-		fmt.Fprintln(stderr, "usage: pre <manager> <command> [args]")
-		fmt.Fprintln(stderr, "       pre manage | m | installed | install | update | downgrade | uninstall")
-		fmt.Fprintln(stderr, "       pre obs [--json] [--events [query]]")
-		fmt.Fprintln(stderr, "       pre setup | teardown | status | config [set <key> <value>]")
-		fmt.Fprintln(stderr, "       pre skills <add|show> [--global]")
-		return 1
+func printUsage(stderr io.Writer) {
+	fmt.Fprintln(stderr, "usage: pre <manager> <command> [args]")
+	fmt.Fprintln(stderr, "       pre manage | m | installed | install | update | downgrade | uninstall")
+	fmt.Fprintln(stderr, "       pre obs [--json] [--events [query]]")
+	fmt.Fprintln(stderr, "       pre setup | teardown | status | config [set <key> <value>]")
+	fmt.Fprintln(stderr, "       pre skills <add|show> [--global]")
+}
+
+func dispatchCommand(args []string, cfg *config.Config, stdout, stderr io.Writer) int {
+	switch args[0] {
+	case "setup", "teardown", "scan", "status", "--version", "-v":
+		return handleSystemCommand(args, stdout, stderr)
+	case "config":
+		return handleConfig(args[1:], cfg, stdout, stderr)
+	case "obs", "observability":
+		return handleObs(args[1:], stdout, stderr)
+	case "self":
+		return handleSelf(args[1:], stdout, stderr)
+	case "skills":
+		return handleSkills(args[1:], stdout, stderr)
+	case "screenshots":
+		return handleScreenshots(args[1:], stdout, stderr)
+	default:
+		return dispatchPackages(args, stdout, stderr)
 	}
+}
+
+func handleSystemCommand(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "setup":
 		proxy.Setup()
@@ -50,60 +80,59 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	case "scan":
-		if len(args) != 2 {
-			fmt.Fprintln(stderr, "usage: pre scan system")
-			return 1
-		}
-		if args[1] != "system" {
-			fmt.Fprintln(stderr, "usage: pre scan system")
-			return 1
-		}
-		proxy.RunSystemScan()
-		return 0
-	case "config":
-		return handleConfig(args[1:], cfg, stdout, stderr)
-	case "obs", "observability":
-		return handleObs(args[1:], stdout, stderr)
+		return handleSystemScan(args[1:], stderr)
 	case "status":
 		handleStatus(stdout)
-	case "installed":
-		return handlePackageInventory(stdout, stderr)
-	case "manage", "m", "tui":
-		return handleManage(args[1:], stdout, stderr)
-	case "install":
-		return handlePackageAction(actionInstall, args[1:], stdout, stderr)
-	case "update", "upgrade":
-		if len(args) == 1 {
-			fmt.Fprintln(stderr, "usage: pre update <manager> [package]")
-			return 1
-		}
-		return handlePackageAction(actionUpdate, args[1:], stdout, stderr)
-	case "downgrade":
-		return handlePackageAction(actionDowngrade, args[1:], stdout, stderr)
-	case "uninstall":
-		if len(args) == 1 {
-			fmt.Fprintln(stderr, "usage: pre uninstall <manager> <package>")
-			return 1
-		}
-		return handlePackageAction(actionUninstall, args[1:], stdout, stderr)
-	case "packages":
-		return handlePackages(args[1:], stdout, stderr)
-	case "self":
-		return handleSelf(args[1:], stdout, stderr)
-	case "skills":
-		return handleSkills(args[1:], stdout, stderr)
-	case "screenshots":
-		return handleScreenshots(args[1:], stdout, stderr)
 	case "--version", "-v":
 		fmt.Fprintln(stdout, version)
-	default:
-		mgr := manager.Get(args[0])
-		if mgr == nil {
-			fmt.Fprintf(stderr, "pre: unknown manager: %s\n", args[0])
-			return 1
-		}
-		proxy.Intercept(mgr, args[1:])
 	}
+	return 0
+}
+
+func handleSystemScan(args []string, stderr io.Writer) int {
+	invalidTarget := len(args) != 1 || args[0] != "system"
+	if invalidTarget {
+		fmt.Fprintln(stderr, "usage: pre scan system")
+		return 1
+	}
+	proxy.RunSystemScan()
+	return 0
+}
+
+func dispatchPackages(args []string, stdout, stderr io.Writer) int {
+	switch args[0] {
+	case "installed":
+		return handlePackageInventory(stdout, stderr)
+	case "manage", "m", "tui", "install", "downgrade":
+		return handlePackages(args, stdout, stderr)
+	case "update", "upgrade", "uninstall":
+		return handleRequiredPackageAction(args, stdout, stderr)
+	case "packages":
+		return handlePackages(args[1:], stdout, stderr)
+	default:
+		return interceptManager(args, stderr)
+	}
+}
+
+func handleRequiredPackageAction(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 1 {
+		return handlePackages(args, stdout, stderr)
+	}
+	if args[0] == "uninstall" {
+		fmt.Fprintln(stderr, "usage: pre uninstall <manager> <package>")
+		return 1
+	}
+	fmt.Fprintln(stderr, "usage: pre update <manager> [package]")
+	return 1
+}
+
+func interceptManager(args []string, stderr io.Writer) int {
+	mgr := manager.Get(args[0])
+	if mgr == nil {
+		fmt.Fprintf(stderr, "pre: unknown manager: %s\n", args[0])
+		return 1
+	}
+	proxy.Intercept(mgr, args[1:])
 	return 0
 }
 
@@ -125,33 +154,46 @@ func handleSkills(args []string, stdout, stderr io.Writer) int {
 }
 
 func handleSkillsAdd(args []string, stdout, stderr io.Writer) int {
-	isGlobal := slices.Contains(args, "--global")
-	baseDir := "."
-	if isGlobal {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(stderr, "pre skills: cannot resolve home directory: %v\n", err)
-			return 1
-		}
-		baseDir = home
-	}
-	absBase, err := filepath.Abs(baseDir)
+	skillDir, err := resolveSkillDir(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "pre skills: cannot resolve directory: %v\n", err)
-		return 1
-	}
-	skillDir := filepath.Join(absBase, ".claude", "skills", "pre")
-	if err := os.MkdirAll(skillDir, 0o700); err != nil {
 		fmt.Fprintf(stderr, "pre skills: %v\n", err)
 		return 1
 	}
-	skillPath := filepath.Join(skillDir, "SKILL.md")
-	if err := os.WriteFile(skillPath, []byte(skills.Pre), 0o600); err != nil {
+	skillPath, err := writeSkill(skillDir)
+	if err != nil {
 		fmt.Fprintf(stderr, "pre skills: %v\n", err)
 		return 1
 	}
 	fmt.Fprintf(stdout, "pre skill installed: %s\n", skillPath)
 	return 0
+}
+
+func resolveSkillDir(args []string) (string, error) {
+	isGlobal := slices.Contains(args, "--global")
+	baseDir := "."
+	if isGlobal {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot resolve home directory: %w", err)
+		}
+		baseDir = home
+	}
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve directory: %w", err)
+	}
+	return filepath.Join(absBase, ".claude", "skills", "pre"), nil
+}
+
+func writeSkill(skillDir string) (string, error) {
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		return "", err
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte(skills.Pre), 0o600); err != nil {
+		return "", err
+	}
+	return skillPath, nil
 }
 
 func handlePackages(args []string, stdout, stderr io.Writer) int {
@@ -189,27 +231,36 @@ func handleConfig(args []string, cfg *config.Config, stdout, stderr io.Writer) i
 		fmt.Fprintln(stderr, "usage: pre config set <key> <value>")
 		return 1
 	}
+	return handleConfigSet(args[1:], cfg, stdout, stderr)
+}
 
-	key, val := normalizeConfigKey(args[1]), strings.Join(args[2:], " ")
-	switch key {
-	case "endpoint":
-		cfg.API.Endpoint = val
-	case "ttl":
-		if err := validateNonNegativeDuration(val); err != nil {
-			fmt.Fprintf(stderr, "pre config: invalid duration for %s: %q\n", args[1], val)
-			return 1
-		}
-		cfg.Cache.TTL = val
-	default:
-		fmt.Fprintf(stderr, "pre config: unknown key %q (api.endpoint, cache.ttl)\n", args[1])
+func handleConfigSet(args []string, cfg *config.Config, stdout, stderr io.Writer) int {
+	key, val := args[0], strings.Join(args[1:], " ")
+	if err := setConfigValue(cfg, key, val); err != nil {
+		fmt.Fprintf(stderr, "pre config: %v\n", err)
 		return 1
 	}
 	if err := config.Save(cfg); err != nil {
 		fmt.Fprintf(stderr, "pre config: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "%s = %s\n", args[1], val)
+	fmt.Fprintf(stdout, "%s = %s\n", key, val)
 	return 0
+}
+
+func setConfigValue(cfg *config.Config, key, val string) error {
+	switch normalizeConfigKey(key) {
+	case "endpoint":
+		cfg.API.Endpoint = val
+	case "ttl":
+		if err := validateNonNegativeDuration(val); err != nil {
+			return fmt.Errorf("invalid duration for %s: %q", key, val)
+		}
+		cfg.Cache.TTL = val
+	default:
+		return fmt.Errorf("unknown key %q (api.endpoint, cache.ttl)", key)
+	}
+	return nil
 }
 
 func validateNonNegativeDuration(s string) error {

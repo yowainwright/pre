@@ -509,17 +509,24 @@ func removeInstallDir(label, dir string, stdout, stderr io.Writer) bool {
 }
 
 func runExternalCommand(name string, args []string, env []string, stdout, stderr io.Writer) error {
-	return runExternalCommandWithInput(name, args, env, os.Stdin, stdout, stderr)
+	streams := commandStreams{stdin: os.Stdin, stdout: stdout, stderr: stderr}
+	return runExternalCommandWithInput(name, args, env, streams)
 }
 
-func runExternalCommandWithInput(name string, args []string, env []string, stdin io.Reader, stdout, stderr io.Writer) error {
+type commandStreams struct {
+	stdin  io.Reader
+	stdout io.Writer
+	stderr io.Writer
+}
+
+func runExternalCommandWithInput(name string, args []string, env []string, streams commandStreams) error {
 	cmd := exec.Command(name, args...) // #nosec G204,G702 -- lifecycle commands use fixed executables and argument builders.
-	if stdin == nil {
-		stdin = os.Stdin
+	if streams.stdin == nil {
+		streams.stdin = os.Stdin
 	}
-	cmd.Stdin = stdin
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	cmd.Stdin = streams.stdin
+	cmd.Stdout = streams.stdout
+	cmd.Stderr = streams.stderr
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}

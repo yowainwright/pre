@@ -40,7 +40,8 @@ type svgSpan struct {
 func handleScreenshots(args []string, stdout, stderr io.Writer) int {
 	outDir := filepath.Join("dist", "screenshots")
 	if len(args) > 0 {
-		if args[0] == "--help" || args[0] == "-h" {
+		showHelp := args[0] == "--help" || args[0] == "-h"
+		if showHelp {
 			fmt.Fprintln(stdout, "usage: pre screenshots [output-dir]")
 			return 0
 		}
@@ -77,25 +78,10 @@ func writeManageScreenshots(outDir string) error {
 func manageScreenshotCases() []screenshotCase {
 	inv := screenshotInventory()
 	list := newManageUI(inv)
-
-	search := newManageUI(inv)
-	search.mode = modeSearch
-	search.search = "react"
-	search.applyFilter()
-
-	managers := newManageUI(inv)
-	managers.mode = modeManagers
-	managers.managerSelected = managerIndex(managers.managerOptions, "npm")
-
-	actions := newManageUI(inv)
-	actions.selected = packageIndex(actions.filtered, "react")
-	actions.mode = modeDialog
-
-	install := newManageUI(inv)
-	install.beginInput(inputInstallPackage, "package")
-	install.installManager = "npm"
-	install.inputValue = "react@latest"
-
+	search := screenshotSearchUI(inv)
+	managers := screenshotManagersUI(inv)
+	actions := screenshotActionsUI(inv)
+	install := screenshotInstallUI(inv)
 	return []screenshotCase{
 		{Name: "manage-list", UI: list},
 		{Name: "manage-search", UI: search},
@@ -103,6 +89,36 @@ func manageScreenshotCases() []screenshotCase {
 		{Name: "manage-actions", UI: actions},
 		{Name: "manage-install", UI: install},
 	}
+}
+
+func screenshotSearchUI(inv packageInventory) manageUI {
+	search := newManageUI(inv)
+	search.mode = modeSearch
+	search.search = "react"
+	search.applyFilter()
+	return search
+}
+
+func screenshotManagersUI(inv packageInventory) manageUI {
+	managers := newManageUI(inv)
+	managers.mode = modeManagers
+	managers.managerSelected = managerIndex(managers.managerOptions, "npm")
+	return managers
+}
+
+func screenshotActionsUI(inv packageInventory) manageUI {
+	actions := newManageUI(inv)
+	actions.selected = packageIndex(actions.filtered, "react")
+	actions.mode = modeDialog
+	return actions
+}
+
+func screenshotInstallUI(inv packageInventory) manageUI {
+	install := newManageUI(inv)
+	install.beginInput(inputInstallPackage, "package")
+	install.installManager = "npm"
+	install.inputValue = "react@latest"
+	return install
 }
 
 func screenshotInventory() packageInventory {
@@ -148,10 +164,20 @@ func ansiToTerminalSVG(title, content string, cols, rows int) string {
 	width := screenshotPad*2 + float64(cols)*screenshotCharWidth
 	height := screenshotPad*2 + float64(rows)*screenshotLineHeight
 	var out strings.Builder
-	fmt.Fprintf(&out, `<svg xmlns="http://www.w3.org/2000/svg" width="%.0f" height="%.0f" viewBox="0 0 %.0f %.0f" role="img" aria-label="%s" xml:space="preserve">`+"\n",
+	writeSVGHeader(&out, title, width, height)
+	writeSVGRows(&out, lines, rows)
+	fmt.Fprintln(&out, `</svg>`)
+	return out.String()
+}
+
+func writeSVGHeader(out *strings.Builder, title string, width, height float64) {
+	fmt.Fprintf(out, `<svg xmlns="http://www.w3.org/2000/svg" width="%.0f" height="%.0f" viewBox="0 0 %.0f %.0f" role="img" aria-label="%s" xml:space="preserve">`+"\n",
 		width, height, width, height, html.EscapeString(title))
-	fmt.Fprintln(&out, `<rect width="100%" height="100%" fill="#1e1e2e"/>`)
-	fmt.Fprintln(&out, `<style>text{font-family:"SFMono-Regular","Menlo","Consolas","Liberation Mono",monospace;font-size:14px;dominant-baseline:text-before-edge}</style>`)
+	fmt.Fprintln(out, `<rect width="100%" height="100%" fill="#1e1e2e"/>`)
+	fmt.Fprintln(out, `<style>text{font-family:"SFMono-Regular","Menlo","Consolas","Liberation Mono",monospace;font-size:14px;dominant-baseline:text-before-edge}</style>`)
+}
+
+func writeSVGRows(out *strings.Builder, lines []string, rows int) {
 	for row := 0; row < rows; row++ {
 		line := ""
 		if row < len(lines) {
@@ -159,77 +185,96 @@ func ansiToTerminalSVG(title, content string, cols, rows int) string {
 		}
 		spans := ansiLineSpans(line)
 		y := screenshotPad + float64(row)*screenshotLineHeight
-		for _, span := range spans {
-			x := screenshotPad + float64(span.start)*screenshotCharWidth
-			cells := utf8.RuneCountInString(span.text)
-			if span.style.bg != "" && cells > 0 {
-				fmt.Fprintf(&out, `<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" fill="%s"/>`+"\n",
-					x, y-2, float64(cells)*screenshotCharWidth, screenshotLineHeight, span.style.bg)
-			}
-		}
-		for _, span := range spans {
-			if span.text == "" {
-				continue
-			}
-			x := screenshotPad + float64(span.start)*screenshotCharWidth
-			weight := "400"
-			if span.style.bold {
-				weight = "700"
-			}
-			fmt.Fprintf(&out, `<text x="%.1f" y="%.1f" fill="%s" font-weight="%s">%s</text>`+"\n",
-				x, y, span.style.fg, weight, html.EscapeString(span.text))
+		writeSVGBackgrounds(out, spans, y)
+		writeSVGText(out, spans, y)
+	}
+}
+
+func writeSVGBackgrounds(out *strings.Builder, spans []svgSpan, y float64) {
+	for _, span := range spans {
+		x := screenshotPad + float64(span.start)*screenshotCharWidth
+		cells := utf8.RuneCountInString(span.text)
+		hasBackground := span.style.bg != "" && cells > 0
+		if hasBackground {
+			fmt.Fprintf(out, `<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" fill="%s"/>`+"\n",
+				x, y-2, float64(cells)*screenshotCharWidth, screenshotLineHeight, span.style.bg)
 		}
 	}
-	fmt.Fprintln(&out, `</svg>`)
-	return out.String()
+}
+
+func writeSVGText(out *strings.Builder, spans []svgSpan, y float64) {
+	for _, span := range spans {
+		if span.text == "" {
+			continue
+		}
+		x := screenshotPad + float64(span.start)*screenshotCharWidth
+		weight := "400"
+		if span.style.bold {
+			weight = "700"
+		}
+		fmt.Fprintf(out, `<text x="%.1f" y="%.1f" fill="%s" font-weight="%s">%s</text>`+"\n",
+			x, y, span.style.fg, weight, html.EscapeString(span.text))
+	}
+}
+
+type ansiLineParser struct {
+	style svgStyle
+	spans []svgSpan
+	text  strings.Builder
+	start int
+	col   int
 }
 
 func ansiLineSpans(line string) []svgSpan {
-	style := svgStyle{fg: "#cdd6f4"}
-	var spans []svgSpan
-	var text strings.Builder
-	start := 0
-	col := 0
-	flush := func() {
-		if text.Len() == 0 {
-			return
-		}
-		spans = append(spans, svgSpan{text: text.String(), start: start, style: style})
-		text.Reset()
-	}
-
+	parser := ansiLineParser{style: svgStyle{fg: "#cdd6f4"}}
 	for i := 0; i < len(line); {
-		if line[i] == '\x1b' && i+1 < len(line) && line[i+1] == '[' {
-			end := i + 2
-			for end < len(line) && (line[end] < '@' || line[end] > '~') {
-				end++
-			}
-			if end >= len(line) {
-				break
-			}
-			final := line[end]
-			seq := line[i+2 : end]
-			i = end + 1
-			if final == 'm' {
-				flush()
-				style = applyANSIStyle(style, seq)
-				start = col
-			}
+		if strings.HasPrefix(line[i:], "\x1b[") {
+			i = parser.readEscape(line, i)
 			continue
 		}
-		r, size := utf8.DecodeRuneInString(line[i:])
-		if r == utf8.RuneError && size == 0 {
+		size := parser.readRune(line[i:])
+		if size == 0 {
 			break
 		}
-		if text.Len() == 0 {
-			start = col
-		}
-		text.WriteRune(r)
-		col++
 		i += size
 	}
-	flush()
-	return spans
+	parser.flush()
+	return parser.spans
+}
+
+func (p *ansiLineParser) flush() {
+	if p.text.Len() == 0 {
+		return
+	}
+	p.spans = append(p.spans, svgSpan{text: p.text.String(), start: p.start, style: p.style})
+	p.text.Reset()
+}
+
+func (p *ansiLineParser) readEscape(line string, start int) int {
+	end, ok := ansiSequenceEnd(line, start)
+	if !ok {
+		return len(line)
+	}
+	final := end - 1
+	if line[final] == 'm' {
+		p.flush()
+		p.style = applyANSIStyle(p.style, line[start+2:final])
+		p.start = p.col
+	}
+	return end
+}
+
+func (p *ansiLineParser) readRune(text string) int {
+	r, size := utf8.DecodeRuneInString(text)
+	if size == 0 {
+		return 0
+	}
+	if p.text.Len() == 0 {
+		p.start = p.col
+	}
+	p.text.WriteRune(r)
+	p.col++
+	return size
 }
 
 func applyANSIStyle(style svgStyle, seq string) svgStyle {
@@ -242,44 +287,62 @@ func applyANSIStyle(style svgStyle, seq string) svgStyle {
 		if err != nil {
 			continue
 		}
-		switch code {
-		case 0:
-			style = svgStyle{fg: "#cdd6f4"}
-		case 1:
-			style.bold = true
-		case 22:
-			style.bold = false
-		case 38, 48:
-			isBG := code == 48
-			if i+4 < len(parts) && parts[i+1] == "2" {
-				color, ok := trueColor(parts[i+2], parts[i+3], parts[i+4])
-				if ok {
-					if isBG {
-						style.bg = color
-					} else {
-						style.fg = color
-					}
-				}
-				i += 4
-			}
-		case 39:
-			style.fg = "#cdd6f4"
-		case 49:
-			style.bg = ""
-		}
+		nextStyle, consumed := applyANSIStyleCode(style, code, parts[i+1:])
+		style = nextStyle
+		i += consumed
 	}
 	return style
 }
 
-func trueColor(r, g, b string) (string, bool) {
-	red, errR := strconv.Atoi(r)
-	green, errG := strconv.Atoi(g)
-	blue, errB := strconv.Atoi(b)
-	if errR != nil || errG != nil || errB != nil {
-		return "", false
+func applyANSIStyleCode(style svgStyle, code int, parts []string) (svgStyle, int) {
+	switch code {
+	case 0:
+		style = svgStyle{fg: "#cdd6f4"}
+	case 1:
+		style.bold = true
+	case 22:
+		style.bold = false
+	case 38, 48:
+		return applyANSITrueColor(style, code, parts)
+	case 39:
+		style.fg = "#cdd6f4"
+	case 49:
+		style.bg = ""
 	}
-	if red < 0 || red > 255 || green < 0 || green > 255 || blue < 0 || blue > 255 {
+	return style, 0
+}
+
+func applyANSITrueColor(style svgStyle, code int, parts []string) (svgStyle, int) {
+	hasRGB := len(parts) >= 4 && parts[0] == "2"
+	if !hasRGB {
+		return style, 0
+	}
+	color, ok := trueColor(parts[1], parts[2], parts[3])
+	if !ok {
+		return style, 4
+	}
+	if code == 48 {
+		style.bg = color
+		return style, 4
+	}
+	style.fg = color
+	return style, 4
+}
+
+func trueColor(r, g, b string) (string, bool) {
+	red, validRed := colorComponent(r)
+	green, validGreen := colorComponent(g)
+	blue, validBlue := colorComponent(b)
+	validRGB := validRed && validGreen && validBlue
+	if !validRGB {
 		return "", false
 	}
 	return fmt.Sprintf("#%02x%02x%02x", red, green, blue), true
+}
+
+func colorComponent(text string) (int, bool) {
+	value, err := strconv.Atoi(text)
+	inRange := value >= 0 && value <= 255
+	valid := err == nil && inRange
+	return value, valid
 }
