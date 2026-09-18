@@ -244,7 +244,11 @@ func verifyInstallScript(script, checksums []byte) error {
 	got := hex.EncodeToString(sum[:])
 	for _, line := range strings.Split(string(checksums), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[1] == "install.sh" && fields[0] == got {
+		if len(fields) < 2 {
+			continue
+		}
+		matchesScript := fields[1] == "install.sh" && fields[0] == got
+		if matchesScript {
 			return nil
 		}
 	}
@@ -270,7 +274,8 @@ func uninstallSelf(info installInfo, purge bool, stdout, stderr io.Writer) int {
 	if !uninstallSelfBinary(info, stdout, stderr) {
 		return 1
 	}
-	if purge && !purgeInstallData(stdout, stderr) {
+	purgeFailed := purge && !purgeInstallData(stdout, stderr)
+	if purgeFailed {
 		return 1
 	}
 	return 0
@@ -336,7 +341,9 @@ func uninstallSelfBinary(info installInfo, stdout, stderr io.Writer) bool {
 		}
 		return true
 	}
-	if err := removeFileFn(info.BinaryPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	err := removeFileFn(info.BinaryPath)
+	removeFailed := err != nil && !errors.Is(err, os.ErrNotExist)
+	if removeFailed {
 		fmt.Fprintf(stderr, "pre uninstall: remove %s: %v\n", info.BinaryPath, err)
 		return false
 	}
@@ -432,7 +439,8 @@ func detectInstallSource(binaryPath string) string {
 }
 
 func isHomebrewInstall(source string) bool {
-	return source == installSourceHomebrew || source == installSourceHomebrewCask
+	isHomebrew := source == installSourceHomebrew || source == installSourceHomebrewCask
+	return isHomebrew
 }
 
 func homebrewLifecycleArgs(source, action string) []string {
@@ -486,10 +494,13 @@ func purgeInstallData(stdout, stderr io.Writer) bool {
 }
 
 func removeInstallDir(label, dir string, stdout, stderr io.Writer) bool {
-	if dir == "" || dir == "." {
+	missingDir := dir == "" || dir == "."
+	if missingDir {
 		return true
 	}
-	if err := removeAllFn(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+	err := removeAllFn(dir)
+	removeFailed := err != nil && !errors.Is(err, os.ErrNotExist)
+	if removeFailed {
 		fmt.Fprintf(stderr, "pre uninstall: remove %s %s: %v\n", label, dir, err)
 		return false
 	}
