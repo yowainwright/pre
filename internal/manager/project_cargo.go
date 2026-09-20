@@ -39,7 +39,7 @@ func ReadCargoFetchPackages(manifestPath string) ([]string, error) {
 		return nil, err
 	}
 	if project.workspace.manifestPath != "" {
-		return nil, errors.New("Cargo.lock is required to pre-scan workspace fetches; run cargo generate-lockfile first")
+		return nil, errors.New("workspace Cargo.lock is required to pre-scan workspace fetches; run cargo generate-lockfile first")
 	}
 	return project.directPackages()
 }
@@ -53,7 +53,8 @@ func ReadCargoUpdatePackages(manifestPath, target string) ([]string, error) {
 		return nil, err
 	}
 	packages, err := project.directPackages()
-	if err != nil || target == "" {
+	returnAllPackages := err != nil || target == ""
+	if returnAllPackages {
 		return packages, err
 	}
 	return selectCargoTarget(packages, target, manifestPath)
@@ -76,7 +77,8 @@ func discoverCargoWorkspace(manifestPath string) (cargoWorkspace, error) {
 	candidate := filepath.Clean(manifestPath)
 	for {
 		workspace, found, err := cargoWorkspaceAt(candidate)
-		if err != nil || found {
+		searchComplete := err != nil || found
+		if searchComplete {
 			return workspace, err
 		}
 		parent, ok := parentCargoManifestPath(candidate)
@@ -113,10 +115,16 @@ func DiscoverCargoManifest(startPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return findCargoManifest(startPath, candidate)
+}
+
+func findCargoManifest(startPath, candidate string) (string, error) {
 	for {
-		if _, err := os.Stat(candidate); err == nil {
+		_, err := os.Stat(candidate)
+		if err == nil {
 			return candidate, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
+		}
+		if !errors.Is(err, os.ErrNotExist) {
 			return "", err
 		}
 		next, ok := parentCargoManifestPath(candidate)
@@ -125,35 +133,44 @@ func DiscoverCargoManifest(startPath string) (string, error) {
 		}
 		candidate = next
 	}
-	return "", fmt.Errorf("Cargo.toml not found from %s: %w", startPath, os.ErrNotExist)
+	return "", fmt.Errorf("manifest Cargo.toml not found from %s: %w", startPath, os.ErrNotExist)
 }
 
 func (p cargoProject) manifests() ([]cargoManifestFile, error) {
 	seen := make(map[string]bool)
 	var manifests []cargoManifestFile
 	manifests, err := appendCargoManifest(manifests, seen, p.manifestPath, p.state)
-	if err != nil || p.workspace.manifestPath == "" {
+	projectComplete := err != nil || p.workspace.manifestPath == ""
+	if projectComplete {
 		return manifests, err
 	}
-	manifests, err = appendCargoManifest(manifests, seen, p.workspace.manifestPath, p.workspace.state)
+	return p.workspace.appendManifests(manifests, seen)
+}
+
+func (w cargoWorkspace) appendManifests(manifests []cargoManifestFile, seen map[string]bool) ([]cargoManifestFile, error) {
+	manifests, err := appendCargoManifest(manifests, seen, w.manifestPath, w.state)
 	if err != nil {
 		return nil, err
 	}
-	memberPaths, err := p.workspace.memberManifestPaths()
+	memberPaths, err := w.memberManifestPaths()
 	if err != nil {
 		return nil, err
 	}
 	for _, path := range memberPaths {
-		state, err := readCargoManifestState(path)
-		if err != nil {
-			return nil, err
-		}
-		manifests, err = appendCargoManifest(manifests, seen, path, state)
+		manifests, err = readAndAppendCargoManifest(manifests, seen, path)
 		if err != nil {
 			return nil, err
 		}
 	}
 	return manifests, nil
+}
+
+func readAndAppendCargoManifest(files []cargoManifestFile, seen map[string]bool, path string) ([]cargoManifestFile, error) {
+	state, err := readCargoManifestState(path)
+	if err != nil {
+		return nil, err
+	}
+	return appendCargoManifest(files, seen, path, state)
 }
 
 func appendCargoManifest(files []cargoManifestFile, seen map[string]bool, path string, state cargoManifestState) ([]cargoManifestFile, error) {
@@ -169,48 +186,68 @@ func appendCargoManifest(files []cargoManifestFile, seen map[string]bool, path s
 }
 
 func (w cargoWorkspace) memberManifestPaths() ([]string, error) {
+	const requireMembers = true
 	root := filepath.Dir(w.manifestPath)
 	excluded, err := cargoWorkspaceExcludes(root, w.state.workspaceExcludes)
 	if err != nil {
 		return nil, err
 	}
 	var paths []string
-	seen := make(map[string]bool)
+	seen := excluded
 	for _, pattern := range w.state.workspaceMembers {
-		matches, err := cargoWorkspaceMatches(root, pattern, true)
+		matches, err := cargoWorkspacePatternPaths(root, pattern, requireMembers)
 		if err != nil {
 			return nil, err
 		}
-		for _, match := range matches {
-			path, err := cargoMemberManifestPath(match)
-			if err != nil {
-				return nil, err
-			}
-			if !excluded[path] && !seen[path] {
-				seen[path] = true
-				paths = append(paths, path)
-			}
-		}
+		paths = appendCargoMemberPaths(paths, seen, matches)
 	}
 	return paths, nil
 }
 
+func appendCargoMemberPaths(paths []string, seen map[string]bool, matches []string) []string {
+	for _, path := range matches {
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	return paths
+}
+
 func cargoWorkspaceExcludes(root string, patterns []string) (map[string]bool, error) {
+	const requireMatches = false
 	excluded := make(map[string]bool)
 	for _, pattern := range patterns {
-		matches, err := cargoWorkspaceMatches(root, pattern, false)
+		matches, err := cargoWorkspacePatternPaths(root, pattern, requireMatches)
 		if err != nil {
 			return nil, err
 		}
-		for _, match := range matches {
-			path, err := cargoMemberManifestPath(match)
-			if err != nil {
-				return nil, err
-			}
-			excluded[path] = true
-		}
+		addCargoWorkspaceExclusions(excluded, matches)
 	}
 	return excluded, nil
+}
+
+func addCargoWorkspaceExclusions(excluded map[string]bool, paths []string) {
+	for _, path := range paths {
+		excluded[path] = true
+	}
+}
+
+func cargoWorkspacePatternPaths(root, pattern string, required bool) ([]string, error) {
+	matches, err := cargoWorkspaceMatches(root, pattern, required)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(matches))
+	for _, match := range matches {
+		path, err := cargoMemberManifestPath(match)
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil
 }
 
 func cargoWorkspaceMatches(root, pattern string, required bool) ([]string, error) {
@@ -218,8 +255,9 @@ func cargoWorkspaceMatches(root, pattern string, required bool) ([]string, error
 	if err != nil {
 		return nil, fmt.Errorf("invalid Cargo workspace member pattern %q: %w", pattern, err)
 	}
-	if required && len(matches) == 0 {
-		return nil, fmt.Errorf("Cargo workspace member %q does not exist", pattern)
+	missingRequiredMember := required && len(matches) == 0
+	if missingRequiredMember {
+		return nil, fmt.Errorf("workspace member %q does not exist", pattern)
 	}
 	return matches, nil
 }
@@ -297,7 +335,8 @@ func (p cargoProject) manifestPackages(manifest cargoManifestFile) ([]string, er
 	if !manifest.state.inheritedDependency {
 		return packages, nil
 	}
-	if p.workspace.manifestPath == "" || len(manifest.state.inheritedNames) == 0 {
+	unresolvedInheritance := p.workspace.manifestPath == "" || len(manifest.state.inheritedNames) == 0
+	if unresolvedInheritance {
 		return nil, fmt.Errorf("inherited Cargo dependency in %s cannot be resolved", manifest.path)
 	}
 	return p.appendInheritedPackages(packages, manifest)
@@ -305,8 +344,9 @@ func (p cargoProject) manifestPackages(manifest cargoManifestFile) ([]string, er
 
 func (p cargoProject) appendInheritedPackages(packages []string, manifest cargoManifestFile) ([]string, error) {
 	seen := packageSpecSet(packages)
+	workspaceSpecs := p.workspace.state.workspaceSpecs
 	for _, name := range manifest.state.inheritedNames {
-		spec, ok := p.workspace.state.workspaceSpecs[name]
+		spec, ok := workspaceSpecs[name]
 		if !ok {
 			return nil, fmt.Errorf("workspace dependency %q is not defined in %s", name, p.workspace.manifestPath)
 		}

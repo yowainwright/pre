@@ -203,7 +203,7 @@ Set `PRE_MANAGE_THEME=contrast` for a brighter theme or `PRE_MANAGE_THEME=mono` 
 
 `uv` targets the active environment with `uv pip`; Cargo actions edit project dependencies.
 
-#### `--upgrade`
+### `--upgrade`
 
 Upgrade without opening the UI. An optional version selects a specific release.
 
@@ -223,7 +223,7 @@ Example `package.json` change:
  }
 ```
 
-#### `--downgrade`
+### `--downgrade`
 
 Install a specific older version without opening the UI.
 
@@ -243,7 +243,7 @@ Example `package.json` change:
  }
 ```
 
-#### `--uninstall`
+### `--uninstall`
 
 Remove a package without opening the UI.
 
@@ -450,7 +450,7 @@ Example output (excerpt):
 }
 ```
 
-#### `--events`
+### `--events`
 
 List events matching a text query. Omit the query to list all events.
 
