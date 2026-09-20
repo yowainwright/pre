@@ -12,11 +12,18 @@ Zero config. One runtime binary.
 
 ### Homebrew
 
+<!-- Installation matches the formula PR published by .github/workflows/release.yml. -->
+
 ```sh
-brew install --cask yowainwright/tap/pre
+brew install --formula yowainwright/tap/pre
 ```
 
-The macOS cask is checksum-verified but not notarized; its install hook removes quarantine only from the staged `pre` binary.
+The formula installs the release binary for macOS or Linux. If you previously installed the cask, migrate once:
+
+```sh
+brew uninstall --cask yowainwright/tap/pre
+brew install --formula yowainwright/tap/pre
+```
 
 ### Curl
 
@@ -599,6 +606,24 @@ make lint
 ```
 
 See the [Makefile](Makefile) for other tests, security checks, and release commands.
+
+### Release validation
+
+<!-- Release flow and commands from Makefile and .github/workflows/release.yml. -->
+
+`make release-preview` runs the local release checks without publishing. To check only the generated artifacts:
+
+```sh
+make release-check
+make snapshot
+make verify-release-binary
+```
+
+Snapshot verification checks all four platform binaries and the installer against their SHA-256 entries. The smoke test runs the host binary with an isolated configuration and verifies its version and default configuration. CI runs it on macOS and Linux.
+
+After a stable tagged release is published, the release workflow runs `homebrew-tap/scripts/update-formula pre <version>` and opens a tap PR containing `Formula/pre.rb` and `brews/pre.json`. The tap's CI audits, installs, and tests the formula before merging. The Homebrew update becomes available after that PR merges; prereleases do not update the stable formula.
+
+`HOMEBREW_TAP_TOKEN` needs **Contents: read and write** and **Pull requests: read and write** on `yowainwright/homebrew-tap`. If only the Homebrew job fails after publication, rerun the failed job from GitHub Actions rather than creating another tag or republishing the release.
 
 ## Docker E2E tests
 

@@ -9,8 +9,7 @@ E2E_TEST ?= npm
 LDFLAGS := -ldflags="-s -w -X main.version=$(VERSION)"
 BUILD := CGO_ENABLED=0 go build -trimpath $(LDFLAGS)
 BINARY := $(DIST)/pre
-CASK_PATH := $(DIST)/homebrew/Casks/pre.rb
-CASK_PLATFORM_COUNT := 4
+SNAPSHOT_PLATFORMS := darwin-amd64 darwin-arm64 linux-amd64 linux-arm64
 E2E_ROOT := tests/e2e
 E2E_DOCKERFILE := $(E2E_ROOT)/Dockerfile
 E2E_RUNNER := $(E2E_ROOT)/package_manager_test.sh
@@ -19,7 +18,6 @@ E2E_TEST_SCRIPTS := $(filter-out $(E2E_RUNNER),$(E2E_TEST_SCRIPTS))
 E2E_TEST_NAMES := $(basename $(notdir $(E2E_TEST_SCRIPTS)))
 E2E_TEST_NAMES := $(patsubst %_test,%,$(E2E_TEST_NAMES))
 E2E_TEST_SCRIPT := $(E2E_ROOT)/$(E2E_TEST)_test.sh
-HOST_OS := $(shell uname -s)
 
 .PHONY: build clean
 .PHONY: fmt fmt-check gosec lint lint-agent lint-agent-all lint-all lint-legibility-setup
@@ -27,7 +25,7 @@ HOST_OS := $(shell uname -s)
 .PHONY: screenshots secrets security setup snapshot tag
 .PHONY: test test-e2e test-e2e-build test-e2e-docker test-e2e-list
 .PHONY: test-integration test-race test-scripts
-.PHONY: verify-cask-install verify-e2e verify-e2e-test verify-snapshot vuln
+.PHONY: verify-release-binary verify-e2e verify-e2e-test verify-snapshot vuln
 
 build:
 	$(BUILD) -o $(BINARY) ./cmd/pre
@@ -44,22 +42,25 @@ release-check:
 	goreleaser check
 
 verify-snapshot:
-	test -s $(CASK_PATH)
-	ruby -c $(CASK_PATH)
-	grep -Eq 'version "[^"]+"' $(CASK_PATH)
-	grep -Eq '^[0-9a-f]{64}  install.sh$$' $(DIST)/checksums.txt
-	test "$$(grep -Ec 'sha256 "[0-9a-f]{64}"' $(CASK_PATH))" -eq $(CASK_PLATFORM_COUNT)
-	test "$$(grep -Ec 'binary "pre-[^"]+", target: "pre"' $(CASK_PATH))" -eq $(CASK_PLATFORM_COUNT)
-	grep -Fq 'args: ["-p", "com.apple.quarantine", binary],' $(CASK_PATH)
-	grep -Fq 'must_succeed: false,' $(CASK_PATH)
-	grep -Fq 'print_stderr: false' $(CASK_PATH)
-	grep -Fq 'args: ["-d", "com.apple.quarantine", binary] if quarantine.success?' $(CASK_PATH)
+	test -s "$(DIST)/checksums.txt"
+	@set -eu; \
+	installer_checksum="$$(shasum -a 256 install.sh)"; \
+	grep -Fxq "$$installer_checksum" "$(DIST)/checksums.txt"; \
+	for platform in $(SNAPSHOT_PLATFORMS); do \
+		artifact_dir="pre_$$(printf '%s' "$$platform" | tr '-' '_')"; \
+		set -- "$(DIST)/$${artifact_dir}"_*/pre; \
+		test "$$#" -eq 1; \
+		test -s "$$1"; \
+		checksum="$$(shasum -a 256 "$$1")"; \
+		checksum="$${checksum%% *}"; \
+		grep -Fxq "$$checksum  pre-$$platform" "$(DIST)/checksums.txt"; \
+	done
 
-verify-cask-install: verify-snapshot
-	sh tests/scripts/homebrew_cask_test.sh $(DIST)
+verify-release-binary: verify-snapshot
+	sh tests/scripts/release_artifact_test.sh "$(DIST)"
 
 release-preview:
-	$(MAKE) lint
+	$(MAKE) lint-agent-all
 	$(MAKE) test-race
 	$(MAKE) test-scripts
 	$(MAKE) test-integration
@@ -67,10 +68,7 @@ release-preview:
 	$(MAKE) security
 	$(MAKE) release-check
 	$(MAKE) snapshot
-	$(MAKE) verify-snapshot
-ifeq ($(HOST_OS),Darwin)
-	$(MAKE) verify-cask-install
-endif
+	$(MAKE) verify-release-binary
 
 clean:
 	rm -rf $(DIST)
