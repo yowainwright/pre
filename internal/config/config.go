@@ -46,19 +46,23 @@ func Load() *Config {
 		recordConfigEvent("pre.config.load_failed", err, 0)
 		return cfg
 	}
-	data, err := os.ReadFile(p)
+	loadConfigFile(p, cfg)
+	return cfg
+}
+
+func loadConfigFile(path string, cfg *Config) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			recordConfigEvent("pre.config.load_failed", err, 0)
 		}
-		return cfg
+		return
 	}
 	if err := json.Unmarshal(data, cfg); err != nil {
 		recordConfigEvent("pre.config.load_failed", err, len(data))
-		return cfg
+		return
 	}
 	obs.Record("pre.config.loaded", map[string]any{"config_bytes": len(data)})
-	return cfg
 }
 
 func defaults() *Config {
@@ -78,12 +82,16 @@ func Save(cfg *Config) error {
 		recordConfigEvent("pre.config.write_failed", err, 0)
 		return err
 	}
+	return writeConfigFile(p, cfg)
+}
+
+func writeConfigFile(path string, cfg *Config) error {
 	data, err := marshalIndentFn(cfg, "", "  ")
 	if err != nil {
 		recordConfigEvent("pre.config.write_failed", err, 0)
 		return err
 	}
-	if err := fileutil.AtomicWriteFile(p, data, 0600); err != nil {
+	if err := fileutil.AtomicWriteFile(path, data, 0600); err != nil {
 		recordConfigEvent("pre.config.write_failed", err, len(data))
 		return err
 	}

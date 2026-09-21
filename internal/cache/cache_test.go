@@ -310,7 +310,8 @@ func TestSaveAndLoadRecordDiagnostics(t *testing.T) {
 
 	written := requireObsEvent(t, "pre.cache.written")
 	loaded := requireObsEvent(t, "pre.cache.loaded")
-	if written["cache_entries"] != float64(1) || loaded["cache_entries"] != float64(1) {
+	incorrectCounts := written["cache_entries"] != float64(1) || loaded["cache_entries"] != float64(1)
+	if incorrectCounts {
 		t.Fatalf("expected cache entry counts, got written=%#v loaded=%#v", written, loaded)
 	}
 }
@@ -327,7 +328,8 @@ func TestUpdateAddsToExistingCache(t *testing.T) {
 	})
 
 	loaded := Load()
-	if !Hit(loaded, Key("npm", "react", "18.0.0")) || !Hit(loaded, Key("npm", "lodash", "4.17.21")) {
+	missingEntry := !Hit(loaded, Key("npm", "react", "18.0.0")) || !Hit(loaded, Key("npm", "lodash", "4.17.21"))
+	if missingEntry {
 		t.Errorf("expected update to preserve old entries and add new ones, got %v", loaded)
 	}
 }
@@ -384,14 +386,18 @@ func TestSaveBadDir(t *testing.T) {
 
 func TestParseKey(t *testing.T) {
 	eco, name, version := ParseKey("npm/react@18.0.0")
-	if eco != "npm" || name != "react" || version != "18.0.0" {
+	wrongPackage := eco != "npm" || name != "react"
+	incorrectKey := wrongPackage || version != "18.0.0"
+	if incorrectKey {
 		t.Errorf("unexpected: eco=%q name=%q version=%q", eco, name, version)
 	}
 }
 
 func TestParseKeyNoSlash(t *testing.T) {
 	eco, name, version := ParseKey("noslash")
-	if eco != "noslash" || name != "" || version != "" {
+	hasPackage := name != "" || version != ""
+	incorrectKey := eco != "noslash" || hasPackage
+	if incorrectKey {
 		t.Errorf("expected key as eco and empty name/version, got eco=%q name=%q version=%q", eco, name, version)
 	}
 }
@@ -550,7 +556,9 @@ func TestLoadMigratesLegacyKeys(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "pre"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	data := []byte(`{"npm/react":{"version":"18.0.0","checkedAt":"` + time.Now().UTC().Format(time.RFC3339) + `"}}`)
+	now := time.Now().UTC()
+	checkedAt := now.Format(time.RFC3339)
+	data := []byte(`{"npm/react":{"version":"18.0.0","checkedAt":"` + checkedAt + `"}}`)
 	if err := os.WriteFile(filepath.Join(dir, "pre", "versions.json"), data, 0644); err != nil {
 		t.Fatal(err)
 	}
