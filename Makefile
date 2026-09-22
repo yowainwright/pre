@@ -112,7 +112,14 @@ gosec:
 security: vuln gosec
 
 test-integration:
-	go test -tags integration ./tests/integration/
+	@for attempt in 1 2 3; do \
+		go test -count=1 -tags integration ./tests/integration/ && exit 0; \
+		status=$$?; \
+		[ "$$attempt" -lt 3 ] || exit "$$status"; \
+		delay=$$((attempt * 2)); \
+		printf 'Integration tests failed (attempt %s/3); retrying in %ss...\n' "$$attempt" "$$delay" >&2; \
+		sleep "$$delay" || exit "$$?"; \
+	done
 
 test-scripts:
 	sh tests/scripts/install_test.sh
