@@ -41,7 +41,9 @@ func SetTTL(s string) {
 	if s == "" {
 		return
 	}
-	if d, err := time.ParseDuration(s); err == nil && d >= 0 {
+	d, err := time.ParseDuration(s)
+	valid := err == nil && d >= 0
+	if valid {
 		configuredTTL = d
 	}
 }
@@ -122,7 +124,10 @@ func Update(fn func(Cache)) {
 		recordCacheEvent("pre.cache.write_failed", nil, err)
 		return
 	}
+	updateCacheFile(p, fn)
+}
 
+func updateCacheFile(p string, fn func(Cache)) {
 	release, err := acquireLock(filepath.Join(filepath.Dir(p), "versions.lock"))
 	if err != nil {
 		recordCacheEvent("pre.cache.write_failed", nil, err)
@@ -205,11 +210,13 @@ func Hit(c Cache, key string) bool {
 	ttl := TTL()
 	currentSource := Source()
 	sourceMismatch := currentSource != "" && e.Source != currentSource
-	if ttl <= 0 || e.CheckedAt.IsZero() || sourceMismatch {
+	unusable := ttl <= 0 || e.CheckedAt.IsZero() || sourceMismatch
+	if unusable {
 		return false
 	}
 	age := time.Since(e.CheckedAt)
-	return age >= 0 && age < ttl
+	fresh := age >= 0 && age < ttl
+	return fresh
 }
 
 func Set(c Cache, key string) {
@@ -226,7 +233,8 @@ func Key(ecosystem, name, version string) string {
 	if version == "" {
 		return key
 	}
-	return key + "@" + version
+	versionedKey := key + "@" + version
+	return versionedKey
 }
 
 func ParseKey(key string) (ecosystem, name, version string) {
@@ -573,18 +581,15 @@ func quarantineCache(path string) {
 func acquireLock(path string) (func(), error) {
 	deadline := time.Now().Add(cacheLockTimeout)
 	for {
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		release, err := createLock(path)
 		if err == nil {
-			_, _ = file.WriteString(time.Now().Format(time.RFC3339Nano))
-			_ = file.Close()
-			return func() { _ = os.Remove(path) }, nil
+			return release, nil
 		}
 
 		if !errors.Is(err, os.ErrExist) {
 			return nil, err
 		}
-		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > cacheLockStaleAfter {
-			_ = os.Remove(path)
+		if removeStaleLock(path) {
 			continue
 		}
 		if time.Now().After(deadline) {
@@ -592,4 +597,26 @@ func acquireLock(path string) (func(), error) {
 		}
 		time.Sleep(cacheLockRetry)
 	}
+}
+
+func createLock(path string) (func(), error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return nil, err
+	}
+	_, _ = file.WriteString(time.Now().Format(time.RFC3339Nano))
+	_ = file.Close()
+	return func() { _ = os.Remove(path) }, nil
+}
+
+func removeStaleLock(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	if time.Since(info.ModTime()) <= cacheLockStaleAfter {
+		return false
+	}
+	_ = os.Remove(path)
+	return true
 }

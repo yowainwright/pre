@@ -93,7 +93,8 @@ func TestLoadCustomManagers(t *testing.T) {
 		},
 	})
 	cfg := Load()
-	if len(cfg.Managers) != 1 || cfg.Managers[0].Name != "yarn" {
+	incorrectManagers := len(cfg.Managers) != 1 || cfg.Managers[0].Name != "yarn"
+	if incorrectManagers {
 		t.Errorf("expected yarn manager, got %v", cfg.Managers)
 	}
 }
@@ -144,7 +145,8 @@ func TestSaveAndLoadRecordDiagnostics(t *testing.T) {
 
 	written := requireObsEvent(t, "pre.config.written")
 	loaded := requireObsEvent(t, "pre.config.loaded")
-	if written["config_bytes"] == float64(0) || loaded["config_bytes"] == float64(0) {
+	missingByteCounts := written["config_bytes"] == float64(0) || loaded["config_bytes"] == float64(0)
+	if missingByteCounts {
 		t.Fatalf("expected config byte counts, got written=%#v loaded=%#v", written, loaded)
 	}
 }
@@ -201,7 +203,8 @@ func TestSaveMarshalError(t *testing.T) {
 
 	defer withConfigDir(t.TempDir())()
 	err := Save(defaults())
-	if err == nil || err.Error() != "marshal fail" {
+	unexpectedError := err == nil || err.Error() != "marshal fail"
+	if unexpectedError {
 		t.Errorf("expected marshal error, got %v", err)
 	}
 }

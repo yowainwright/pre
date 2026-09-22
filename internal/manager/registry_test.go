@@ -37,15 +37,7 @@ func TestBuiltinsCoverInstallCommands(t *testing.T) {
 		"poetry": {"add", "install", "update"},
 	}
 	for name, commands := range tests {
-		mgr := Get(name)
-		if mgr == nil {
-			t.Fatalf("expected manager %q", name)
-		}
-		for _, command := range commands {
-			if !slices.Contains(mgr.InstallCmds, command) {
-				t.Errorf("expected %s to intercept %q", name, command)
-			}
-		}
+		assertInstallCommands(t, name, commands)
 	}
 }
 
@@ -57,9 +49,10 @@ func TestGetUnknown(t *testing.T) {
 
 func TestSetUserManagersAppend(t *testing.T) {
 	defer resetExtraManagers()()
-	SetUserManagers([]Manager{
+	managers := []Manager{
 		{Name: "yarn", Ecosystem: "npm", InstallCmds: []string{"add"}},
-	})
+	}
+	SetUserManagers(managers)
 	mgr := Get("yarn")
 	if mgr == nil {
 		t.Fatal("expected yarn manager to be available")
@@ -71,9 +64,10 @@ func TestSetUserManagersAppend(t *testing.T) {
 
 func TestSetUserManagersOverride(t *testing.T) {
 	defer resetExtraManagers()()
-	SetUserManagers([]Manager{
+	managers := []Manager{
 		{Name: "npm", Ecosystem: "npm", InstallCmds: []string{"install", "add", "i", "ci"}},
-	})
+	}
+	SetUserManagers(managers)
 	mgr := Get("npm")
 	if mgr == nil {
 		t.Fatal("expected npm manager")
@@ -111,8 +105,22 @@ func TestMergeManagersOverride(t *testing.T) {
 		t.Errorf("expected same count after override, got %d", len(result))
 	}
 	for _, m := range result {
-		if m.Name == "npm" && m.InstallCmds[0] != "ci" {
+		overrideMissing := m.Name == "npm" && m.InstallCmds[0] != "ci"
+		if overrideMissing {
 			t.Error("expected npm to be overridden")
+		}
+	}
+}
+
+func assertInstallCommands(t *testing.T, name string, commands []string) {
+	t.Helper()
+	mgr := Get(name)
+	if mgr == nil {
+		t.Fatalf("expected manager %q", name)
+	}
+	for _, command := range commands {
+		if !slices.Contains(mgr.InstallCmds, command) {
+			t.Errorf("expected %s to intercept %q", name, command)
 		}
 	}
 }

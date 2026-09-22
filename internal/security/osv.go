@@ -190,7 +190,8 @@ func osvQueryFrom(query Query) osvQuery {
 
 func osvBatchEndpoint(endpoint string) (string, bool) {
 	parsed, err := url.Parse(endpoint)
-	if err != nil || !strings.HasSuffix(parsed.Path, "/query") {
+	unsupportedEndpoint := err != nil || !strings.HasSuffix(parsed.Path, "/query")
+	if unsupportedEndpoint {
 		return "", false
 	}
 	parsed.Path = strings.TrimSuffix(parsed.Path, "/query") + "/querybatch"
@@ -227,7 +228,8 @@ func newOSVRequest(endpoint string, body []byte) (*http.Request, context.CancelF
 }
 
 func decodeOSVHTTPResponse(response *http.Response, target any, limit int64) error {
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+	unsuccessfulResponse := response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices
+	if unsuccessfulResponse {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
 		return fmt.Errorf("request: status %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
 	}
@@ -268,7 +270,8 @@ func extractSeverity(dbSeverity string, cvssEntries []severityEntry) (string, fl
 	for _, s := range cvssEntries {
 		isSupportedCVSS := s.Type == "" || s.Type == cvssTypeV3
 		isUnsupportedCVSS := strings.HasPrefix(s.Type, "CVSS_") && !isSupportedCVSS
-		if s.Type == cvssTypeV4 || isUnsupportedCVSS {
+		unsupportedCVSS := s.Type == cvssTypeV4 || isUnsupportedCVSS
+		if unsupportedCVSS {
 			return SeverityCritical, 0
 		}
 		if rating, score := severityFromVector(s.Score); rating != "" {

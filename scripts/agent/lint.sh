@@ -1,20 +1,18 @@
 #!/usr/bin/env sh
 set -u
 
-root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
-cd "$root" || exit 0
+has_lint_project() {
+  [ -f go.mod ] && [ -f scripts/lint.sh ]
+}
 
-if [ ! -f go.mod ] || [ ! -f scripts/lint.sh ]; then
-  printf '{}\n'
-  exit 0
-fi
+main() {
+  root="$(git rev-parse --show-toplevel 2>/dev/null)" || return 0
+  cd "$root" || return 0
+  has_lint_project && project_status=0 || project_status=$?
+  case "$project_status" in
+  0) ./scripts/lint.sh --hook ;;
+  *) printf '{}\n' ;;
+  esac
+}
 
-_PRE_LINT_SOURCED=1
-. scripts/lint.sh
-if ! has_changed_inputs; then
-  printf '{}\n'
-  exit 0
-fi
-
-sh scripts/lint.sh --agent
-printf '{}\n'
+main

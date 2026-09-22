@@ -10,7 +10,8 @@ import (
 
 func TestRenderQuiet(t *testing.T) {
 	out := renderQuiet(8)
-	if !strings.Contains(out, "8") || !strings.Contains(out, "clean") {
+	unexpectedOutput := !strings.Contains(out, "8") || !strings.Contains(out, "clean")
+	if unexpectedOutput {
 		t.Errorf("unexpected renderQuiet output: %q", out)
 	}
 }
@@ -37,22 +38,15 @@ func TestNodeStatusError(t *testing.T) {
 }
 
 func TestNodeStatusVulns(t *testing.T) {
-	out := nodeStatus(scanResult{vulns: []security.Vulnerability{{ID: "CVE-2021-1234"}}})
+	result := scanResult{vulns: []security.Vulnerability{{ID: "CVE-2021-1234"}}}
+	out := nodeStatus(result)
 	if !strings.Contains(out, "vulnerabilit") {
 		t.Errorf("expected 'vulnerabilit' in output, got %q", out)
 	}
 }
 
 func TestRenderCriticalDetail(t *testing.T) {
-	results := []scanResult{
-		{
-			label: "lodash@4.17.11",
-			vulns: []security.Vulnerability{
-				{ID: "CVE-2021-23337", Severity: "CRITICAL", Score: 9.8, Summary: "Prototype Pollution"},
-				{ID: "CVE-2021-0001", Severity: "MEDIUM", Summary: "Minor issue"},
-			},
-		},
-	}
+	results := criticalDetailResults()
 	out := renderCriticalDetail(results)
 	if !strings.Contains(out, "CVE-2021-23337") {
 		t.Errorf("expected CVE ID in detail box, got %q", out)
@@ -142,7 +136,20 @@ func TestRenderTreeSanitizesTerminalControls(t *testing.T) {
 	}
 	result := scanResult{label: "lodash\x1b[2J@1.0.0", vulns: []security.Vulnerability{vulnerability}}
 	output := renderTree("npm\x1b[2J", []scanResult{result})
-	if strings.Contains(output, "\x1b") || strings.Contains(output, "fake clean\nsummary") {
+	unexpectedOutput := strings.Contains(output, "\x1b") || strings.Contains(output, "fake clean\nsummary")
+	if unexpectedOutput {
 		t.Fatalf("expected untrusted terminal controls to be replaced, got %q", output)
+	}
+}
+
+func criticalDetailResults() []scanResult {
+	return []scanResult{
+		{
+			label: "lodash@4.17.11",
+			vulns: []security.Vulnerability{
+				{ID: "CVE-2021-23337", Severity: "CRITICAL", Score: 9.8, Summary: "Prototype Pollution"},
+				{ID: "CVE-2021-0001", Severity: "MEDIUM", Summary: "Minor issue"},
+			},
+		},
 	}
 }

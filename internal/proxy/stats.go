@@ -41,6 +41,10 @@ func loadSystemStats() SystemStats {
 		recordSystemStatsEvent("pre.system_stats.load_failed", SystemStats{}, err)
 		return SystemStats{}
 	}
+	return readSystemStats(path)
+}
+
+func readSystemStats(path string) SystemStats {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -65,6 +69,10 @@ func saveSystemStats(s SystemStats) {
 	} else if s.LastUpdated.IsZero() {
 		s.LastUpdated = loadSystemStatsFn().LastUpdated
 	}
+	writeSystemStats(s)
+}
+
+func writeSystemStats(s SystemStats) {
 	path, err := systemStatsPath()
 	if err != nil {
 		recordSystemStatsEvent("pre.system_stats.write_failed", s, err)

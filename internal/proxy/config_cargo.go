@@ -25,16 +25,16 @@ type cargoConfigState struct {
 
 func cargoConfigurationError(args []string) error {
 	if cargoHasConfigOverride(args) {
-		return errors.New("Cargo --config overrides cannot be scanned")
+		return errors.New("cargo --config overrides cannot be scanned")
 	}
 	if cargoHasFlag(args, "--lockfile-path") {
-		return errors.New("Cargo --lockfile-path overrides cannot be scanned")
+		return errors.New("cargo --lockfile-path overrides cannot be scanned")
 	}
 	if cargoHasFlag(args, "--offline", "--frozen") {
-		return errors.New("Cargo offline resolution cannot be scanned")
+		return errors.New("cargo offline resolution cannot be scanned")
 	}
 	if option := cargoUnsupportedUnstableOption(args); option != "" {
-		return fmt.Errorf("Cargo unstable option %q cannot be scanned", option)
+		return fmt.Errorf("cargo unstable option %q cannot be scanned", option)
 	}
 	command := cargoCommand(args)
 	state, err := loadCargoConfigState(args, command)
@@ -47,21 +47,29 @@ func cargoConfigurationError(args []string) error {
 func cargoUnsupportedUnstableOption(args []string) string {
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
-		if arg != "-Z" && !strings.HasPrefix(arg, "-Z") {
+		if !strings.HasPrefix(arg, "-Z") {
 			continue
 		}
-		if arg == "-Z" && index+1 < len(args) {
+		var consumed bool
+		arg, consumed = cargoUnstableOption(args, index)
+		if consumed {
 			index++
-			arg = args[index]
-		} else {
-			arg = strings.TrimPrefix(arg, "-Z")
-			arg = strings.TrimPrefix(arg, "=")
 		}
-		if arg != "" && arg != "unstable-options" {
+		unsupported := arg != "" && arg != "unstable-options"
+		if unsupported {
 			return arg
 		}
 	}
 	return ""
+}
+
+func cargoUnstableOption(args []string, index int) (string, bool) {
+	separate := args[index] == "-Z" && index+1 < len(args)
+	if separate {
+		return args[index+1], true
+	}
+	option := strings.TrimPrefix(args[index], "-Z")
+	return strings.TrimPrefix(option, "="), false
 }
 
 func loadCargoConfigState(args []string, command string) (cargoConfigState, error) {
@@ -78,7 +86,8 @@ func loadCargoConfigState(args []string, command string) (cargoConfigState, erro
 
 func cargoHasConfigOverride(args []string) bool {
 	for _, arg := range args {
-		if arg == "--config" || strings.HasPrefix(arg, "--config=") {
+		configOverride := arg == "--config" || strings.HasPrefix(arg, "--config=")
+		if configOverride {
 			return true
 		}
 	}
@@ -99,7 +108,8 @@ func cargoConfigPaths(startDir string, includeLocal bool) ([]string, error) {
 		return nil, err
 	}
 	paths, err := appendCargoConfig(nil, home)
-	if err != nil || !includeLocal {
+	skipLocal := err != nil || !includeLocal
+	if skipLocal {
 		return paths, err
 	}
 	return appendLocalCargoConfigs(paths, startDir)
@@ -150,7 +160,8 @@ func cargoLocalConfigDirs(startDir string) ([]string, error) {
 func appendCargoConfig(paths []string, configDir string) ([]string, error) {
 	legacyPath := filepath.Join(configDir, "config")
 	legacyExists, err := cargoConfigExists(legacyPath)
-	if err != nil || legacyExists {
+	legacyResolved := err != nil || legacyExists
+	if legacyResolved {
 		return appendIfCargoConfig(paths, legacyPath, legacyExists), err
 	}
 	tomlPath := filepath.Join(configDir, "config.toml")
@@ -250,31 +261,41 @@ func (s *cargoConfigState) consume(section, line string) {
 	if cargoConfigKeyChangesResolution(section, key) {
 		s.resolutionOverride = true
 	}
-	if (section == "registry" && key == "default") || (section == "" && key == "registry.default") {
+	if cargoConfigField(section, key, "registry", "default") {
 		s.defaultRegistry = cargoConfigString(value)
 	}
-	if section == "" && key == "registry" {
+	inlineRegistry := section == "" && key == "registry"
+	if inlineRegistry {
 		s.defaultRegistry = cargoInlineDefaultRegistry(value)
 	}
-	if (section == "net" && key == "offline") || (section == "" && key == "net.offline") {
+	if cargoConfigField(section, key, "net", "offline") {
 		s.offline = cargoConfigString(value)
 	}
 }
 
 func cargoConfigKeyChangesResolution(section, key string) bool {
-	if section == "" && (key == "include" || key == "paths") {
-		return true
-	}
-	if section == "" && (key == "patch" || key == "source") {
+	rootOverride := section == "" && slices.Contains([]string{"include", "paths", "patch", "source"}, key)
+	if rootOverride {
 		return true
 	}
 	isCratesSource := section == "source.crates-io"
 	isDottedSource := section == "" && strings.HasPrefix(key, "source.crates-io.")
-	isCratesIndex := section == "registries.crates-io" && key == "index"
-	isDottedIndex := section == "" && key == "registries.crates-io.index"
-	isLockfileOverride := section == "resolver" && key == "lockfile-path"
-	isDottedLockfile := section == "" && key == "resolver.lockfile-path"
-	return isCratesSource || isDottedSource || isCratesIndex || isDottedIndex || isLockfileOverride || isDottedLockfile
+	if isCratesSource {
+		return true
+	}
+	if isDottedSource {
+		return true
+	}
+	if cargoConfigField(section, key, "registries.crates-io", "index") {
+		return true
+	}
+	return cargoConfigField(section, key, "resolver", "lockfile-path")
+}
+
+func cargoConfigField(section, key, group, field string) bool {
+	nested := section == group && key == field
+	dotted := section == "" && key == group+"."+field
+	return nested || dotted
 }
 
 func normalizeCargoConfigKey(value string) string {
@@ -297,7 +318,7 @@ func cargoConfigString(value string) string {
 
 func validateCargoConfigState(args []string, command string, state cargoConfigState) error {
 	if state.resolutionOverride {
-		return fmt.Errorf("Cargo resolution override in %s cannot be scanned", state.resolutionOverridePath)
+		return fmt.Errorf("cargo resolution override in %s cannot be scanned", state.resolutionOverridePath)
 	}
 	if err := cargoOfflineEnvironmentError(state.offline); err != nil {
 		return err
@@ -305,21 +326,27 @@ func validateCargoConfigState(args []string, command string, state cargoConfigSt
 	if err := cargoRegistryIndexEnvironmentError(); err != nil {
 		return err
 	}
-	if command != "add" && command != "install" {
+	ignoresDefaultRegistry := command != "add" && command != "install"
+	if ignoresDefaultRegistry {
 		return nil
 	}
+	return cargoDefaultRegistryError(args, state.defaultRegistry)
+}
+
+func cargoDefaultRegistryError(args []string, defaultRegistry string) error {
 	explicitRegistry := cargoFlagValue(args, "--registry")
 	if explicitRegistry == "crates-io" {
 		return nil
 	}
 	registry := strings.TrimSpace(os.Getenv("CARGO_REGISTRY_DEFAULT"))
 	if registry == "" {
-		registry = state.defaultRegistry
+		registry = defaultRegistry
 	}
-	if registry == "" || registry == "crates-io" {
+	publicRegistry := registry == "" || registry == "crates-io"
+	if publicRegistry {
 		return nil
 	}
-	return fmt.Errorf("Cargo default registry %q cannot be scanned as crates.io", registry)
+	return fmt.Errorf("cargo default registry %q cannot be scanned as crates.io", registry)
 }
 
 func cargoOfflineEnvironmentError(configValue string) error {
@@ -331,23 +358,25 @@ func cargoOfflineEnvironmentError(configValue string) error {
 	case "", "0", "false":
 		return nil
 	case "1", "true":
-		return errors.New("Cargo offline resolution cannot be scanned")
+		return errors.New("cargo offline resolution cannot be scanned")
 	default:
-		return fmt.Errorf("Cargo offline setting %q cannot be scanned", value)
+		return fmt.Errorf("cargo offline setting %q cannot be scanned", value)
 	}
 }
 
 func cargoRegistryIndexEnvironmentError() error {
 	index := strings.TrimSpace(os.Getenv("CARGO_REGISTRIES_CRATES_IO_INDEX"))
-	if index == "" || isCratesIOIndex(index) {
+	publicIndex := index == "" || isCratesIOIndex(index)
+	if publicIndex {
 		return nil
 	}
-	return fmt.Errorf("Cargo crates.io index override %q cannot be scanned", index)
+	return fmt.Errorf("cargo crates.io index override %q cannot be scanned", index)
 }
 
 func isCratesIOIndex(index string) bool {
 	normalized := strings.TrimSuffix(index, "/")
 	gitIndex := "https://github.com/rust-lang/crates.io-index"
 	sparseIndex := "sparse+https://index.crates.io"
-	return normalized == gitIndex || normalized == sparseIndex
+	publicIndex := normalized == gitIndex || normalized == sparseIndex
+	return publicIndex
 }

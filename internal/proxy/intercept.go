@@ -32,103 +32,154 @@ var (
 )
 
 func Intercept(mgr *manager.Manager, args []string) {
-	start := time.Now()
-	run := proxyRun{mgr: mgr, args: args, start: start}
+	run := proxyRun{mgr: mgr, args: args, start: time.Now()}
 	run.record("pre.command.started", nil)
-	if disableEnabled() {
-		run.recordDecision("pre.command.bypassed", "bypassed", "env_disabled", nil)
-		ExecFn(mgr.Name, args)
+	if run.bypassDisabled() {
 		return
 	}
-
 	packageArgs, isInstall := installPackageArgs(mgr, args)
-	isPassthrough := !isInstall
-	if isPassthrough {
+	if !isInstall {
 		run.recordDecision("pre.command.passthrough", "passthrough", "not_install_command", nil)
 		ExecFn(mgr.Name, args)
 		return
 	}
-	if err := cargoInstallError(mgr, args); err != nil {
-		run.recordBlock("cargo_policy", err)
-		blockIncompleteInstall(err)
-		return
-	}
-	if err := npmInstallError(mgr, npmPolicyArgs(mgr, args, packageArgs)); err != nil {
-		run.recordBlock("npm_policy", err)
-		blockIncompleteInstall(err)
-		return
-	}
-	if err := unknownInstallTargetError(mgr, args, packageArgs); err != nil {
-		run.recordBlock("install_target_policy", err)
-		blockIncompleteInstall(err)
-		return
-	}
+	run.interceptInstall(packageArgs)
+}
 
-	fromProject := len(requirementFilePaths(mgr, packageArgs)) > 0
-	packages, err := installPackages(mgr, packageArgs)
-	if err != nil {
-		run.recordBlock("package_resolution", err)
-		blockIncompleteInstall(err)
+func (run proxyRun) bypassDisabled() bool {
+	if !disableEnabled() {
+		return false
+	}
+	run.recordDecision("pre.command.bypassed", "bypassed", "env_disabled", nil)
+	ExecFn(run.mgr.Name, run.args)
+	return true
+}
+
+func (run proxyRun) interceptInstall(packageArgs []string) {
+	if !run.allowInstall(packageArgs) {
 		return
 	}
-	if err = validateCargoDirectPackages(mgr, args, packages); err != nil {
-		run.recordBlock("cargo_direct_package", err)
-		blockIncompleteInstall(err)
-		return
-	}
-	if len(packages) == 0 {
-		fromProject = true
-		packages, err = installFallbackPackages(mgr, args)
-	}
-	if err != nil {
-		run.recordBlock("project_resolution", err)
-		blockIncompleteInstall(err)
+	packages, fromProject, ok := run.resolvePackages(packageArgs)
+	if !ok {
 		return
 	}
 	if len(packages) == 0 {
 		run.recordDecision("pre.command.approved", "approved", "no_packages", nil)
-		ExecFn(mgr.Name, args)
+		ExecFn(run.mgr.Name, run.args)
 		return
 	}
-	if limit, exceeded := packageLimitExceeded(len(packages)); exceeded {
-		run.recordDecision("pre.scan.blocked", "blocked", "package_limit", map[string]any{
-			"package_count": len(packages),
-			"package_limit": limit,
-		})
-		fmt.Print(display.Red(fmt.Sprintf(
-			"pre: %d package(s) exceeds PRE_MAX_PACKAGES=%d; install blocked (raise PRE_MAX_PACKAGES or use PRE_DISABLE=1 to bypass)\n",
-			len(packages), limit,
-		)))
-		processExit(1)
-		return
-	}
+	run.interceptPackages(packages, fromProject)
+}
 
+func (run proxyRun) interceptPackages(packages []string, fromProject bool) {
+	if !run.allowPackageCount(len(packages)) {
+		return
+	}
+	results := run.scanPackages(packages, fromProject)
+	if !run.approveResults(results) {
+		return
+	}
+	ExecFn(run.mgr.Name, run.args)
+}
+
+func (run proxyRun) allowInstall(packageArgs []string) bool {
+	if run.blockInstall("cargo_policy", cargoInstallError(run.mgr, run.args)) {
+		return false
+	}
+	policyArgs := npmPolicyArgs(run.mgr, run.args, packageArgs)
+	if run.blockInstall("npm_policy", npmInstallError(run.mgr, policyArgs)) {
+		return false
+	}
+	targetErr := unknownInstallTargetError(run.mgr, run.args, packageArgs)
+	return !run.blockInstall("install_target_policy", targetErr)
+}
+
+func (run proxyRun) blockInstall(reason string, err error) bool {
+	if err == nil {
+		return false
+	}
+	run.recordBlock(reason, err)
+	blockIncompleteInstall(err)
+	return true
+}
+
+func (run proxyRun) resolvePackages(packageArgs []string) ([]string, bool, bool) {
+	fromProject := len(requirementFilePaths(run.mgr, packageArgs)) > 0
+	packages, err := installPackages(run.mgr, packageArgs)
+	if run.blockInstall("package_resolution", err) {
+		return nil, fromProject, false
+	}
+	err = validateCargoDirectPackages(run.mgr, run.args, packages)
+	if run.blockInstall("cargo_direct_package", err) {
+		return nil, fromProject, false
+	}
+	if len(packages) == 0 {
+		fromProject = true
+		packages, err = installFallbackPackages(run.mgr, run.args)
+	}
+	if run.blockInstall("project_resolution", err) {
+		return nil, fromProject, false
+	}
+	return packages, fromProject, true
+}
+
+func (run proxyRun) allowPackageCount(count int) bool {
+	limit, exceeded := packageLimitExceeded(count)
+	if !exceeded {
+		return true
+	}
+	run.recordDecision("pre.scan.blocked", "blocked", "package_limit", map[string]any{
+		"package_count": count, "package_limit": limit,
+	})
+	message := fmt.Sprintf("pre: %d package(s) exceeds PRE_MAX_PACKAGES=%d; install blocked (raise PRE_MAX_PACKAGES or use PRE_DISABLE=1 to bypass)\n", count, limit)
+	fmt.Print(display.Red(message))
+	processExit(1)
+	return false
+}
+
+func (run proxyRun) scanPackages(packages []string, fromProject bool) []scanResult {
 	c := loadCacheFn()
-
-	uncachedCount := countUncached(mgr, packages, c)
-	if uncachedCount > 0 && !quietEnabled() {
+	uncachedCount := countUncached(run.mgr, packages, c)
+	showProgress := uncachedCount > 0 && !quietEnabled()
+	if showProgress {
 		fmt.Print(display.Dim(fmt.Sprintf("scanning %d package(s)...\n", uncachedCount)))
 	}
 	run.record("pre.scan.started", map[string]any{
-		"package_count":  len(packages),
-		"uncached_count": uncachedCount,
-		"from_project":   fromProject,
+		"package_count": len(packages), "uncached_count": uncachedCount, "from_project": fromProject,
 	})
-
-	results := scanBatchWithPolicy(mgr, packages, c, !fromProject)
+	results := scanBatchWithPolicy(run.mgr, packages, c, !fromProject)
 	counts := countScanResults(results)
 	attrs := scanResultAttrs(results, counts)
-	attrs["duration_ms"] = durationMillis(start)
+	attrs["duration_ms"] = durationMillis(run.start)
 	run.record("pre.scan.completed", attrs)
+	return results
+}
 
+func (run proxyRun) approveResults(results []scanResult) bool {
 	approvalRequired := needsApproval(results)
-	level := outputLevel(results)
-	if approvalRequired {
-		if level == outputQuiet {
-			level = outputFull
-		}
+	printScanResults(run.mgr.Ecosystem, results, approvalRequired)
+	counts := countScanResults(results)
+	if counts.errors > 0 {
+		run.recordDecision("pre.scan.blocked", "blocked", "scan_error", map[string]any{"error_count": counts.errors})
+		fmt.Print(display.Red("pre: scan incomplete; install blocked (use PRE_DISABLE=1 to bypass)\n"))
+		processExit(1)
+		return false
 	}
-	if quietEnabled() && level == outputQuiet {
+	if approvalRequired {
+		return run.requestScanApproval(results)
+	}
+	run.recordDecision("pre.scan.approved", "approved", "cache_hit", nil)
+	return true
+}
+
+func printScanResults(ecosystem string, results []scanResult, approvalRequired bool) {
+	level := outputLevel(results)
+	needsFullOutput := approvalRequired && level == outputQuiet
+	if needsFullOutput {
+		level = outputFull
+	}
+	suppressQuietOutput := quietEnabled() && level == outputQuiet
+	if suppressQuietOutput {
 		level = outputSilent
 	}
 	switch level {
@@ -136,36 +187,25 @@ func Intercept(mgr *manager.Manager, args []string) {
 	case outputQuiet:
 		fmt.Print(renderQuiet(len(results)))
 	default:
-		fmt.Print(renderTree(mgr.Ecosystem, results))
+		fmt.Print(renderTree(ecosystem, results))
 	}
-	if counts.errors > 0 {
-		run.recordDecision("pre.scan.blocked", "blocked", "scan_error", map[string]any{
-			"error_count": counts.errors,
-		})
-		fmt.Print(display.Red("pre: scan incomplete; install blocked (use PRE_DISABLE=1 to bypass)\n"))
+}
+
+func (run proxyRun) requestScanApproval(results []scanResult) bool {
+	attrs := approvalAttrs(results)
+	run.recordDecision("pre.scan.prompted", "prompted", "approval_required", attrs)
+	criticals := criticalResults(results)
+	if len(criticals) > 0 {
+		fmt.Print(renderCriticalDetail(criticals))
+	}
+	if !confirm("Approve install?") {
+		run.recordDecision("pre.scan.denied", "denied", "user_denied", attrs)
 		processExit(1)
-		return
+		return false
 	}
-
-	if approvalRequired {
-		criticalAttrs := approvalAttrs(results)
-		run.recordDecision("pre.scan.prompted", "prompted", "approval_required", criticalAttrs)
-		criticals := criticalResults(results)
-		if len(criticals) > 0 {
-			fmt.Print(renderCriticalDetail(criticals))
-		}
-		if !confirm("Approve install?") {
-			run.recordDecision("pre.scan.denied", "denied", "user_denied", criticalAttrs)
-			processExit(1)
-			return
-		}
-		run.recordDecision("pre.scan.approved", "approved", scanApprovalReason(results), criticalAttrs)
-		storeApprovedScanResults(mgr, results)
-	} else {
-		run.recordDecision("pre.scan.approved", "approved", "cache_hit", nil)
-	}
-
-	ExecFn(mgr.Name, args)
+	run.recordDecision("pre.scan.approved", "approved", scanApprovalReason(results), attrs)
+	storeApprovedScanResults(run.mgr, results)
+	return true
 }
 
 func blockIncompleteInstall(err error) {
@@ -355,7 +395,8 @@ const (
 
 func outputLevel(results []scanResult) outputMode {
 	for _, r := range results {
-		if len(r.vulns) > 0 || r.err != nil {
+		needsFullOutput := len(r.vulns) > 0 || r.err != nil
+		if needsFullOutput {
 			return outputFull
 		}
 	}
@@ -379,10 +420,14 @@ func countUncached(mgr *manager.Manager, packages []string, c cache.Cache) int {
 }
 
 func hasExactCacheHit(mgr *manager.Manager, c cache.Cache, name, version string) bool {
-	return version != "" &&
-		!shouldResolveVersion(mgr.Ecosystem, version) &&
-		isExactVersion(mgr.Ecosystem, version) &&
-		cache.Hit(c, cache.Key(mgr.Ecosystem, name, version))
+	unresolved := version == "" || shouldResolveVersion(mgr.Ecosystem, version)
+	if unresolved {
+		return false
+	}
+	if !isExactVersion(mgr.Ecosystem, version) {
+		return false
+	}
+	return cache.Hit(c, cache.Key(mgr.Ecosystem, name, version))
 }
 
 func hasCriticalVulns(r scanResult) bool {
@@ -412,7 +457,8 @@ func confirm(prompt string) bool {
 		}
 	}
 	answer := strings.ToLower(strings.TrimSpace(string(line)))
-	return answer == "y" || answer == "yes"
+	confirmed := answer == "y" || answer == "yes"
+	return confirmed
 }
 
 func execReal(name string, args []string) {

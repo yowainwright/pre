@@ -196,7 +196,7 @@ check_deps() {
 }
 
 check_gh_auth() {
-  gh_authed || {
+  gh_authed "gh auth status" || {
     fail "gh authenticated" "run: gh auth login"
     return
   }
@@ -204,7 +204,7 @@ check_gh_auth() {
 }
 
 check_op_auth() {
-  op_authed || {
+  op_authed "op account list" || {
     fail "op authenticated" "run: op signin"
     return
   }
@@ -220,7 +220,7 @@ check_auth() {
 check_env() {
   env_file="${1:-$(dirname "$0")/../.env.example}"
   echo "--- env secrets"
-  op_authed || { warn "env secrets" "skipped — op not authenticated"; return; }
+  op_authed "op account list" || { warn "env secrets" "skipped — op not authenticated"; return; }
   op_ref_resolves "HOMEBREW_TAP_TOKEN" "$env_file" || {
     fail "HOMEBREW_TAP_TOKEN resolves" "check op:// ref in $env_file"
     return
@@ -231,7 +231,7 @@ check_env() {
 check_secrets() {
   repo="${1:-yowainwright/pre}"
   echo "--- github secrets"
-  gh_authed || { warn "github secrets" "skipped — gh not authenticated"; return; }
+  gh_authed "gh auth status" || { warn "github secrets" "skipped — gh not authenticated"; return; }
   gh_secret_exists "HOMEBREW_TAP_TOKEN" "$repo" || {
     warn "HOMEBREW_TAP_TOKEN set" "run: op run --env-file .env.example -- make secrets"
     return
@@ -285,10 +285,10 @@ main() {
   [ "${_PRE_SETUP_SOURCED:-0}" = "1" ] && return 0
   check_deps
   echo ""; check_auth
-  echo ""; check_env
-  echo ""; check_secrets
-  echo ""; check_hooks
-  echo ""; check_agent_hooks
+  echo ""; check_env "$(dirname "$0")/../.env.example"
+  echo ""; check_secrets "yowainwright/pre"
+  echo ""; check_hooks "$(git rev-parse --show-toplevel 2>/dev/null)"
+  echo ""; check_agent_hooks "$(git rev-parse --show-toplevel 2>/dev/null)"
   echo ""
   printf "%d ok  %d warned  %d failed\n" "$passed" "$warned" "$failed"
   [ "$failed" -eq 0 ]

@@ -35,7 +35,8 @@ func maxPackages() int {
 		return 0
 	}
 	n, err := strconv.Atoi(value)
-	if err != nil || n <= 0 {
+	invalidLimit := err != nil || n <= 0
+	if invalidLimit {
 		return 0
 	}
 	return n
@@ -43,5 +44,6 @@ func maxPackages() int {
 
 func packageLimitExceeded(count int) (int, bool) {
 	limit := maxPackages()
-	return limit, limit > 0 && count > limit
+	exceeded := limit > 0 && count > limit
+	return limit, exceeded
 }

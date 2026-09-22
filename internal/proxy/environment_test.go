@@ -26,7 +26,9 @@ func TestEnvFlagFalseValues(t *testing.T) {
 
 func TestPackageLimitExceeded(t *testing.T) {
 	t.Setenv(envMaxPackages, "2")
-	if limit, exceeded := packageLimitExceeded(3); limit != 2 || !exceeded {
+	limit, exceeded := packageLimitExceeded(3)
+	unexpectedLimit := limit != 2 || !exceeded
+	if unexpectedLimit {
 		t.Fatalf("expected limit 2 to be exceeded, got limit=%d exceeded=%v", limit, exceeded)
 	}
 	if _, exceeded := packageLimitExceeded(2); exceeded {
@@ -38,7 +40,9 @@ func TestPackageLimitInvalidValues(t *testing.T) {
 	for _, value := range []string{"", "0", "-1", "many"} {
 		t.Run(value, func(t *testing.T) {
 			t.Setenv(envMaxPackages, value)
-			if limit, exceeded := packageLimitExceeded(100); limit != 0 || exceeded {
+			limit, exceeded := packageLimitExceeded(100)
+			unexpectedLimit := limit != 0 || exceeded
+			if unexpectedLimit {
 				t.Fatalf("expected invalid limit %q to be ignored, got limit=%d exceeded=%v", value, limit, exceeded)
 			}
 		})

@@ -23,28 +23,35 @@ source = "registry+https://index.crates.io/"
 	if err != nil {
 		t.Fatalf("read Cargo project: %v", err)
 	}
-	if len(packages) != 1 || packages[0] != "serde@1.0.217" {
+	unexpectedPackages := len(packages) != 1 || packages[0] != "serde@1.0.217"
+	if unexpectedPackages {
 		t.Fatalf("unexpected packages: %v", packages)
 	}
 }
 
-func TestReadCargoFetchPackagesUsesWorkspaceLockfile(t *testing.T) {
-	root := `[workspace]
+const testReadCargoFetchPackagesUsesWorkspaceLockfileFixture = `[workspace]
 members = ["member"]
 [workspace.dependencies]
 serde = "1"
 `
-	member := `[dependencies]
+
+const testReadCargoFetchPackagesUsesWorkspaceLockfileFixture2 = `[dependencies]
 serde = { workspace = true }
 `
-	rootPath, memberPath := writeCargoWorkspace(t, root, member)
-	rootDir := filepath.Dir(rootPath)
-	lockPath := filepath.Join(rootDir, "Cargo.lock")
-	lock := `[[package]]
+
+const testReadCargoFetchPackagesUsesWorkspaceLockfileFixture3 = `[[package]]
 name = "serde"
 version = "1.0.217"
 source = "sparse+https://index.crates.io/"
 `
+
+func TestReadCargoFetchPackagesUsesWorkspaceLockfile(t *testing.T) {
+	root := testReadCargoFetchPackagesUsesWorkspaceLockfileFixture
+	member := testReadCargoFetchPackagesUsesWorkspaceLockfileFixture2
+	rootPath, memberPath := writeCargoWorkspace(t, root, member)
+	rootDir := filepath.Dir(rootPath)
+	lockPath := filepath.Join(rootDir, "Cargo.lock")
+	lock := testReadCargoFetchPackagesUsesWorkspaceLockfileFixture3
 	writeCargoTestFile(t, lockPath, lock)
 
 	packages, err := ReadCargoFetchPackages(memberPath)
@@ -67,7 +74,8 @@ serde = "1"
 	_, memberPath := writeCargoWorkspace(t, root, member)
 
 	_, err := ReadCargoFetchPackages(memberPath)
-	if err == nil || !strings.Contains(err.Error(), "Cargo.lock is required") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "Cargo.lock is required")
+	if unexpectedError {
 		t.Fatalf("expected workspace lockfile error, got %v", err)
 	}
 }
@@ -84,7 +92,8 @@ source = "git+https://example.com/private"
 	writeCargoTestFile(t, filepath.Join(dir, "Cargo.lock"), lock)
 
 	_, err := ReadCargoFetchPackages(manifestPath)
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo source")
+	if unexpectedError {
 		t.Fatalf("expected unsupported source error, got %v", err)
 	}
 }
@@ -122,7 +131,8 @@ source="git+https://example.com/private"
 	writeCargoTestFile(t, filepath.Join(dir, "Cargo.lock"), lock)
 
 	_, err := ReadCargoFetchPackages(manifestPath)
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo source")
+	if unexpectedError {
 		t.Fatalf("expected compact source error, got %v", err)
 	}
 }
@@ -140,7 +150,8 @@ source = "sparse+https://index.crates.io/"
 	writeCargoTestFile(t, filepath.Join(dir, "Cargo.lock"), lock)
 
 	_, err := ReadCargoFetchPackages(manifestPath)
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo source")
+	if unexpectedError {
 		t.Fatalf("expected manifest source error, got %v", err)
 	}
 }
@@ -153,7 +164,8 @@ func TestReadCargoFetchPackagesReturnsLockScannerError(t *testing.T) {
 	writeCargoTestFile(t, filepath.Join(dir, "Cargo.lock"), longLine)
 
 	_, err := ReadCargoFetchPackages(manifestPath)
-	if err == nil || !strings.Contains(err.Error(), "token too long") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "token too long")
+	if unexpectedError {
 		t.Fatalf("expected scanner error, got %v", err)
 	}
 }
@@ -171,7 +183,8 @@ regex = "1.11"
 	if err != nil {
 		t.Fatalf("read Cargo manifest: %v", err)
 	}
-	if len(packages) != 1 || packages[0] != "serde@^1.0" {
+	unexpectedPackages := len(packages) != 1 || packages[0] != "serde@^1.0"
+	if unexpectedPackages {
 		t.Fatalf("unexpected packages: %v", packages)
 	}
 }
@@ -182,7 +195,8 @@ func TestReadCargoUpdatePackagesRejectsUnknownTarget(t *testing.T) {
 	writeCargoTestFile(t, manifestPath, "[dependencies]\nserde = \"1\"\n")
 
 	_, err := ReadCargoUpdatePackages(manifestPath, "transitive-only")
-	if err == nil || !strings.Contains(err.Error(), "not a direct dependency") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "not a direct dependency")
+	if unexpectedError {
 		t.Fatalf("expected unknown target error, got %v", err)
 	}
 }
@@ -197,7 +211,8 @@ private = { git = "https://example.com/private", version = "1" }
 	writeCargoTestFile(t, manifestPath, manifest)
 
 	_, err := ReadCargoUpdatePackages(manifestPath, "")
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo source")
+	if unexpectedError {
 		t.Fatalf("expected unsupported source error, got %v", err)
 	}
 }
@@ -211,7 +226,8 @@ private = { version = "1", "git" = "https://example.com/private" }
 	writeCargoTestFile(t, manifestPath, manifest)
 
 	_, err := ReadCargoUpdatePackages(manifestPath, "")
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo source")
+	if unexpectedError {
 		t.Fatalf("expected quoted source key error, got %v", err)
 	}
 }
@@ -225,7 +241,8 @@ private = { version = "1", "g\u0069t" = "https://example.com/private" }
 	writeCargoTestFile(t, manifestPath, manifest)
 
 	_, err := ReadCargoUpdatePackages(manifestPath, "")
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo source")
+	if unexpectedError {
 		t.Fatalf("expected escaped source key error, got %v", err)
 	}
 }
@@ -240,21 +257,24 @@ version = "1"
 	writeCargoTestFile(t, manifestPath, manifest)
 
 	_, err := ReadCargoUpdatePackages(manifestPath, "")
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo source")
+	if unexpectedError {
 		t.Fatalf("expected quoted table source key error, got %v", err)
 	}
 }
 
-func TestReadCargoUpdatePackagesAllowsCratesIORegistry(t *testing.T) {
-	dir := t.TempDir()
-	manifestPath := filepath.Join(dir, "Cargo.toml")
-	manifest := `[dependencies]
+const testReadCargoUpdatePackagesAllowsCratesIORegistryFixture = `[dependencies]
 serde = { version = "1", registry = "crates-io" }
 
 [dependencies.regex]
 version = "1.11"
 "registry" = "crates-io"
 `
+
+func TestReadCargoUpdatePackagesAllowsCratesIORegistry(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "Cargo.toml")
+	manifest := testReadCargoUpdatePackagesAllowsCratesIORegistryFixture
 	writeCargoTestFile(t, manifestPath, manifest)
 
 	packages, err := ReadCargoUpdatePackages(manifestPath, "")
@@ -276,7 +296,8 @@ private = { version = "1", "registry" = "internal" }
 	writeCargoTestFile(t, manifestPath, manifest)
 
 	_, err := ReadCargoUpdatePackages(manifestPath, "")
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo source")
+	if unexpectedError {
 		t.Fatalf("expected custom registry error, got %v", err)
 	}
 }
@@ -293,7 +314,8 @@ serde = { git = "https://example.com/serde" }
 	writeCargoTestFile(t, manifestPath, manifest)
 
 	_, err := ReadCargoUpdatePackages(manifestPath, "serde")
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo source")
+	if unexpectedError {
 		t.Fatalf("expected patched source error, got %v", err)
 	}
 }
@@ -310,7 +332,8 @@ crates-io.serde = "1.0.200"
 	writeCargoTestFile(t, manifestPath, manifest)
 
 	_, err := ReadCargoUpdatePackages(manifestPath, "serde")
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo source")
+	if unexpectedError {
 		t.Fatalf("expected registry patch error, got %v", err)
 	}
 }
@@ -322,7 +345,8 @@ func TestReadCargoUpdatePackagesBlocksDottedExternalSource(t *testing.T) {
 	writeCargoTestFile(t, manifestPath, manifest)
 
 	_, err := ReadCargoUpdatePackages(manifestPath, "")
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo source")
+	if unexpectedError {
 		t.Fatalf("expected dotted source error, got %v", err)
 	}
 }
@@ -334,7 +358,8 @@ func TestReadCargoUpdatePackagesBlocksRootDottedDependencies(t *testing.T) {
 	writeCargoTestFile(t, manifestPath, manifest)
 
 	_, err := ReadCargoUpdatePackages(manifestPath, "")
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo manifest syntax") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo manifest syntax")
+	if unexpectedError {
 		t.Fatalf("expected dotted manifest error, got %v", err)
 	}
 }
@@ -346,7 +371,8 @@ func TestReadCargoUpdatePackagesBlocksRootDottedPatch(t *testing.T) {
 	writeCargoTestFile(t, manifestPath, manifest)
 
 	_, err := ReadCargoUpdatePackages(manifestPath, "")
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo manifest syntax") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo manifest syntax")
+	if unexpectedError {
 		t.Fatalf("expected dotted patch error, got %v", err)
 	}
 }
@@ -375,23 +401,28 @@ serde = { workspace = true }
 	writeCargoTestFile(t, manifestPath, manifest)
 
 	_, err := ReadCargoUpdatePackages(manifestPath, "")
-	if err == nil || !strings.Contains(err.Error(), "inherited Cargo dependency") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "inherited Cargo dependency")
+	if unexpectedError {
 		t.Fatalf("expected inherited dependency error, got %v", err)
 	}
 }
 
-func TestReadCargoUpdatePackagesResolvesInheritedWorkspaceDependency(t *testing.T) {
-	root := `[workspace]
+const testReadCargoUpdatePackagesResolvesInheritedWorkspaceDependencyFixture = `[workspace]
 members = ["member"]
 
 [workspace.dependencies]
 serde = "1.0"
 renamed = { package = "regex", version = "1.11" }
 `
-	member := `[dependencies]
+
+const testReadCargoUpdatePackagesResolvesInheritedWorkspaceDependencyFixture2 = `[dependencies]
 serde = { workspace = true }
 renamed.workspace = true
 `
+
+func TestReadCargoUpdatePackagesResolvesInheritedWorkspaceDependency(t *testing.T) {
+	root := testReadCargoUpdatePackagesResolvesInheritedWorkspaceDependencyFixture
+	member := testReadCargoUpdatePackagesResolvesInheritedWorkspaceDependencyFixture2
 	_, memberPath := writeCargoWorkspace(t, root, member)
 	packages, err := ReadCargoUpdatePackages(memberPath, "")
 	if err != nil {
@@ -404,7 +435,8 @@ renamed.workspace = true
 
 	selected, err := ReadCargoUpdatePackages(memberPath, "regex")
 	selectedWant := []string{"regex@^1.11"}
-	if err != nil || !slices.Equal(selected, selectedWant) {
+	unexpectedError := err != nil || !slices.Equal(selected, selectedWant)
+	if unexpectedError {
 		t.Fatalf("expected %v, got %v, %v", selectedWant, selected, err)
 	}
 }
@@ -419,7 +451,8 @@ serde = { git = "https://example.com/serde" }
 	_, memberPath := writeCargoWorkspace(t, root, member)
 
 	_, err := ReadCargoUpdatePackages(memberPath, "")
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo source")
+	if unexpectedError {
 		t.Fatalf("expected workspace source error, got %v", err)
 	}
 }
@@ -452,16 +485,19 @@ private = { version = "1", git = "https://example.com/private" }
 	rootPath, _ := writeCargoWorkspace(t, root, member)
 
 	_, err := ReadCargoUpdatePackages(rootPath, "")
-	if err == nil || !strings.Contains(err.Error(), "unsupported Cargo source") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported Cargo source")
+	if unexpectedError {
 		t.Fatalf("expected member source error, got %v", err)
 	}
 }
 
-func TestReadCargoUpdatePackagesHonorsWorkspaceExclude(t *testing.T) {
-	root := `[workspace]
+const testReadCargoUpdatePackagesHonorsWorkspaceExcludeFixture = `[workspace]
 members = ["member", "excluded"]
 exclude = ["excluded"]
 `
+
+func TestReadCargoUpdatePackagesHonorsWorkspaceExclude(t *testing.T) {
+	root := testReadCargoUpdatePackagesHonorsWorkspaceExcludeFixture
 	rootPath, _ := writeCargoWorkspace(t, root, "[dependencies]\nserde = \"1\"\n")
 	excludedDir := filepath.Join(filepath.Dir(rootPath), "excluded")
 	if err := os.MkdirAll(excludedDir, 0o755); err != nil {
@@ -489,7 +525,8 @@ func TestDiscoverCargoManifestSearchesParents(t *testing.T) {
 	writeCargoTestFile(t, manifestPath, "[dependencies]\nserde = \"1\"\n")
 
 	got, err := DiscoverCargoManifest(filepath.Join(nested, "Cargo.toml"))
-	if err != nil || got != manifestPath {
+	unexpectedError := err != nil || got != manifestPath
+	if unexpectedError {
 		t.Fatalf("DiscoverCargoManifest() = %q, %v; want %q, nil", got, err, manifestPath)
 	}
 }
@@ -501,7 +538,8 @@ func TestReadCargoUpdatePackagesReturnsScannerError(t *testing.T) {
 	writeCargoTestFile(t, manifestPath, longLine)
 
 	_, err := ReadCargoUpdatePackages(manifestPath, "")
-	if err == nil || !strings.Contains(err.Error(), "token too long") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "token too long")
+	if unexpectedError {
 		t.Fatalf("expected scanner error, got %v", err)
 	}
 }

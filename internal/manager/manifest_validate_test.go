@@ -17,7 +17,8 @@ func TestValidateManifestRejectsInvalidPackageLock(t *testing.T) {
 	}
 
 	err := ValidateManifest(&Manager{Name: "npm", Ecosystem: "npm"}, dir)
-	if err == nil || !strings.Contains(err.Error(), "package-lock.json") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "package-lock.json")
+	if unexpectedError {
 		t.Fatalf("expected package lock error, got %v", err)
 	}
 }
@@ -37,7 +38,8 @@ func TestValidateManifestRejectsUnsafePackageLockEntry(t *testing.T) {
 			}
 
 			err := ValidateManifest(&Manager{Name: "npm", Ecosystem: "npm"}, dir)
-			if err == nil || !strings.Contains(err.Error(), "package-lock.json") {
+			unexpectedError := err == nil || !strings.Contains(err.Error(), "package-lock.json")
+			if unexpectedError {
 				t.Fatalf("expected unsafe package lock error, got %v", err)
 			}
 		})
@@ -427,14 +429,13 @@ func TestValidateManifestRejectsInvalidBunLock(t *testing.T) {
 	}
 
 	err := ValidateManifest(&Manager{Name: "bun", Ecosystem: "npm"}, dir)
-	if err == nil || !strings.Contains(err.Error(), "bun.lock") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "bun.lock")
+	if unexpectedError {
 		t.Fatalf("expected Bun lock error, got %v", err)
 	}
 }
 
-func TestValidateManifestAllowsBunJSONC(t *testing.T) {
-	dir := t.TempDir()
-	lock := `# Bun Lockfile v1
+const testValidateManifestAllowsBunJSONCFixture = `# Bun Lockfile v1
 {
   "lockfileVersion": 1,
   "packages": {
@@ -442,6 +443,10 @@ func TestValidateManifestAllowsBunJSONC(t *testing.T) {
   },
 }
 `
+
+func TestValidateManifestAllowsBunJSONC(t *testing.T) {
+	dir := t.TempDir()
+	lock := testValidateManifestAllowsBunJSONCFixture
 	if err := os.WriteFile(filepath.Join(dir, "bun.lock"), []byte(lock), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +480,8 @@ func TestValidateManifestRejectsUnsupportedNPMDependencySource(t *testing.T) {
 			}
 
 			err := ValidateManifest(&Manager{Name: "npm", Ecosystem: "npm"}, dir)
-			if err == nil || !strings.Contains(err.Error(), "unsupported npm dependency source") {
+			unexpectedError := err == nil || !strings.Contains(err.Error(), "unsupported npm dependency source")
+			if unexpectedError {
 				t.Fatalf("expected unsupported npm source error, got %v", err)
 			}
 		})
@@ -503,7 +509,8 @@ func TestValidateManifestRejectsRequirementsIncludeError(t *testing.T) {
 	}
 
 	err := ValidateManifest(&Manager{Name: "pip", Ecosystem: "PyPI"}, dir)
-	if err == nil || !strings.Contains(err.Error(), "missing.txt") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "missing.txt")
+	if unexpectedError {
 		t.Fatalf("expected requirements include error, got %v", err)
 	}
 }
@@ -517,7 +524,8 @@ func TestValidateManifestRejectsLongTextLine(t *testing.T) {
 	}
 
 	err := ValidateManifest(&Manager{Name: "pnpm", Ecosystem: "npm"}, dir)
-	if err == nil || !strings.Contains(err.Error(), "token too long") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "token too long")
+	if unexpectedError {
 		t.Fatalf("expected scanner error, got %v", err)
 	}
 }
@@ -537,7 +545,8 @@ func TestValidateManifestRequiresUVLockForPyproject(t *testing.T) {
 	}
 
 	err := ValidateManifest(&Manager{Name: "uv", Ecosystem: "PyPI"}, dir)
-	if err == nil || !strings.Contains(err.Error(), "uv.lock") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "uv.lock")
+	if unexpectedError {
 		t.Fatalf("expected uv.lock requirement, got %v", err)
 	}
 }

@@ -102,7 +102,8 @@ func readPackageJSONResult(dir string) ([]string, bool, error) {
 func appendNPMDependencySpecs(names []string, seen map[string]bool, deps map[string]string) []string {
 	for name, spec := range deps {
 		dependency := npmDependencySpec(name, spec)
-		if dependency == "" || seen[name] {
+		skipDependency := dependency == "" || seen[name]
+		if skipDependency {
 			continue
 		}
 		seen[name] = true
@@ -116,36 +117,49 @@ func readGoMod(dir string) []string {
 	if err != nil {
 		return nil
 	}
+	return goModPackages(data)
+}
+
+func goModPackages(data []byte) []string {
 	var names []string
 	inRequire := false
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "require (" {
-			inRequire = true
-			continue
-		}
-		if inRequire && line == ")" {
-			inRequire = false
-			continue
-		}
 		var spec string
-		if inRequire {
-			spec = line
-		} else if strings.HasPrefix(line, "require ") {
-			spec = strings.TrimPrefix(line, "require ")
-		} else {
-			continue
-		}
-		if idx := strings.Index(spec, "//"); idx != -1 {
-			spec = strings.TrimSpace(spec[:idx])
-		}
-		parts := strings.Fields(spec)
-		if len(parts) >= 2 {
-			names = append(names, parts[0]+"@"+parts[1])
+		spec, inRequire = goModRequirement(strings.TrimSpace(scanner.Text()), inRequire)
+		if spec != "" {
+			names = append(names, spec)
 		}
 	}
 	return names
+}
+
+func goModRequirement(line string, inRequire bool) (string, bool) {
+	if line == "require (" {
+		return "", true
+	}
+	endsRequire := inRequire && line == ")"
+	if endsRequire {
+		return "", false
+	}
+	if !inRequire {
+		var found bool
+		line, found = strings.CutPrefix(line, "require ")
+		if !found {
+			return "", false
+		}
+	}
+	return goRequirementSpec(line), inRequire
+}
+
+func goRequirementSpec(line string) string {
+	line, _, _ = strings.Cut(line, "//")
+	parts := strings.Fields(line)
+	if len(parts) < 2 {
+		return ""
+	}
+	spec := parts[0] + "@" + parts[1]
+	return spec
 }
 
 func readRequirementsTxt(dir string) []string {
@@ -205,7 +219,8 @@ func appendRequirementLine(names []string, line, dir string, active map[string]b
 	}
 	ignored := line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "-")
 	name, _ := parsePySpec(line)
-	if ignored || name == "" {
+	skipRequirement := ignored || name == ""
+	if skipRequirement {
 		return names, nil
 	}
 	return append(names, line), nil
@@ -235,7 +250,9 @@ func requirementInclude(line string) (string, bool) {
 		}
 	}
 	for _, prefix := range []string{"-r", "--requirement=", "--requirements="} {
-		if path, ok := strings.CutPrefix(line, prefix); ok && path != "" {
+		path, ok := strings.CutPrefix(line, prefix)
+		hasIncludePath := ok && path != ""
+		if hasIncludePath {
 			return strings.TrimSpace(path), true
 		}
 	}
@@ -247,6 +264,10 @@ func readBrewfile(dir string) []string {
 	if err != nil {
 		return nil
 	}
+	return brewfilePackages(data)
+}
+
+func brewfilePackages(data []byte) []string {
 	var names []string
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
@@ -255,7 +276,9 @@ func readBrewfile(dir string) []string {
 		if !ok {
 			continue
 		}
-		if name, _, found := strings.Cut(rest, `"`); found && name != "" {
+		name, _, found := strings.Cut(rest, `"`)
+		hasPackageName := found && name != ""
+		if hasPackageName {
 			names = append(names, name)
 		}
 	}
@@ -280,14 +303,7 @@ func parseCargoToml(data []byte) []string {
 }
 
 func parseCargoTomlState(data []byte) (cargoManifestState, error) {
-	seen := make(map[string]bool)
-	workspaceSpecs := make(map[string]string)
-	inheritedSeen := make(map[string]bool)
-	state := cargoManifestState{
-		seen:           seen,
-		workspaceSpecs: workspaceSpecs,
-		inheritedSeen:  inheritedSeen,
-	}
+	state := newCargoManifestState()
 	reader := strings.NewReader(string(data))
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
@@ -310,22 +326,23 @@ func stripCargoTomlComment(line string) string {
 	escaped := false
 	for index := 0; index < len(line); index++ {
 		current := line[index]
-		if quote == 0 && (current == '"' || current == '\'') {
-			quote = current
+		if quote != 0 {
+			quote, escaped = cargoQuoteState(quote, escaped, current)
 			continue
 		}
-		if quote == 0 && current == '#' {
+		if current == '#' {
 			return line[:index]
 		}
-		if current == quote && !escaped {
-			quote = 0
-		}
-		escaped = quote == '"' && current == '\\' && !escaped
-		if current != '\\' {
-			escaped = false
+		if isCargoQuote(current) {
+			quote = current
 		}
 	}
 	return line
+}
+
+func isCargoQuote(char byte) bool {
+	quote := char == '\'' || char == '"'
+	return quote
 }
 
 func (s *cargoManifestState) consume(line string) {
@@ -350,28 +367,37 @@ func (s *cargoManifestState) consume(line string) {
 }
 
 func (s *cargoManifestState) consumeSpecialLine(line string) bool {
-	if s.section == "" && isUnsupportedCargoRootAssignment(line) {
+	unsupportedRoot := s.section == "" && isUnsupportedCargoRootAssignment(line)
+	if unsupportedRoot {
 		s.unsupportedSyntax = true
 		return true
 	}
-	if s.section == "workspace" && s.consumeWorkspaceList(line) {
+	consumedWorkspaceList := s.section == "workspace" && s.consumeWorkspaceList(line)
+	if consumedWorkspaceList {
 		return true
 	}
 	if s.inSourceOverrides {
-		if _, _, ok := strings.Cut(line, "="); ok {
-			s.unsupportedSource = true
-		}
+		s.consumeSourceOverrideLine(line)
 		return true
 	}
 	if !s.inDependencies {
 		return true
 	}
+	return s.consumeDependencySource(line)
+}
+
+func (s *cargoManifestState) consumeDependencySource(line string) bool {
 	if consumed, unsupported := cargoDottedSourceLine(line); consumed {
 		s.unsupportedSource = s.unsupportedSource || unsupported
 		return true
 	}
+	return s.consumeInlineDependencySource(line)
+}
+
+func (s *cargoManifestState) consumeInlineDependencySource(line string) bool {
 	fields, inline := cargoDependencyInlineFields(line)
-	if inline && fields == nil {
+	invalidInlineFields := inline && fields == nil
+	if invalidInlineFields {
 		s.unsupportedSyntax = true
 		return true
 	}
@@ -392,7 +418,8 @@ func (s *cargoManifestState) consumeWorkspaceList(line string) bool {
 		return false
 	}
 	key = trimCargoDependencyName(key)
-	if key != "members" && key != "exclude" {
+	unsupportedList := key != "members" && key != "exclude"
+	if unsupportedList {
 		return false
 	}
 	s.workspaceListKey = key
@@ -424,13 +451,18 @@ func (s *cargoManifestState) finishWorkspaceList() {
 
 func cargoStringArray(value string) ([]string, error) {
 	trimmed := strings.TrimSpace(value)
-	if len(trimmed) < 2 || trimmed[0] != '[' || trimmed[len(trimmed)-1] != ']' {
+	hasBrackets := strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")
+	if !hasBrackets {
 		return nil, fmt.Errorf("expected string array")
 	}
 	parts, ok := splitCargoTopLevel(trimmed[1 : len(trimmed)-1])
 	if !ok {
 		return nil, fmt.Errorf("invalid string array")
 	}
+	return cargoStringArrayParts(parts)
+}
+
+func cargoStringArrayParts(parts []string) ([]string, error) {
 	var values []string
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
@@ -451,10 +483,12 @@ func cargoStringValue(value string) (string, bool) {
 	if len(trimmed) < 2 {
 		return "", false
 	}
-	if trimmed[0] == '\'' && trimmed[len(trimmed)-1] == '\'' {
+	singleQuoted := trimmed[0] == '\'' && trimmed[len(trimmed)-1] == '\''
+	if singleQuoted {
 		return trimmed[1 : len(trimmed)-1], true
 	}
-	if trimmed[0] != '"' || trimmed[len(trimmed)-1] != '"' {
+	missingQuotes := trimmed[0] != '"' || trimmed[len(trimmed)-1] != '"'
+	if missingQuotes {
 		return "", false
 	}
 	parsed, err := strconv.Unquote(trimmed)
@@ -481,6 +515,10 @@ func cargoInlineFields(value string) (map[string]string, bool) {
 	if !ok {
 		return nil, true
 	}
+	return cargoInlineFieldParts(parts), true
+}
+
+func cargoInlineFieldParts(parts []string) map[string]string {
 	fields := make(map[string]string, len(parts))
 	for _, part := range parts {
 		if strings.TrimSpace(part) == "" {
@@ -488,50 +526,68 @@ func cargoInlineFields(value string) (map[string]string, bool) {
 		}
 		key, fieldValue, found := cargoAssignment(part)
 		if !found {
-			return nil, true
+			return nil
 		}
 		fields[trimCargoDependencyName(key)] = strings.TrimSpace(fieldValue)
 	}
-	return fields, true
+	return fields
 }
 
 func splitCargoTopLevel(value string) ([]string, bool) {
-	var parts []string
-	start := 0
-	quote := byte(0)
-	escaped := false
-	depth := 0
+	state := cargoListState{}
 	for index := 0; index < len(value); index++ {
-		current := value[index]
-		if quote != 0 {
-			quote, escaped = cargoQuoteState(quote, escaped, current)
-			continue
-		}
-		if current == '"' || current == '\'' {
-			quote = current
-			continue
-		}
-		if current == '[' || current == '{' {
-			depth++
-		} else if current == ']' || current == '}' {
-			depth--
-		} else if current == ',' && depth == 0 {
-			parts = append(parts, value[start:index])
-			start = index + 1
-		}
-		if depth < 0 {
+		if !state.consume(value, index) {
 			return nil, false
 		}
 	}
-	parts = append(parts, value[start:])
-	return parts, quote == 0 && depth == 0
+	state.parts = append(state.parts, value[state.start:])
+	balanced := state.quote == 0 && state.depth == 0
+	return state.parts, balanced
+}
+
+type cargoListState struct {
+	parts   []string
+	start   int
+	quote   byte
+	escaped bool
+	depth   int
+}
+
+func (s *cargoListState) consume(value string, index int) bool {
+	current := value[index]
+	if s.quote != 0 {
+		s.quote, s.escaped = cargoQuoteState(s.quote, s.escaped, current)
+		return true
+	}
+	if isCargoQuote(current) {
+		s.quote = current
+		return true
+	}
+	s.consumeDelimiter(value, index)
+	return s.depth >= 0
+}
+
+func (s *cargoListState) consumeDelimiter(value string, index int) {
+	switch value[index] {
+	case '[', '{':
+		s.depth++
+	case ']', '}':
+		s.depth--
+	case ',':
+		if s.depth == 0 {
+			s.parts = append(s.parts, value[s.start:index])
+			s.start = index + 1
+		}
+	}
 }
 
 func cargoQuoteState(quote byte, escaped bool, current byte) (byte, bool) {
-	if current == quote && !escaped {
+	endsQuote := current == quote && !escaped
+	if endsQuote {
 		return 0, false
 	}
-	if quote == '"' && current == '\\' {
+	startsEscape := quote == '"' && current == '\\'
+	if startsEscape {
 		return quote, !escaped
 	}
 	return quote, false
@@ -546,7 +602,8 @@ func cargoAssignment(line string) (string, string, bool) {
 			quote, escaped = cargoQuoteState(quote, escaped, current)
 			continue
 		}
-		if current == '"' || current == '\'' {
+		startsQuote := current == '"' || current == '\''
+		if startsQuote {
 			quote = current
 			continue
 		}
@@ -563,7 +620,10 @@ func cargoDottedSourceLine(line string) (bool, bool) {
 		return false, false
 	}
 	_, field, dotted := cargoDottedKey(key)
-	if !dotted || (field != "path" && field != "git" && field != "registry") {
+	externalSource := field == "path" || field == "git"
+	sourceField := externalSource || field == "registry"
+	unsupportedField := !dotted || !sourceField
+	if unsupportedField {
 		return false, false
 	}
 	unsupported := field != "registry" || cargoSimpleVersion(value) != "crates-io"
@@ -571,21 +631,7 @@ func cargoDottedSourceLine(line string) (bool, bool) {
 }
 
 func cargoDottedKey(key string) (string, string, bool) {
-	quote := byte(0)
-	escaped := false
-	lastDot := -1
-	for index := 0; index < len(key); index++ {
-		current := key[index]
-		if quote != 0 {
-			quote, escaped = cargoQuoteState(quote, escaped, current)
-			continue
-		}
-		if current == '"' || current == '\'' {
-			quote = current
-		} else if current == '.' {
-			lastDot = index
-		}
-	}
+	lastDot := lastCargoDot(key)
 	if lastDot < 0 {
 		return "", "", false
 	}
@@ -605,7 +651,8 @@ func cargoFieldsHaveUnsupportedSource(fields map[string]string) bool {
 		return true
 	}
 	registry, ok := fields["registry"]
-	return ok && cargoSimpleVersion(registry) != "crates-io"
+	unsupported := ok && cargoSimpleVersion(registry) != "crates-io"
+	return unsupported
 }
 
 func cargoInheritedDependency(line string, fields map[string]string) (string, bool) {
@@ -613,7 +660,9 @@ func cargoInheritedDependency(line string, fields map[string]string) (string, bo
 	if !ok {
 		return "", false
 	}
-	if prefix, field, dotted := cargoDottedKey(key); dotted && field == "workspace" {
+	prefix, field, dotted := cargoDottedKey(key)
+	inheritsWorkspace := dotted && field == "workspace"
+	if inheritsWorkspace {
 		return trimCargoDependencyName(prefix), strings.TrimSpace(value) == "true"
 	}
 	inherited := strings.TrimSpace(fields["workspace"]) == "true"
@@ -690,15 +739,21 @@ func (s *cargoManifestState) flushTable() {
 		s.appendInherited(dependency.name)
 		return
 	}
-	if dependency.name == "" || dependency.version == "" {
-		return
+	s.appendDependency(dependency.name, cargoTableDependencySpec(dependency))
+}
+
+func cargoTableDependencySpec(dependency cargoManifestDependency) string {
+	missingIdentity := dependency.name == "" || dependency.version == ""
+	if missingIdentity {
+		return ""
 	}
 	name := dependency.name
 	if dependency.packageName != "" {
 		name = dependency.packageName
 	}
 	version := cargoRequirementVersion(dependency.version)
-	s.appendDependency(dependency.name, name+"@"+version)
+	spec := name + "@" + version
+	return spec
 }
 
 func (s *cargoManifestState) appendDependency(name, spec string) {
@@ -713,7 +768,8 @@ func (s *cargoManifestState) appendDependency(name, spec string) {
 
 func (s *cargoManifestState) appendInherited(name string) {
 	s.inheritedDependency = true
-	if name == "" || s.inheritedSeen[name] {
+	skipInherited := name == "" || s.inheritedSeen[name]
+	if skipInherited {
 		return
 	}
 	s.inheritedSeen[name] = true
@@ -721,7 +777,8 @@ func (s *cargoManifestState) appendInherited(name string) {
 }
 
 func (s *cargoManifestState) appendSpec(spec string) {
-	if spec == "" || s.seen[spec] {
+	skipSpec := spec == "" || s.seen[spec]
+	if skipSpec {
 		return
 	}
 	s.seen[spec] = true
@@ -756,7 +813,8 @@ func isCargoDependencySection(section string) bool {
 }
 
 func isCargoWorkspaceDependencySection(section string) bool {
-	return section == "workspace.dependencies" || strings.HasPrefix(section, "workspace.dependencies.")
+	workspaceDependency := section == "workspace.dependencies" || strings.HasPrefix(section, "workspace.dependencies.")
+	return workspaceDependency
 }
 
 func cargoDependencyTableName(section string) string {
@@ -817,7 +875,9 @@ func cargoDependencyLine(line string) (string, string) {
 
 func cargoVersionDependencyName(key string) string {
 	trimmed := strings.TrimSpace(key)
-	if prefix, field, dotted := cargoDottedKey(trimmed); dotted && field == "version" {
+	prefix, field, dotted := cargoDottedKey(trimmed)
+	versionField := dotted && field == "version"
+	if versionField {
 		trimmed = prefix
 	}
 	return trimCargoDependencyName(trimmed)
@@ -827,7 +887,8 @@ func cargoDependencySpec(name, value string) string {
 	version := cargoSimpleVersion(value)
 	fields, inline := cargoInlineFields(value)
 	if inline {
-		if fields == nil || cargoFieldsHaveUnsupportedSource(fields) {
+		unsupportedFields := fields == nil || cargoFieldsHaveUnsupportedSource(fields)
+		if unsupportedFields {
 			return ""
 		}
 		if packageName := cargoSimpleVersion(fields["package"]); packageName != "" {
@@ -839,7 +900,8 @@ func cargoDependencySpec(name, value string) string {
 		return ""
 	}
 	version = cargoRequirementVersion(version)
-	return name + "@" + version
+	spec := name + "@" + version
+	return spec
 }
 
 func cargoRequirementVersion(version string) string {
@@ -860,7 +922,7 @@ func cargoSimpleVersion(value string) string {
 	}
 	quote := trimmed[0]
 	lastQuote := trimmed[len(trimmed)-1]
-	isQuoted := quote == lastQuote && (quote == '"' || quote == '\'')
+	isQuoted := quote == lastQuote && isCargoQuote(quote)
 	if !isQuoted {
 		return ""
 	}
@@ -869,10 +931,12 @@ func cargoSimpleVersion(value string) string {
 
 func npmDependencySpec(name, spec string) string {
 	spec = strings.TrimSpace(spec)
-	if spec == "" || !IsSupportedNPMRegistrySpec(spec) {
+	unsupportedSpec := spec == "" || !IsSupportedNPMRegistrySpec(spec)
+	if unsupportedSpec {
 		return name
 	}
-	return name + "@" + spec
+	dependency := name + "@" + spec
+	return dependency
 }
 
 func IsSupportedNPMRegistrySpec(spec string) bool {
@@ -889,5 +953,43 @@ func IsSupportedNPMRegistrySpec(spec string) bool {
 	isPath := strings.HasPrefix(normalized, "./") || strings.HasPrefix(normalized, "../") || strings.HasPrefix(normalized, "/")
 	isRepositoryShorthand := strings.Contains(spec, "/")
 	isTarball := strings.HasSuffix(normalized, ".tgz") || strings.HasSuffix(normalized, ".tar.gz")
-	return !isPath && !isRepositoryShorthand && !isTarball
+	unsupported := isPath || isRepositoryShorthand || isTarball
+	return !unsupported
+}
+
+func newCargoManifestState() cargoManifestState {
+	seen := make(map[string]bool)
+	workspaceSpecs := make(map[string]string)
+	inheritedSeen := make(map[string]bool)
+	return cargoManifestState{
+		seen:           seen,
+		workspaceSpecs: workspaceSpecs,
+		inheritedSeen:  inheritedSeen,
+	}
+}
+
+func lastCargoDot(key string) int {
+	quote := byte(0)
+	escaped := false
+	lastDot := -1
+	for index := 0; index < len(key); index++ {
+		current := key[index]
+		if quote != 0 {
+			quote, escaped = cargoQuoteState(quote, escaped, current)
+			continue
+		}
+		startsQuote := current == '"' || current == '\''
+		if startsQuote {
+			quote = current
+		} else if current == '.' {
+			lastDot = index
+		}
+	}
+	return lastDot
+}
+
+func (s *cargoManifestState) consumeSourceOverrideLine(line string) {
+	if _, _, ok := strings.Cut(line, "="); ok {
+		s.unsupportedSource = true
+	}
 }

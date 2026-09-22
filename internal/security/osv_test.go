@@ -290,11 +290,7 @@ func (handler *osvSingleTestHandler) ServeHTTP(writer http.ResponseWriter, _ *ht
 
 func TestCheckBatch(t *testing.T) {
 	handler := &osvBatchTestHandler{includeVulnerability: true}
-	server := httptest.NewServer(handler)
-	defer server.Close()
-	originalEndpoint := Endpoint
-	Endpoint = server.URL + "/v1/query"
-	defer func() { Endpoint = originalEndpoint }()
+	useBatchServer(t, handler)
 
 	first := Query{Ecosystem: "npm", Name: "react", Version: "18.0.0"}
 	second := Query{Ecosystem: "PyPI", Name: "requests", Version: "2.31.0"}
@@ -305,13 +301,8 @@ func TestCheckBatch(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("expected two results, got %d", len(results))
 	}
-	if len(results[0]) != 1 || results[0][0].ID != "CVE-2026-1234" {
-		t.Fatalf("unexpected first result: %+v", results[0])
-	}
-	hasFullDetails := results[0][0].Severity == SeverityCritical && results[0][0].Summary == "batch test"
-	if !hasFullDetails {
-		t.Errorf("expected full vulnerability details, got %+v", results[0][0])
-	}
+	assertBatchVulnerability(t, results[0])
+
 	hasExpectedBatchResult := handler.requests == 2 && len(results[1]) == 0
 	if !hasExpectedBatchResult {
 		t.Errorf("expected one detail lookup and a clean second result, got %d requests and %+v", handler.requests, results[1])
@@ -463,26 +454,19 @@ func osvHeldDetailHandler(started chan<- string, release <-chan struct{}, failur
 
 func TestCheckBatchChunksQueries(t *testing.T) {
 	handler := &osvBatchTestHandler{}
-	server := httptest.NewServer(handler)
-	defer server.Close()
-	originalEndpoint := Endpoint
-	Endpoint = server.URL + "/v1/query"
-	defer func() { Endpoint = originalEndpoint }()
+	useBatchServer(t, handler)
 
-	queries := make([]Query, maxOSVBatchQueries+1)
-	for index := range queries {
-		queries[index].Ecosystem = "npm"
-		queries[index].Name = fmt.Sprintf("package-%d", index)
-		queries[index].Version = "1.0.0"
-	}
+	queries := batchTestQueries(maxOSVBatchQueries + 1)
 	results, err := CheckBatch(queries)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if handler.requests != 2 || len(results) != len(queries) {
+	unexpectedBatch := handler.requests != 2 || len(results) != len(queries)
+	if unexpectedBatch {
 		t.Fatalf("expected two requests and %d results, got %d and %d", len(queries), handler.requests, len(results))
 	}
-	if handler.batchSizes[0] != maxOSVBatchQueries || handler.batchSizes[1] != 1 {
+	unexpectedBatch2 := handler.batchSizes[0] != maxOSVBatchQueries || handler.batchSizes[1] != 1
+	if unexpectedBatch2 {
 		t.Fatalf("unexpected batch sizes: %v", handler.batchSizes)
 	}
 }
@@ -501,7 +485,8 @@ func TestCheckBatchFallsBackForCustomEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if handler.requests != 2 || len(results) != 2 {
+	unexpectedBatch := handler.requests != 2 || len(results) != 2
+	if unexpectedBatch {
 		t.Fatalf("expected two requests and results, got %d and %d", handler.requests, len(results))
 	}
 }
@@ -520,4 +505,35 @@ func TestCheckStatusError(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for non-2xx response")
 	}
+}
+
+func useBatchServer(t *testing.T, handler http.Handler) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	originalEndpoint := Endpoint
+	Endpoint = server.URL + "/v1/query"
+	t.Cleanup(func() { Endpoint = originalEndpoint })
+}
+
+func assertBatchVulnerability(t *testing.T, vulnerabilities []Vulnerability) {
+	t.Helper()
+	unexpectedResults := len(vulnerabilities) != 1 || vulnerabilities[0].ID != "CVE-2026-1234"
+	if unexpectedResults {
+		t.Fatalf("unexpected first result: %+v", vulnerabilities)
+	}
+	hasFullDetails := vulnerabilities[0].Severity == SeverityCritical && vulnerabilities[0].Summary == "batch test"
+	if !hasFullDetails {
+		t.Errorf("expected full vulnerability details, got %+v", vulnerabilities[0])
+	}
+}
+
+func batchTestQueries(count int) []Query {
+	queries := make([]Query, count)
+	for index := range queries {
+		queries[index].Ecosystem = "npm"
+		queries[index].Name = fmt.Sprintf("package-%d", index)
+		queries[index].Version = "1.0.0"
+	}
+	return queries
 }

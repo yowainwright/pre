@@ -9,7 +9,7 @@ import (
 	"github.com/yowainwright/pre/internal/display"
 )
 
-func renderTree(ecosystem string, results []scanResult) string {
+func scanTreeNodes(results []scanResult) []display.TreeNode {
 	maxLen := 0
 	for _, r := range results {
 		label := terminalText(r.label)
@@ -26,6 +26,11 @@ func renderTree(ecosystem string, results []scanResult) string {
 		}
 	}
 
+	return nodes
+}
+
+func renderTree(ecosystem string, results []scanResult) string {
+	nodes := scanTreeNodes(results)
 	logo := display.Logo()
 	safeEcosystem := terminalText(ecosystem)
 	headerText := fmt.Sprintf("checking %d package(s) (%s)", len(results), safeEcosystem)
@@ -41,29 +46,36 @@ func renderQuiet(count int) string {
 
 func renderCriticalDetail(results []scanResult) string {
 	var lines []string
-	for _, r := range results {
-		for _, v := range r.vulns {
-			if v.Severity != "CRITICAL" && v.Severity != "HIGH" {
-				continue
-			}
-			score := ""
-			if v.Score > 0 {
-				score = fmt.Sprintf(" %.1f", v.Score)
-			}
-			label := terminalText(r.label)
-			id := terminalText(v.ID)
-			severity := terminalText(v.Severity)
-			line := fmt.Sprintf("%-30s %s%s  %s", label, id, score, severity)
-			lines = append(lines, line)
-		}
+	for _, result := range results {
+		lines = appendCriticalLines(lines, result)
 	}
 	return display.Box(display.Red("Critical"), lines) + "\n"
+}
+
+func appendCriticalLines(lines []string, r scanResult) []string {
+	for _, v := range r.vulns {
+		notCritical := v.Severity != "CRITICAL" && v.Severity != "HIGH"
+		if notCritical {
+			continue
+		}
+		score := ""
+		if v.Score > 0 {
+			score = fmt.Sprintf(" %.1f", v.Score)
+		}
+		label := terminalText(r.label)
+		id := terminalText(v.ID)
+		severity := terminalText(v.Severity)
+		line := fmt.Sprintf("%-30s %s%s  %s", label, id, score, severity)
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func nodeLabel(r scanResult, maxLen int) string {
 	label := terminalText(r.label)
 	padded := display.Pad(label, maxLen)
-	return display.Bold(padded) + "  " + nodeStatus(r)
+	labelWithStatus := display.Bold(padded) + "  " + nodeStatus(r)
+	return labelWithStatus
 }
 
 func nodeStatus(r scanResult) string {
@@ -71,16 +83,16 @@ func nodeStatus(r scanResult) string {
 	case r.err != nil:
 		icon := display.Yellow(display.IconWarning)
 		message := terminalText(r.err.Error())
-		return icon + " " + message
+		return strings.Join([]string{icon, message}, " ")
 	case len(r.vulns) > 0:
 		icon := display.Red(display.IconError)
 		count := fmt.Sprintf("%d vulnerabilit(ies)", len(r.vulns))
 		message := display.Red(count)
-		return icon + " " + message
+		return strings.Join([]string{icon, message}, " ")
 	case r.cached:
 		icon := display.Green(display.IconSuccess)
 		message := display.Dim("clean (cached)")
-		return icon + " " + message
+		return strings.Join([]string{icon, message}, " ")
 	default:
 		icon := display.Green(display.IconSuccess)
 		return icon + " clean"
@@ -101,15 +113,20 @@ func renderSummary(results []scanResult) string {
 			ups++
 		}
 	}
-	tots := len(results)
+	return formatScanSummary(crit, warn, ups, cached, len(results))
+}
+
+func formatScanSummary(crit, warn, ups, cached, tots int) string {
 	sep := display.Dim(" · ")
-	return strings.Join([]string{
+	cachedText := display.Green(display.IconSuccess) + " " + display.BrightWhite(fmt.Sprintf("%d cached", cached))
+	parts := []string{
 		display.Red(display.IconError) + fmt.Sprintf(" %d crit", crit),
 		display.Yellow(display.IconWarning) + fmt.Sprintf(" %d warn", warn),
 		display.Cyan(display.IconUp) + fmt.Sprintf(" %d ups", ups),
-		display.Green(display.IconSuccess) + " " + display.BrightWhite(fmt.Sprintf("%d cached", cached)),
+		cachedText,
 		fmt.Sprintf("%d tots", tots),
-	}, sep)
+	}
+	return strings.Join(parts, sep)
 }
 
 func nodeChildren(r scanResult) []string {
@@ -131,7 +148,8 @@ func terminalText(value string) string {
 }
 
 func terminalRune(char rune) rune {
-	if unicode.IsControl(char) || unicode.In(char, unicode.Cf) {
+	unsafeControl := unicode.IsControl(char) || unicode.In(char, unicode.Cf)
+	if unsafeControl {
 		return '�'
 	}
 	return char

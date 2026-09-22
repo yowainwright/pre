@@ -13,7 +13,8 @@ func colorSupported() bool {
 		return false
 	}
 	fi, _ := os.Stdout.Stat()
-	return fi != nil && (fi.Mode()&os.ModeCharDevice != 0)
+	isTerminal := fi != nil && (fi.Mode()&os.ModeCharDevice != 0)
+	return isTerminal
 }
 
 const (
@@ -41,7 +42,8 @@ func colorize(code, s string) string {
 	if !ColorEnabled {
 		return s
 	}
-	return code + s + cReset
+	colored := code + s + cReset
+	return colored
 }
 
 func Bold(s string) string        { return colorize(cBold, s) }
@@ -57,7 +59,8 @@ func LightGray(s string) string   { return colorize(cLightGray, s) }
 func BrightWhite(s string) string { return colorize(cBrightWhite, s) }
 
 func Logo() string {
-	return FluoYellow("PRE") + BrightRed("≋") + Orange("≈") + Yellow("~") + LightGray("∿")
+	logo := FluoYellow("PRE") + BrightRed("≋") + Orange("≈") + Yellow("~") + LightGray("∿")
+	return logo
 }
 
 type TreeNode struct {
@@ -69,22 +72,30 @@ func Tree(nodes []TreeNode) string {
 	var sb strings.Builder
 	for i, node := range nodes {
 		isLast := i == len(nodes)-1
-		branch := "├── "
-		continuation := "│   "
-		if isLast {
-			branch = "└── "
-			continuation = "    "
-		}
-		sb.WriteString(Dim(branch) + node.Label + "\n")
-		for j, child := range node.Children {
-			childBranch := "├── "
-			if j == len(node.Children)-1 {
-				childBranch = "└── "
-			}
-			sb.WriteString(Dim(continuation) + Dim(childBranch) + child + "\n")
-		}
+		writeTreeNode(&sb, node, isLast)
 	}
 	return sb.String()
+}
+
+func writeTreeNode(sb *strings.Builder, node TreeNode, isLast bool) {
+	branch := "├── "
+	continuation := "│   "
+	if isLast {
+		branch = "└── "
+		continuation = "    "
+	}
+	sb.WriteString(Dim(branch) + node.Label + "\n")
+	writeTreeChildren(sb, node.Children, continuation)
+}
+
+func writeTreeChildren(sb *strings.Builder, children []string, continuation string) {
+	for j, child := range children {
+		branch := "├── "
+		if j == len(children)-1 {
+			branch = "└── "
+		}
+		sb.WriteString(Dim(continuation) + Dim(branch) + child + "\n")
+	}
 }
 
 func HRule(width int) string {
@@ -92,7 +103,8 @@ func HRule(width int) string {
 }
 
 func Prompt(question string) string {
-	return Cyan("?") + " " + Bold(question) + " " + Dim("[y/N]") + " "
+	parts := []string{Cyan("?"), Bold(question), Dim("[y/N]"), ""}
+	return strings.Join(parts, " ")
 }
 
 func Pad(s string, width int) string {
@@ -100,7 +112,8 @@ func Pad(s string, width int) string {
 	if n >= width {
 		return s
 	}
-	return s + strings.Repeat(" ", width-n)
+	padding := strings.Repeat(" ", width-n)
+	return s + padding
 }
 
 func boxInnerWidth(header string, lines []string) int {
@@ -115,11 +128,14 @@ func boxInnerWidth(header string, lines []string) int {
 
 func boxTop(header string, inner int) string {
 	dashCount := inner + 4 - utf8.RuneCountInString(header) - 5
-	return "┌─ " + header + " " + strings.Repeat("─", dashCount) + "┐"
+	border := "┌─ " + header + " " + strings.Repeat("─", dashCount) + "┐"
+	return border
 }
 
 func boxBottom(inner int) string {
-	return "└" + strings.Repeat("─", inner+2) + "┘"
+	dashes := strings.Repeat("─", inner+2)
+	border := "└" + dashes + "┘"
+	return border
 }
 
 func Box(header string, lines []string) string {

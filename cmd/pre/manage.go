@@ -148,7 +148,8 @@ func themed(style, text string) string {
 	if style == "" {
 		return text
 	}
-	return style + text + ansiReset
+	styled := style + text + ansiReset
+	return styled
 }
 
 type manageMode int
@@ -199,7 +200,8 @@ type manageTerminal struct {
 func (t manageTerminal) restore() { t.suspend() }
 
 func (t manageTerminal) suspend() {
-	if !t.raw || t.saved == "" {
+	unchanged := !t.raw || t.saved == ""
+	if unchanged {
 		return
 	}
 	cmd := exec.Command("stty", t.saved) // #nosec G204 -- saved terminal state is captured from `stty -g`.
@@ -233,29 +235,36 @@ func handleManage(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		return handleManageUI(stdout, stderr)
 	}
-	if args[0] == "--help" || args[0] == "-h" {
+	switch args[0] {
+	case "--help", "-h":
 		fmt.Fprintln(stdout, manageUsageMessage)
 		return 0
-	}
-	if args[0] == "--list" || args[0] == "list" {
+	case "--list", "list":
 		return handlePackageInventory(stdout, stderr)
 	}
 	if !strings.HasPrefix(args[0], "-") {
-		switch args[0] {
-		case "install":
-			return handlePackageAction(actionInstall, args[1:], stdout, stderr)
-		case "update", "upgrade":
-			return handlePackageAction(actionUpdate, args[1:], stdout, stderr)
-		case "downgrade":
-			return handlePackageAction(actionDowngrade, args[1:], stdout, stderr)
-		case "uninstall", "remove":
-			return handlePackageAction(actionUninstall, args[1:], stdout, stderr)
-		default:
-			fmt.Fprintln(stderr, manageUsageMessage)
-			return 1
-		}
+		return handleManageAction(args, stdout, stderr)
 	}
+	return handleManageFlags(args, stdout, stderr)
+}
 
+func handleManageAction(args []string, stdout, stderr io.Writer) int {
+	switch args[0] {
+	case "install":
+		return handlePackageAction(actionInstall, args[1:], stdout, stderr)
+	case "update", "upgrade":
+		return handlePackageAction(actionUpdate, args[1:], stdout, stderr)
+	case "downgrade":
+		return handlePackageAction(actionDowngrade, args[1:], stdout, stderr)
+	case "uninstall", "remove":
+		return handlePackageAction(actionUninstall, args[1:], stdout, stderr)
+	default:
+		fmt.Fprintln(stderr, manageUsageMessage)
+		return 1
+	}
+}
+
+func handleManageFlags(args []string, stdout, stderr io.Writer) int {
 	req, err := packageActionRequestFromManageFlags(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "pre manage: %v\n", err)
@@ -278,17 +287,30 @@ func handleManageUI(stdout, stderr io.Writer) int {
 
 	term := enableManageRawMode(input, stderr)
 	defer term.restore()
+	closeScreen := openManageScreen(stdout)
+	defer closeScreen()
+	err = runManageUI(input, term, stdout, stderr)
+	closeScreen()
+	if err != nil {
+		fmt.Fprintf(stderr, "pre manage: input closed: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func openManageScreen(stdout io.Writer) func() {
 	fmt.Fprint(stdout, ansiAltScreen+ansiHideCursor+ansiClear)
 	screenActive := true
-	closeScreen := func() {
+	return func() {
 		if !screenActive {
 			return
 		}
 		fmt.Fprint(stdout, ansiShowCursor+ansiReset+ansiMainScreen)
 		screenActive = false
 	}
-	defer closeScreen()
+}
 
+func runManageUI(input io.Reader, term manageTerminal, stdout, stderr io.Writer) error {
 	ui := newLoadingManageUI()
 	renderManageUI(stdout, &ui)
 	ui.setInventory(collectPackageInventory(manager.All()))
@@ -296,14 +318,11 @@ func handleManageUI(stdout, stderr io.Writer) int {
 	for {
 		key, err := readManageKey(input)
 		if err != nil {
-			closeScreen()
-			fmt.Fprintf(stderr, "pre manage: input closed: %v\n", err)
-			return 1
+			return err
 		}
 		if handleManageKey(key, &ui, term, stdout, stderr) {
 			fmt.Fprint(stdout, ansiClear)
-			closeScreen()
-			return 0
+			return nil
 		}
 		renderManageUI(stdout, &ui)
 	}
@@ -313,14 +332,16 @@ func openManageInput() (io.Reader, func(), error) {
 	if packageInputReader != os.Stdin {
 		return packageInputReader, func() {}, nil
 	}
-	if isTerminalFile(os.Stdin) && hasTerminalState(os.Stdin) {
+	interactiveStdin := isTerminalFile(os.Stdin) && hasTerminalState(os.Stdin)
+	if interactiveStdin {
 		return os.Stdin, func() {}, nil
 	}
 	tty, err := os.OpenFile("/dev/tty", os.O_RDONLY, 0)
 	if err != nil {
 		return nil, nil, err
 	}
-	if !isTerminalFile(tty) || !hasTerminalState(tty) {
+	invalidTTY := !isTerminalFile(tty) || !hasTerminalState(tty)
+	if invalidTTY {
 		_ = tty.Close()
 		return nil, nil, errors.New("/dev/tty is not an interactive terminal")
 	}
@@ -329,7 +350,8 @@ func openManageInput() (io.Reader, func(), error) {
 
 func enableManageRawMode(input io.Reader, stderr io.Writer) manageTerminal {
 	file, ok := input.(*os.File)
-	if !ok || !isTerminalFile(file) {
+	invalidInput := !ok || !isTerminalFile(file)
+	if invalidInput {
 		return manageTerminal{}
 	}
 	term := manageTerminal{input: file}
@@ -346,7 +368,11 @@ func enableManageRawMode(input io.Reader, stderr io.Writer) manageTerminal {
 
 func isTerminalFile(file *os.File) bool {
 	info, err := file.Stat()
-	return err == nil && (info.Mode()&os.ModeCharDevice) != 0
+	if err != nil {
+		return false
+	}
+	characterDevice := (info.Mode() & os.ModeCharDevice) != 0
+	return characterDevice
 }
 
 func hasTerminalState(file *os.File) bool {
@@ -383,22 +409,33 @@ func (ui *manageUI) setInventory(inv packageInventory) {
 }
 
 func (ui *manageUI) syncManagerOptions() {
+	seen := ui.inventoryManagers()
+	options := make([]string, 0, len(seen))
+	for name := range seen {
+		options = append(options, name)
+	}
+	sort.Strings(options)
+	ui.syncEnabledManagers(seen)
+	ui.managerOptions = options
+	lastOption := len(options) - 1
+	ui.managerSelected = max(0, min(ui.managerSelected, lastOption))
+}
+
+func (ui manageUI) inventoryManagers() map[string]bool {
 	seen := make(map[string]bool)
 	for _, pkg := range ui.inv.Packages {
 		if pkg.Manager != "" {
 			seen[pkg.Manager] = true
 		}
 	}
-	options := make([]string, 0, len(seen))
-	for name := range seen {
-		options = append(options, name)
-	}
-	sort.Strings(options)
+	return seen
+}
 
+func (ui *manageUI) syncEnabledManagers(seen map[string]bool) {
 	if ui.managerEnabled == nil {
-		ui.managerEnabled = make(map[string]bool, len(options))
+		ui.managerEnabled = make(map[string]bool, len(seen))
 	}
-	for _, name := range options {
+	for name := range seen {
 		if _, ok := ui.managerEnabled[name]; !ok {
 			ui.managerEnabled[name] = true
 		}
@@ -407,14 +444,6 @@ func (ui *manageUI) syncManagerOptions() {
 		if !seen[name] {
 			delete(ui.managerEnabled, name)
 		}
-	}
-
-	ui.managerOptions = options
-	if ui.managerSelected >= len(ui.managerOptions) {
-		ui.managerSelected = len(ui.managerOptions) - 1
-	}
-	if ui.managerSelected < 0 {
-		ui.managerSelected = 0
 	}
 }
 
@@ -425,35 +454,27 @@ func (ui *manageUI) applyFilter() {
 		if !ui.managerEnabled[pkg.Manager] {
 			continue
 		}
-		if query == "" || packageMatchesQuery(pkg, query) {
+		matches := query == "" || packageMatchesQuery(pkg, query)
+		if matches {
 			ui.filtered = append(ui.filtered, pkg)
 		}
 	}
-	if ui.selected >= len(ui.filtered) {
-		ui.selected = len(ui.filtered) - 1
-	}
-	if ui.selected < 0 {
-		ui.selected = 0
-	}
-	if ui.offset > ui.selected {
-		ui.offset = ui.selected
-	}
-	if ui.offset < 0 {
-		ui.offset = 0
-	}
+	lastPackage := len(ui.filtered) - 1
+	ui.selected = max(0, min(ui.selected, lastPackage))
+	ui.offset = max(0, min(ui.offset, ui.selected))
 }
 
 func packageMatchesQuery(pkg installedPackage, query string) bool {
-	return strings.Contains(strings.ToLower(pkg.Manager), query) ||
-		strings.Contains(strings.ToLower(pkg.Name), query) ||
-		strings.Contains(strings.ToLower(pkg.Version), query) ||
-		strings.Contains(strings.ToLower(pkg.Ecosystem), query)
+	values := []string{pkg.Manager, pkg.Name, pkg.Version, pkg.Ecosystem}
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), query) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ui manageUI) managerSummary() string {
-	if len(ui.managerOptions) == 0 {
-		return "none"
-	}
 	var enabled []string
 	for _, name := range ui.managerOptions {
 		if ui.managerEnabled[name] {
@@ -481,51 +502,64 @@ func (ui manageUI) managerPackageCounts() map[string]int {
 }
 
 func renderManageUI(stdout io.Writer, ui *manageUI) {
-	theme := currentManageTheme()
 	width, height := terminalSizeFn()
 	width, height = normalizeTerminalSize(width, height)
 	dialogLines := manageDialogLines(*ui, width)
 	warnings := warningLines(ui.inv.Errors, width)
 	reservedLines := 5 + len(warnings) + len(dialogLines)
-	pageSize := height - reservedLines
-	if pageSize < 1 {
-		pageSize = 1
-	}
+	pageSize := max(1, height-reservedLines)
 	ui.ensureSelectionVisible(pageSize)
+	renderManageHeader(stdout, *ui, width)
+	renderManagePackages(stdout, *ui, width, pageSize)
+	renderManageMessages(stdout, warnings, dialogLines, width)
+	printPadded(stdout, manageFooterLine(*ui, pageSize, width), width)
+}
 
+func renderManageHeader(stdout io.Writer, ui manageUI, width int) {
+	theme := currentManageTheme()
 	fmt.Fprint(stdout, ansiClear)
 	printPadded(stdout, themed(theme.title, "pre manage")+" "+themed(theme.subtitle, "package lifecycle"), width)
 	printPadded(stdout, themed(theme.help, fitLine(manageHelpText, width)), width)
-	renderSearchLine(stdout, *ui, width)
+	renderSearchLine(stdout, ui, width)
 	printPadded(stdout, themed(theme.tableHeader, manageTableHeader(width)), width)
+}
 
+func renderManagePackages(stdout io.Writer, ui manageUI, width, pageSize int) {
+	rows := 1
 	if len(ui.filtered) == 0 {
-		emptyMessage := "  no packages found"
-		if ui.loading {
-			emptyMessage = "  " + loadingManageMessage
-		}
-		printPadded(stdout, themed(theme.muted, fitLine(emptyMessage, width)), width)
-		for i := 1; i < pageSize; i++ {
-			printPadded(stdout, "", width)
-		}
+		renderManageEmpty(stdout, ui, width)
 	} else {
-		end := ui.offset + pageSize
-		if end > len(ui.filtered) {
-			end = len(ui.filtered)
-		}
-		for i := ui.offset; i < end; i++ {
-			line := managePackageLine(i, ui.filtered[i], width, i == ui.selected)
-			if i == ui.selected {
-				printPadded(stdout, themed(theme.selected, line), width)
-			} else {
-				printPadded(stdout, line, width)
-			}
-		}
-		for i := end - ui.offset; i < pageSize; i++ {
-			printPadded(stdout, "", width)
-		}
+		rows = renderManagePackageRows(stdout, ui, width, pageSize)
 	}
+	for i := rows; i < pageSize; i++ {
+		printPadded(stdout, "", width)
+	}
+}
 
+func renderManageEmpty(stdout io.Writer, ui manageUI, width int) {
+	theme := currentManageTheme()
+	message := "  no packages found"
+	if ui.loading {
+		message = "  " + loadingManageMessage
+	}
+	printPadded(stdout, themed(theme.muted, fitLine(message, width)), width)
+}
+
+func renderManagePackageRows(stdout io.Writer, ui manageUI, width, pageSize int) int {
+	theme := currentManageTheme()
+	end := min(ui.offset+pageSize, len(ui.filtered))
+	for i := ui.offset; i < end; i++ {
+		line := managePackageLine(i, ui.filtered[i], width, i == ui.selected)
+		if i == ui.selected {
+			line = themed(theme.selected, line)
+		}
+		printPadded(stdout, line, width)
+	}
+	return end - ui.offset
+}
+
+func renderManageMessages(stdout io.Writer, warnings, dialogLines []string, width int) {
+	theme := currentManageTheme()
 	for _, line := range warnings {
 		printPadded(stdout, themed(theme.warning, line), width)
 	}
@@ -533,8 +567,6 @@ func renderManageUI(stdout io.Writer, ui *manageUI) {
 	for _, line := range dialogLines {
 		printPadded(stdout, line, width)
 	}
-
-	printPadded(stdout, manageFooterLine(*ui, pageSize, width), width)
 }
 
 func manageDialogLines(ui manageUI, width int) []string {
@@ -575,12 +607,12 @@ func actionDialogLines(ui manageUI, width int) []string {
 	if !ok {
 		return nil
 	}
-	return []string{
-		themed(theme.dialogTitle, fitLine(" actions", width)),
-		themed(theme.dialog, fitLine(" "+pkg.Manager+"  "+pkg.Name, width)),
-		themed(theme.dialog, fitLine(" version: "+emptyDash(pkg.Version), width)),
-		themed(theme.dialogHelp, fitLine(" [u] upgrade   [d] downgrade   [r] uninstall   [i] install   [space/x/esc] close", width)),
-	}
+	title := themed(theme.dialogTitle, fitLine(" actions", width))
+	packageLabel := " " + pkg.Manager + "  " + pkg.Name
+	packageLine := themed(theme.dialog, fitLine(packageLabel, width))
+	versionLine := themed(theme.dialog, fitLine(" version: "+emptyDash(pkg.Version), width))
+	help := themed(theme.dialogHelp, fitLine(" [u] upgrade   [d] downgrade   [r] uninstall   [i] install   [space/x/esc] close", width))
+	return []string{title, packageLine, versionLine, help}
 }
 
 func searchDialogLines(ui manageUI, width int) []string {
@@ -601,42 +633,23 @@ func managerDialogLines(ui manageUI, width int) []string {
 	if len(ui.managerOptions) == 0 {
 		return append(lines, themed(theme.dialog, fitLine(" none found", width)))
 	}
+	return append(lines, managerOptionLines(ui, width)...)
+}
 
+func managerOptionLines(ui manageUI, width int) []string {
+	theme := currentManageTheme()
 	counts := ui.managerPackageCounts()
 	const maxVisible = 8
-	start := ui.managerSelected - maxVisible/2
-	if start < 0 {
-		start = 0
-	}
-	if start+maxVisible > len(ui.managerOptions) {
-		start = len(ui.managerOptions) - maxVisible
-	}
-	if start < 0 {
-		start = 0
-	}
-	end := start + maxVisible
-	if end > len(ui.managerOptions) {
-		end = len(ui.managerOptions)
-	}
+	centeredStart := max(0, ui.managerSelected-maxVisible/2)
+	lastStart := len(ui.managerOptions) - maxVisible
+	start := max(0, min(centeredStart, lastStart))
+	end := min(start+maxVisible, len(ui.managerOptions))
+	var lines []string
 	if start > 0 {
 		lines = append(lines, themed(theme.dialogHelp, fitLine(" ↑ more", width)))
 	}
 	for i := start; i < end; i++ {
-		name := ui.managerOptions[i]
-		box := "[ ]"
-		if ui.managerEnabled[name] {
-			box = "[x]"
-		}
-		marker := " "
-		if i == ui.managerSelected {
-			marker = "→"
-		}
-		line := fitLine(fmt.Sprintf(" %s %s %-12s %d packages", marker, box, name, counts[name]), width)
-		if i == ui.managerSelected {
-			lines = append(lines, themed(theme.selected, line))
-		} else {
-			lines = append(lines, themed(theme.dialog, line))
-		}
+		lines = append(lines, managerOptionLine(ui, i, counts, width))
 	}
 	if end < len(ui.managerOptions) {
 		lines = append(lines, themed(theme.dialogHelp, fitLine(" ↓ more", width)))
@@ -644,13 +657,29 @@ func managerDialogLines(ui manageUI, width int) []string {
 	return lines
 }
 
+func managerOptionLine(ui manageUI, index int, counts map[string]int, width int) string {
+	theme := currentManageTheme()
+	name := ui.managerOptions[index]
+	box := "[ ]"
+	if ui.managerEnabled[name] {
+		box = "[x]"
+	}
+	marker := " "
+	style := theme.dialog
+	if index == ui.managerSelected {
+		marker = "→"
+		style = theme.selected
+	}
+	line := fitLine(fmt.Sprintf(" %s %s %-12s %d packages", marker, box, name, counts[name]), width)
+	return themed(style, line)
+}
+
 func inputDialogLines(ui manageUI, width int) []string {
 	theme := currentManageTheme()
-	return []string{
-		themed(theme.dialogTitle, fitLine(" "+ui.inputLabel, width)),
-		themed(theme.dialog, fitLine(" "+ui.inputValue, width)),
-		themed(theme.dialogHelp, fitLine(" enter confirm   esc cancel", width)),
-	}
+	title := themed(theme.dialogTitle, fitLine(" "+ui.inputLabel, width))
+	value := themed(theme.dialog, fitLine(" "+ui.inputValue, width))
+	help := themed(theme.dialogHelp, fitLine(" enter confirm   esc cancel", width))
+	return []string{title, value, help}
 }
 
 func handleManageKey(key int, ui *manageUI, term manageTerminal, stdout, stderr io.Writer) bool {
@@ -685,6 +714,14 @@ func handleListKey(key int, ui *manageUI, term manageTerminal, stdout, stderr io
 		ui.toggleManagers()
 	case keyEnter, ' ', 'o':
 		ui.toggleDialog()
+	default:
+		handleListActionKey(key, ui, term, stdout, stderr)
+	}
+	return false
+}
+
+func handleListActionKey(key int, ui *manageUI, term manageTerminal, stdout, stderr io.Writer) {
+	switch key {
 	case 'i':
 		ui.beginInput(inputInstallManager, "manager")
 	case 'u':
@@ -694,7 +731,6 @@ func handleListKey(key int, ui *manageUI, term manageTerminal, stdout, stderr io
 	case 'r':
 		ui.runSelectedAction(actionUninstall, "", term, stdout, stderr)
 	}
-	return false
 }
 
 func handleSearchKey(key int, ui *manageUI) bool {
@@ -702,21 +738,27 @@ func handleSearchKey(key int, ui *manageUI) bool {
 	case keyEsc, keyEnter, '/':
 		ui.mode = modeList
 	case keyBackspace:
-		if len(ui.search) > 0 {
-			ui.search = ui.search[:len(ui.search)-1]
-			ui.applyFilter()
-		}
+		ui.eraseSearchCharacter()
 	case keyUp:
 		ui.moveSelection(-1)
 	case keyDown:
 		ui.moveSelection(1)
 	default:
-		if key >= 32 && key < 127 {
-			ui.search += string(rune(key))
+		character := printableManageCharacter(key)
+		if character != "" {
+			ui.search += character
 			ui.applyFilter()
 		}
 	}
 	return false
+}
+
+func (ui *manageUI) eraseSearchCharacter() {
+	if len(ui.search) == 0 {
+		return
+	}
+	ui.search = ui.search[:len(ui.search)-1]
+	ui.applyFilter()
 }
 
 func handleManagerKey(key int, ui *manageUI) bool {
@@ -795,11 +837,22 @@ func handleInputKey(key int, ui *manageUI, term manageTerminal, stdout, stderr i
 	case keyEnter:
 		ui.submitInput(term, stdout, stderr)
 	default:
-		if key >= 32 && key < 127 {
-			ui.inputValue += string(rune(key))
+		character := printableManageCharacter(key)
+		if character != "" {
+			ui.inputValue += character
 		}
 	}
 	return false
+}
+
+func printableManageCharacter(key int) string {
+	if key < 32 {
+		return ""
+	}
+	if key >= 127 {
+		return ""
+	}
+	return string(rune(key))
 }
 
 func (ui *manageUI) moveSelection(delta int) {
@@ -849,40 +902,25 @@ func (ui *manageUI) enableAllManagers() {
 }
 
 func (ui *manageUI) ensureSelectionVisible(pageSize int) {
-	if pageSize < 1 {
-		pageSize = 1
-	}
+	pageSize = max(1, pageSize)
 	if len(ui.filtered) == 0 {
 		ui.selected = 0
 		ui.offset = 0
 		return
 	}
-	if ui.selected < 0 {
-		ui.selected = 0
-	}
-	if ui.selected >= len(ui.filtered) {
-		ui.selected = len(ui.filtered) - 1
-	}
-	if ui.offset > ui.selected {
-		ui.offset = ui.selected
-	}
+	lastPackage := len(ui.filtered) - 1
+	ui.selected = max(0, min(ui.selected, lastPackage))
+	ui.offset = min(ui.offset, ui.selected)
 	if ui.selected >= ui.offset+pageSize {
 		ui.offset = ui.selected - pageSize + 1
 	}
-	maxOffset := len(ui.filtered) - pageSize
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-	if ui.offset > maxOffset {
-		ui.offset = maxOffset
-	}
-	if ui.offset < 0 {
-		ui.offset = 0
-	}
+	maxOffset := max(0, len(ui.filtered)-pageSize)
+	ui.offset = max(0, min(ui.offset, maxOffset))
 }
 
 func (ui *manageUI) currentPackage() (installedPackage, bool) {
-	if ui.selected < 0 || ui.selected >= len(ui.filtered) {
+	invalidSelection := ui.selected < 0 || ui.selected >= len(ui.filtered)
+	if invalidSelection {
 		return installedPackage{}, false
 	}
 	return ui.filtered[ui.selected], true
@@ -910,40 +948,52 @@ func (ui *manageUI) submitInput(term manageTerminal, stdout, stderr io.Writer) {
 	value := strings.TrimSpace(ui.inputValue)
 	switch ui.inputKind {
 	case inputInstallManager:
-		if value == "" {
-			ui.message = "manager is required"
-			return
-		}
-		ui.installManager = value
-		ui.beginInput(inputInstallPackage, "package")
+		ui.submitInstallManager(value)
 	case inputInstallPackage:
-		if value == "" {
-			ui.message = "package is required"
-			return
-		}
-		mgr := manager.Get(ui.installManager)
-		if mgr == nil {
-			ui.beginInput(inputInstallManager, "manager")
-			ui.message = "unknown manager: " + ui.installManager
-			return
-		}
-		req := packageActionReq{Action: actionInstall, Manager: mgr, Package: value}
-		ui.runAction(req, term, stdout, stderr)
+		ui.submitInstallPackage(value, term, stdout, stderr)
 	case inputVersion:
-		if value == "" {
-			ui.message = "version is required"
-			return
-		}
-		pkg := ui.pendingPackage
-		mgr := manager.Get(pkg.Manager)
-		if mgr == nil {
-			ui.message = "unknown manager: " + pkg.Manager
-			ui.mode = modeList
-			return
-		}
-		req := packageActionReq{Action: ui.pendingAction, Manager: mgr, Package: pkg.Name, Version: value}
-		ui.runAction(req, term, stdout, stderr)
+		ui.submitVersion(value, term, stdout, stderr)
 	}
+}
+
+func (ui *manageUI) submitInstallManager(value string) {
+	if value == "" {
+		ui.message = "manager is required"
+		return
+	}
+	ui.installManager = value
+	ui.beginInput(inputInstallPackage, "package")
+}
+
+func (ui *manageUI) submitInstallPackage(value string, term manageTerminal, stdout, stderr io.Writer) {
+	if value == "" {
+		ui.message = "package is required"
+		return
+	}
+	mgr := manager.Get(ui.installManager)
+	if mgr == nil {
+		ui.beginInput(inputInstallManager, "manager")
+		ui.message = "unknown manager: " + ui.installManager
+		return
+	}
+	req := packageActionReq{Action: actionInstall, Manager: mgr, Package: value}
+	ui.runAction(req, term, stdout, stderr)
+}
+
+func (ui *manageUI) submitVersion(value string, term manageTerminal, stdout, stderr io.Writer) {
+	if value == "" {
+		ui.message = "version is required"
+		return
+	}
+	pkg := ui.pendingPackage
+	mgr := manager.Get(pkg.Manager)
+	if mgr == nil {
+		ui.message = "unknown manager: " + pkg.Manager
+		ui.mode = modeList
+		return
+	}
+	req := packageActionReq{Action: ui.pendingAction, Manager: mgr, Package: pkg.Name, Version: value}
+	ui.runAction(req, term, stdout, stderr)
 }
 
 func (ui *manageUI) runSelectedAction(action packageAction, version string, term manageTerminal, stdout, stderr io.Writer) {
@@ -971,18 +1021,22 @@ func (ui *manageUI) runAction(req packageActionReq, term manageTerminal, stdout,
 	fmt.Fprint(stdout, ansiShowCursor+ansiReset+ansiClear)
 	fmt.Fprintf(stdout, "running: pre %s %s\n\n", req.Manager.Name, strings.Join(args, " "))
 	err = executePackageActionWithInput(req, term.commandInput(), stdout, stderr)
-	if err != nil {
-		fmt.Fprintf(stderr, "pre manage: %v\n", err)
-		ui.message = err.Error()
-	} else {
-		ui.message = fmt.Sprintf("%s %s", req.Action, req.Package)
-	}
+	ui.setActionResult(req, err, stderr)
 	manageActionPauseFn()
 	term.resume()
 	fmt.Fprint(stdout, ansiHideCursor)
 	ui.setInventory(collectPackageInventory(manager.All()))
 	ui.mode = modeList
 	ui.inputValue = ""
+}
+
+func (ui *manageUI) setActionResult(req packageActionReq, err error, stderr io.Writer) {
+	if err != nil {
+		fmt.Fprintf(stderr, "pre manage: %v\n", err)
+		ui.message = err.Error()
+		return
+	}
+	ui.message = fmt.Sprintf("%s %s", req.Action, req.Package)
 }
 
 func readManageKey(r io.Reader) (int, error) {
@@ -1005,11 +1059,8 @@ func readManageKey(r io.Reader) (int, error) {
 }
 
 func readEscapeKey(r io.Reader) int {
-	if file, ok := r.(*os.File); ok {
-		if err := setNonblockFile(file, true); err == nil {
-			defer func() { _ = setNonblockFile(file, false) }()
-		}
-	}
+	restore := enableNonblockingReads(r)
+	defer restore()
 	b1, ok := readByteOptional(r)
 	if !ok {
 		return keyEsc
@@ -1017,6 +1068,10 @@ func readEscapeKey(r io.Reader) int {
 	if b1 != '[' {
 		return keyEsc
 	}
+	return readArrowKey(r)
+}
+
+func readArrowKey(r io.Reader) int {
 	b2, ok := readByteOptional(r)
 	if !ok {
 		return keyEsc
@@ -1028,6 +1083,21 @@ func readEscapeKey(r io.Reader) int {
 		return keyDown
 	default:
 		return keyEsc
+	}
+}
+
+func enableNonblockingReads(r io.Reader) func() {
+	file, ok := r.(*os.File)
+	if !ok {
+		return func() {}
+	}
+	const nonblocking = true
+	if err := setNonblockFile(file, nonblocking); err != nil {
+		return func() {}
+	}
+	return func() {
+		const blocking = false
+		_ = setNonblockFile(file, blocking)
 	}
 }
 
@@ -1079,9 +1149,10 @@ func readByteOptional(r io.Reader) (byte, bool) {
 }
 
 func retryableReadError(err error) bool {
-	return errors.Is(err, syscall.EAGAIN) ||
+	retryable := errors.Is(err, syscall.EAGAIN) ||
 		errors.Is(err, syscall.EWOULDBLOCK) ||
 		errors.Is(err, syscall.EINTR)
+	return retryable
 }
 
 type manageFlagRequest struct {
@@ -1096,6 +1167,10 @@ func packageActionRequestFromManageFlags(args []string) (packageActionReq, error
 	if err != nil {
 		return packageActionReq{}, err
 	}
+	return req.actionRequest()
+}
+
+func (req manageFlagRequest) actionRequest() (packageActionReq, error) {
 	if req.action == "" {
 		return packageActionReq{}, errors.New("choose one of --install, --upgrade, --downgrade, or --uninstall")
 	}
@@ -1117,62 +1192,84 @@ func packageActionRequestFromManageFlags(args []string) (packageActionReq, error
 func parseManageFlags(args []string) (manageFlagRequest, error) {
 	var req manageFlagRequest
 	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch arg {
-		case "--manager":
-			val, next, err := flagValue(args, i, arg)
-			if err != nil {
-				return req, err
-			}
-			req.managerName, i = val, next
-		case "--package", "-p":
-			val, next, err := flagValue(args, i, arg)
-			if err != nil {
-				return req, err
-			}
-			req.packageName, i = val, next
-		case "--install":
-			if req.action != "" {
-				return req, errors.New("choose only one package action")
-			}
-			req.action = actionInstall
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				req.version = args[i+1]
-				i++
-			}
-		case "--upgrade", "--update":
-			if req.action != "" {
-				return req, errors.New("choose only one package action")
-			}
-			req.action = actionUpdate
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				req.version = args[i+1]
-				i++
-			}
-		case "--downgrade":
-			if req.action != "" {
-				return req, errors.New("choose only one package action")
-			}
-			req.action = actionDowngrade
-			val, next, err := flagValue(args, i, arg)
-			if err != nil {
-				return req, err
-			}
-			req.version, i = val, next
-		case "--uninstall", "--remove":
-			if req.action != "" {
-				return req, errors.New("choose only one package action")
-			}
-			req.action = actionUninstall
-		default:
-			return req, fmt.Errorf("unknown option %s", arg)
+		next, err := req.parseFlag(args, i)
+		if err != nil {
+			return req, err
 		}
+		i = next
 	}
 	return req, nil
 }
 
+func (req *manageFlagRequest) parseFlag(args []string, index int) (int, error) {
+	arg := args[index]
+	switch arg {
+	case "--manager", "--package", "-p":
+		value, next, err := flagValue(args, index, arg)
+		if err != nil {
+			return index, err
+		}
+		if arg == "--manager" {
+			req.managerName = value
+		} else {
+			req.packageName = value
+		}
+		return next, nil
+	default:
+		return req.parseActionFlag(args, index)
+	}
+}
+
+func manageActionFlag(arg string) (packageAction, error) {
+	switch arg {
+	case "--install":
+		return actionInstall, nil
+	case "--upgrade", "--update":
+		return actionUpdate, nil
+	case "--downgrade":
+		return actionDowngrade, nil
+	case "--uninstall", "--remove":
+		return actionUninstall, nil
+	default:
+		return "", fmt.Errorf("unknown option %s", arg)
+	}
+}
+
+func (req *manageFlagRequest) parseActionFlag(args []string, index int) (int, error) {
+	action, err := manageActionFlag(args[index])
+	if err != nil {
+		return index, err
+	}
+	if req.action != "" {
+		return index, errors.New("choose only one package action")
+	}
+	req.action = action
+	if action == actionUninstall {
+		return index, nil
+	}
+	optionalVersion := action != actionDowngrade && !hasFlagValue(args, index)
+	if optionalVersion {
+		return index, nil
+	}
+	return req.parseVersionFlag(args, index)
+}
+
+func (req *manageFlagRequest) parseVersionFlag(args []string, index int) (int, error) {
+	value, next, err := flagValue(args, index, args[index])
+	if err == nil {
+		req.version = value
+	}
+	return next, err
+}
+
+func hasFlagValue(args []string, index int) bool {
+	next := index + 1
+	present := next < len(args) && !strings.HasPrefix(args[next], "-")
+	return present
+}
+
 func flagValue(args []string, idx int, flag string) (string, int, error) {
-	if idx+1 >= len(args) || strings.HasPrefix(args[idx+1], "-") {
+	if !hasFlagValue(args, idx) {
 		return "", idx, fmt.Errorf("%s requires a value", flag)
 	}
 	return args[idx+1], idx + 1, nil
@@ -1189,13 +1286,21 @@ func resolveManageManager(req manageFlagRequest) (*manager.Manager, error) {
 	if req.action == actionInstall {
 		return nil, errors.New("--manager is required for installs")
 	}
+	return resolveInstalledManager(req.packageName)
+}
+
+func resolveInstalledManager(packageName string) (*manager.Manager, error) {
 	inv := collectPackageInventory(manager.All())
 	var matches []installedPackage
 	for _, pkg := range inv.Packages {
-		if pkg.Name == req.packageName {
+		if pkg.Name == packageName {
 			matches = append(matches, pkg)
 		}
 	}
+	return resolveUniqueManager(matches)
+}
+
+func resolveUniqueManager(matches []installedPackage) (*manager.Manager, error) {
 	switch len(matches) {
 	case 0:
 		return nil, errors.New("package not found in inventory; pass --manager")
@@ -1244,23 +1349,21 @@ func packageActionRequest(action packageAction, args []string) (packageActionReq
 	}
 
 	req := packageActionReq{Action: action, Manager: mgr}
-	switch action {
-	case actionInstall:
-		req.Package = strings.Join(args[1:], " ")
-	case actionUpdate:
-		if len(args) > 1 {
-			req.Package = strings.Join(args[1:], " ")
-		}
-	case actionUninstall:
-		req.Package = strings.Join(args[1:], " ")
+	return req.withPackageArgs(args[1:])
+}
+
+func (req packageActionReq) withPackageArgs(args []string) (packageActionReq, error) {
+	switch req.Action {
+	case actionInstall, actionUpdate, actionUninstall:
+		req.Package = strings.Join(args, " ")
 	case actionDowngrade:
-		if len(args) < 3 {
-			return packageActionReq{}, fmt.Errorf("usage: %s", packageActionUsage(action))
+		if len(args) < 2 {
+			return packageActionReq{}, fmt.Errorf("usage: %s", packageActionUsage(req.Action))
 		}
-		req.Package = args[1]
-		req.Version = strings.Join(args[2:], " ")
+		req.Package = args[0]
+		req.Version = strings.Join(args[1:], " ")
 	default:
-		return packageActionReq{}, fmt.Errorf("pre: unsupported package action %q", action)
+		return packageActionReq{}, fmt.Errorf("pre: unsupported package action %q", req.Action)
 	}
 	return req, nil
 }
@@ -1299,14 +1402,19 @@ func buildPackageManagerArgs(req packageActionReq) ([]string, error) {
 		return buildBrewArgs(req, name)
 	case "npm":
 		return buildNPMArgs(req, name, "install", "uninstall")
-	case "pnpm":
-		return buildNPMArgs(req, name, "add", "remove")
-	case "bun":
+	case "pnpm", "bun":
 		return buildNPMArgs(req, name, "add", "remove")
 	case "go":
 		return buildGoArgs(req, name)
 	case "cargo":
 		return buildCargoArgs(req, name)
+	default:
+		return buildPythonPackageArgs(req, name)
+	}
+}
+
+func buildPythonPackageArgs(req packageActionReq, name string) ([]string, error) {
+	switch req.Manager.Name {
 	case "pip", "pip3":
 		return buildPipArgs(req, name)
 	case "uv":
@@ -1319,26 +1427,33 @@ func buildPackageManagerArgs(req packageActionReq) ([]string, error) {
 }
 
 func buildBrewArgs(req packageActionReq, name string) ([]string, error) {
+	versionedName := name + "@" + req.Version
 	switch req.Action {
 	case actionInstall:
 		return []string{"install", packageWithVersion(req.Manager, req.Package, req.Version)}, nil
 	case actionUpdate:
-		if req.Version != "" && name != "" {
-			return []string{"install", name + "@" + req.Version}, nil
-		}
-		if name == "" {
-			return []string{"upgrade"}, nil
-		}
-		return []string{"upgrade", name}, nil
+		return buildBrewUpdateArgs(req, name), nil
 	case actionUninstall:
 		return []string{"uninstall", name}, nil
 	case actionDowngrade:
-		return []string{"install", name + "@" + req.Version}, nil
+		return []string{"install", versionedName}, nil
 	}
 	return nil, unsupportedPackageAction(req)
 }
 
+func buildBrewUpdateArgs(req packageActionReq, name string) []string {
+	if name == "" {
+		return []string{"upgrade"}
+	}
+	if req.Version != "" {
+		versionedName := name + "@" + req.Version
+		return []string{"install", versionedName}
+	}
+	return []string{"upgrade", name}
+}
+
 func buildNPMArgs(req packageActionReq, name, installCmd, removeCmd string) ([]string, error) {
+	versionedName := name + "@" + req.Version
 	switch req.Action {
 	case actionInstall:
 		return []string{installCmd, packageWithVersion(req.Manager, req.Package, req.Version)}, nil
@@ -1347,18 +1462,19 @@ func buildNPMArgs(req packageActionReq, name, installCmd, removeCmd string) ([]s
 			return []string{"update"}, nil
 		}
 		if req.Version != "" {
-			return []string{installCmd, name + "@" + req.Version}, nil
+			return []string{installCmd, versionedName}, nil
 		}
 		return []string{installCmd, name + "@latest"}, nil
 	case actionUninstall:
 		return []string{removeCmd, name}, nil
 	case actionDowngrade:
-		return []string{installCmd, name + "@" + req.Version}, nil
+		return []string{installCmd, versionedName}, nil
 	}
 	return nil, unsupportedPackageAction(req)
 }
 
 func buildGoArgs(req packageActionReq, name string) ([]string, error) {
+	versionedName := name + "@" + req.Version
 	switch req.Action {
 	case actionInstall:
 		return []string{"get", packageWithVersion(req.Manager, req.Package, req.Version)}, nil
@@ -1367,13 +1483,13 @@ func buildGoArgs(req packageActionReq, name string) ([]string, error) {
 			return []string{"get", "-u", "./..."}, nil
 		}
 		if req.Version != "" {
-			return []string{"get", name + "@" + req.Version}, nil
+			return []string{"get", versionedName}, nil
 		}
 		return []string{"get", name + "@latest"}, nil
 	case actionUninstall:
 		return []string{"get", name + "@none"}, nil
 	case actionDowngrade:
-		return []string{"get", name + "@" + req.Version}, nil
+		return []string{"get", versionedName}, nil
 	}
 	return nil, unsupportedPackageAction(req)
 }
@@ -1411,6 +1527,7 @@ func buildCargoUpdateArgs(req packageActionReq, name string) []string {
 }
 
 func buildPipArgs(req packageActionReq, name string) ([]string, error) {
+	versionedName := name + "==" + req.Version
 	switch req.Action {
 	case actionInstall:
 		return []string{"install", packageWithVersion(req.Manager, req.Package, req.Version)}, nil
@@ -1419,13 +1536,13 @@ func buildPipArgs(req packageActionReq, name string) ([]string, error) {
 			return nil, errors.New("pip updates require a package name")
 		}
 		if req.Version != "" {
-			return []string{"install", "--upgrade", name + "==" + req.Version}, nil
+			return []string{"install", "--upgrade", versionedName}, nil
 		}
 		return []string{"install", "--upgrade", name}, nil
 	case actionUninstall:
 		return []string{"uninstall", "-y", name}, nil
 	case actionDowngrade:
-		return []string{"install", name + "==" + req.Version}, nil
+		return []string{"install", versionedName}, nil
 	}
 	return nil, unsupportedPackageAction(req)
 }
@@ -1433,27 +1550,33 @@ func buildPipArgs(req packageActionReq, name string) ([]string, error) {
 func buildUVArgs(req packageActionReq, name string) ([]string, error) {
 	// uv inventory comes from `uv pip list`, so actions target that same active
 	// environment instead of editing project dependencies with `uv add/remove`.
+	versionedName := name + "==" + req.Version
 	switch req.Action {
 	case actionInstall:
 		return []string{"pip", "install", packageWithVersion(req.Manager, req.Package, req.Version)}, nil
 	case actionUpdate:
-		if name == "" {
-			return nil, errors.New("uv updates require a package name")
-		}
-		if req.Version != "" {
-			return []string{"pip", "install", "--upgrade", name + "==" + req.Version}, nil
-		}
-		return []string{"pip", "install", "--upgrade", name}, nil
+		return buildUVUpdateArgs(req, name)
 	case actionUninstall:
 		// uv pip uninstall does not support pip's -y/--yes flag.
 		return []string{"pip", "uninstall", name}, nil
 	case actionDowngrade:
-		return []string{"pip", "install", name + "==" + req.Version}, nil
+		return []string{"pip", "install", versionedName}, nil
 	}
 	return nil, unsupportedPackageAction(req)
 }
 
+func buildUVUpdateArgs(req packageActionReq, name string) ([]string, error) {
+	if name == "" {
+		return nil, errors.New("uv updates require a package name")
+	}
+	if req.Version != "" {
+		name += "==" + req.Version
+	}
+	return []string{"pip", "install", "--upgrade", name}, nil
+}
+
 func buildPoetryArgs(req packageActionReq, name string) ([]string, error) {
+	versionedName := name + "@" + req.Version
 	switch req.Action {
 	case actionInstall:
 		return []string{"add", packageWithVersion(req.Manager, req.Package, req.Version)}, nil
@@ -1462,13 +1585,13 @@ func buildPoetryArgs(req packageActionReq, name string) ([]string, error) {
 			return []string{"update"}, nil
 		}
 		if req.Version != "" {
-			return []string{"add", name + "@" + req.Version}, nil
+			return []string{"add", versionedName}, nil
 		}
 		return []string{"add", name + "@latest"}, nil
 	case actionUninstall:
 		return []string{"remove", name}, nil
 	case actionDowngrade:
-		return []string{"add", name + "@" + req.Version}, nil
+		return []string{"add", versionedName}, nil
 	}
 	return nil, unsupportedPackageAction(req)
 }
@@ -1516,41 +1639,38 @@ func packageNameOnly(mgr *manager.Manager, spec string) string {
 func packageWithVersion(mgr *manager.Manager, spec, version string) string {
 	spec = strings.TrimSpace(spec)
 	version = strings.TrimSpace(version)
-	if version == "" || spec == "" {
+	unversioned := version == "" || spec == ""
+	if unversioned {
 		return spec
 	}
 	name := packageNameOnly(mgr, spec)
 	if name == "" {
 		name = spec
 	}
-	switch mgr.Ecosystem {
-	case "PyPI":
-		return name + "==" + version
-	case "Homebrew":
-		return name + "@" + version
-	default:
-		return name + "@" + version
+	separator := "@"
+	if mgr.Ecosystem == "PyPI" {
+		separator = "=="
 	}
+	versionedName := name + separator + version
+	return versionedName
 }
 
 func runPreManagerCommandWithInput(mgr *manager.Manager, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	self, err := executablePathFn()
-	if err != nil || self == "" {
+	missingExecutable := err != nil || self == ""
+	if missingExecutable {
 		self = "pre"
 	}
 	preArgs := append([]string{mgr.Name}, args...)
 	if stdin != nil {
-		return commandRunnerWithInputFn(self, preArgs, nil, stdin, stdout, stderr)
+		streams := commandStreams{stdin: stdin, stdout: stdout, stderr: stderr}
+		return commandRunnerWithInputFn(self, preArgs, nil, streams)
 	}
 	return commandRunnerFn(self, preArgs, nil, stdout, stderr)
 }
 
 func collectPackageInventory(mgrs []manager.Manager) packageInventory {
-	type inventoryResult struct {
-		inv packageInventory
-	}
-
-	results := make(chan inventoryResult, len(mgrs))
+	results := make(chan packageInventory, len(mgrs))
 	var wg sync.WaitGroup
 
 	for _, mgr := range mgrs {
@@ -1558,22 +1678,7 @@ func collectPackageInventory(mgrs []manager.Manager) packageInventory {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := lookPathFn(mgr.Name); err != nil {
-				return
-			}
-
-			var partial packageInventory
-			pkgs, err := listInstalledPackages(&mgr)
-			if err != nil {
-				if fallback := manifestPackages(&mgr); len(fallback) > 0 {
-					partial.Packages = append(partial.Packages, fallback...)
-					partial.Errors = append(partial.Errors, fmt.Sprintf("%s: package manager list failed; showing project manifest/lockfile", mgr.Name))
-				}
-				results <- inventoryResult{inv: partial}
-				return
-			}
-			partial.Packages = pkgs
-			results <- inventoryResult{inv: partial}
+			collectManagerInventory(&mgr, results)
 		}()
 	}
 
@@ -1581,11 +1686,31 @@ func collectPackageInventory(mgrs []manager.Manager) packageInventory {
 		wg.Wait()
 		close(results)
 	}()
+	return mergePackageInventories(results)
+}
 
+func collectManagerInventory(mgr *manager.Manager, results chan<- packageInventory) {
+	if _, err := lookPathFn(mgr.Name); err != nil {
+		return
+	}
+	pkgs, err := listInstalledPackages(mgr)
+	if err == nil {
+		results <- packageInventory{Packages: pkgs}
+		return
+	}
+	var partial packageInventory
+	if fallback := manifestPackages(mgr); len(fallback) > 0 {
+		partial.Packages = append(partial.Packages, fallback...)
+		partial.Errors = append(partial.Errors, fmt.Sprintf("%s: package manager list failed; showing project manifest/lockfile", mgr.Name))
+	}
+	results <- partial
+}
+
+func mergePackageInventories(results <-chan packageInventory) packageInventory {
 	var inv packageInventory
 	for result := range results {
-		inv.Packages = append(inv.Packages, result.inv.Packages...)
-		inv.Errors = append(inv.Errors, result.inv.Errors...)
+		inv.Packages = append(inv.Packages, result.Packages...)
+		inv.Errors = append(inv.Errors, result.Errors...)
 	}
 	sortPackages(inv.Packages)
 	return inv
@@ -1594,34 +1719,43 @@ func collectPackageInventory(mgrs []manager.Manager) packageInventory {
 func listInstalledPackages(mgr *manager.Manager) ([]installedPackage, error) {
 	switch mgr.Name {
 	case "brew":
-		if pkgs := readHomebrewPackages(mgr); len(pkgs) > 0 {
-			return pkgs, nil
-		}
-		out, err := commandOutputFn("brew", []string{"list", "--versions"})
-		return packagesOrError(parseBrewPackages(mgr, out), err)
+		return listHomebrewPackages(mgr)
 	case "npm":
-		out, err := commandOutputFn("npm", []string{"ls", "--depth=0", "--json"})
-		return packagesOrError(parseNPMJSONPackages(mgr, out), err)
+		return listCommandPackages(mgr, []string{"ls", "--depth=0", "--json"}, parseNPMJSONPackages)
 	case "pnpm":
-		out, err := commandOutputFn("pnpm", []string{"list", "--depth", "0", "--json"})
-		return packagesOrError(parsePNPMJSONPackages(mgr, out), err)
+		return listCommandPackages(mgr, []string{"list", "--depth", "0", "--json"}, parsePNPMJSONPackages)
 	case "go":
-		out, err := commandOutputFn("go", []string{"list", "-m", "-json", "all"})
-		return packagesOrError(parseGoListPackages(mgr, out), err)
-	case "pip", "pip3":
-		out, err := commandOutputFn(mgr.Name, []string{"list", "--format=json"})
-		return packagesOrError(parsePipJSONPackages(mgr, out), err)
-	case "uv":
-		out, err := commandOutputFn("uv", []string{"pip", "list", "--format=json"})
-		return packagesOrError(parsePipJSONPackages(mgr, out), err)
-	case "poetry":
-		out, err := commandOutputFn("poetry", []string{"show", "--top-level"})
-		return packagesOrError(parsePoetryShowPackages(mgr, out), err)
+		return listCommandPackages(mgr, []string{"list", "-m", "-json", "all"}, parseGoListPackages)
 	case "cargo":
 		return cargoManifestPackages(mgr)
 	default:
+		return listPythonPackages(mgr)
+	}
+}
+
+func listPythonPackages(mgr *manager.Manager) ([]installedPackage, error) {
+	switch mgr.Name {
+	case "pip", "pip3":
+		return listCommandPackages(mgr, []string{"list", "--format=json"}, parsePipJSONPackages)
+	case "uv":
+		return listCommandPackages(mgr, []string{"pip", "list", "--format=json"}, parsePipJSONPackages)
+	case "poetry":
+		return listCommandPackages(mgr, []string{"show", "--top-level"}, parsePoetryShowPackages)
+	default:
 		return manifestPackages(mgr), nil
 	}
+}
+
+func listCommandPackages(mgr *manager.Manager, args []string, parse func(*manager.Manager, []byte) []installedPackage) ([]installedPackage, error) {
+	out, err := commandOutputFn(mgr.Name, args)
+	return packagesOrError(parse(mgr, out), err)
+}
+
+func listHomebrewPackages(mgr *manager.Manager) ([]installedPackage, error) {
+	if pkgs := readHomebrewPackages(mgr); len(pkgs) > 0 {
+		return pkgs, nil
+	}
+	return listCommandPackages(mgr, []string{"list", "--versions"}, parseBrewPackages)
 }
 
 func readHomebrewPackages(mgr *manager.Manager) []installedPackage {
@@ -1646,7 +1780,8 @@ func defaultHomebrewPrefixes() []string {
 	unique := make([]string, 0, len(prefixes))
 	for _, prefix := range prefixes {
 		prefix = filepath.Clean(strings.TrimSpace(prefix))
-		if prefix == "." || seen[prefix] {
+		skip := prefix == "." || seen[prefix]
+		if skip {
 			continue
 		}
 		seen[prefix] = true
@@ -1661,7 +1796,8 @@ func appendHomebrewPackageDir(dst []installedPackage, seen map[string]bool, mgr 
 		return dst
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+		skip := !entry.IsDir() || strings.HasPrefix(entry.Name(), ".")
+		if skip {
 			continue
 		}
 		name := entry.Name()
@@ -1669,14 +1805,14 @@ func appendHomebrewPackageDir(dst []installedPackage, seen map[string]bool, mgr 
 			continue
 		}
 		seen[name] = true
-		dst = append(dst, installedPackage{
-			Manager:   mgr.Name,
-			Ecosystem: mgr.Ecosystem,
-			Name:      name,
-			Version:   homebrewPackageVersions(filepath.Join(dir, name)),
-		})
+		dst = append(dst, homebrewInstalledPackage(mgr, dir, name))
 	}
 	return dst
+}
+
+func homebrewInstalledPackage(mgr *manager.Manager, dir, name string) installedPackage {
+	version := homebrewPackageVersions(filepath.Join(dir, name))
+	return installedPackage{Manager: mgr.Name, Ecosystem: mgr.Ecosystem, Name: name, Version: version}
 }
 
 func homebrewPackageVersions(dir string) string {
@@ -1829,7 +1965,8 @@ func parseGoListPackages(mgr *manager.Manager, out []byte) []installedPackage {
 		if err := dec.Decode(&mod); err != nil {
 			break
 		}
-		if mod.Main || mod.Path == "" {
+		skip := mod.Main || mod.Path == ""
+		if skip {
 			continue
 		}
 		pkgs = append(pkgs, installedPackage{Manager: mgr.Name, Ecosystem: mgr.Ecosystem, Name: mod.Path, Version: mod.Version})
@@ -1902,27 +2039,34 @@ func emptyDash(s string) string {
 func detectTerminalSize() (int, int) {
 	cols, hasCols := envInt("COLUMNS")
 	rows, hasRows := envInt("LINES")
-	if hasCols && hasRows {
+	envSize := hasCols && hasRows
+	if envSize {
 		return cols, rows
 	}
-	if packageInputReader == os.Stdin {
-		if info, err := os.Stdin.Stat(); err == nil && (info.Mode()&os.ModeCharDevice) != 0 {
-			cmd := exec.Command("stty", "size")
-			cmd.Stdin = os.Stdin
-			out, err := cmd.Output()
-			if err == nil {
-				fields := strings.Fields(string(out))
-				if len(fields) >= 2 {
-					rows, rowErr := strconv.Atoi(fields[0])
-					cols, colErr := strconv.Atoi(fields[1])
-					if rowErr == nil && colErr == nil {
-						return cols, rows
-					}
-				}
-			}
+	terminalInput := packageInputReader == os.Stdin && isTerminalFile(os.Stdin)
+	if terminalInput {
+		if cols, rows, ok := readTerminalSize(); ok {
+			return cols, rows
 		}
 	}
 	return 100, 30
+}
+
+func readTerminalSize() (int, int, bool) {
+	cmd := exec.Command("stty", "size")
+	cmd.Stdin = os.Stdin
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, 0, false
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) < 2 {
+		return 0, 0, false
+	}
+	rows, rowErr := strconv.Atoi(fields[0])
+	cols, colErr := strconv.Atoi(fields[1])
+	valid := rowErr == nil && colErr == nil
+	return cols, rows, valid
 }
 
 func envInt(name string) (int, bool) {
@@ -1931,7 +2075,8 @@ func envInt(name string) (int, bool) {
 		return 0, false
 	}
 	n, err := strconv.Atoi(value)
-	return n, err == nil && n > 0
+	positive := err == nil && n > 0
+	return n, positive
 }
 
 func normalizeTerminalSize(width, height int) (int, int) {
@@ -2029,7 +2174,8 @@ func fitLine(s string, width int) string {
 }
 
 func truncate(s string, max int) string {
-	if max <= 0 || visibleWidth(s) <= max {
+	fits := max <= 0 || visibleWidth(s) <= max
+	if fits {
 		return s
 	}
 	limit := max
@@ -2039,10 +2185,11 @@ func truncate(s string, max int) string {
 		suffix = "..."
 	}
 	truncated, sawANSI := takeVisible(s, limit)
+	result := truncated + suffix
 	if sawANSI {
-		return truncated + suffix + ansiReset
+		return result + ansiReset
 	}
-	return truncated + suffix
+	return result
 }
 
 func padRightVisible(s string, padding int) string {
@@ -2051,7 +2198,8 @@ func padRightVisible(s string, padding int) string {
 	}
 	spaces := strings.Repeat(" ", padding)
 	if strings.HasSuffix(s, ansiReset) {
-		return strings.TrimSuffix(s, ansiReset) + spaces + ansiReset
+		padded := strings.TrimSuffix(s, ansiReset) + spaces
+		return padded + ansiReset
 	}
 	return s + spaces
 }
@@ -2077,50 +2225,66 @@ func takeVisible(s string, limit int) (string, bool) {
 	if limit <= 0 {
 		return "", strings.Contains(s, "\x1b")
 	}
-	var b strings.Builder
+	end, sawANSI := visiblePrefixEnd(s, limit)
+	return s[:end], sawANSI
+}
+
+func visiblePrefixEnd(s string, limit int) (int, bool) {
+	i := 0
 	visible := 0
 	sawANSI := false
-	for i := 0; i < len(s) && visible < limit; {
+	for i < len(s) && visible < limit {
 		if end, ok := ansiSequenceEnd(s, i); ok {
-			b.WriteString(s[i:end])
 			i = end
 			sawANSI = true
 			continue
 		}
 		_, size := utf8.DecodeRuneInString(s[i:])
-		if size == 0 {
-			break
-		}
-		b.WriteString(s[i : i+size])
 		visible++
 		i += size
 	}
-	return b.String(), sawANSI
+	return i, sawANSI
 }
 
 func ansiSequenceEnd(s string, i int) (int, bool) {
-	if i+1 >= len(s) || s[i] != '\x1b' {
+	notEscape := i+1 >= len(s) || s[i] != '\x1b'
+	if notEscape {
 		return i, false
 	}
 	switch s[i+1] {
 	case '[':
-		for j := i + 2; j < len(s); j++ {
-			if s[j] >= 0x40 && s[j] <= 0x7e {
-				return j + 1, true
-			}
-		}
+		return csiSequenceEnd(s, i)
 	case ']':
-		for j := i + 2; j < len(s); j++ {
-			if s[j] == '\a' {
-				return j + 1, true
-			}
-			if s[j] == '\x1b' && j+1 < len(s) && s[j+1] == '\\' {
-				return j + 2, true
-			}
-		}
+		return oscSequenceEnd(s, i)
 	default:
-		if s[i+1] >= 0x40 && s[i+1] <= 0x5f {
+		control := s[i+1] >= 0x40 && s[i+1] <= 0x5f
+		if control {
 			return i + 2, true
+		}
+	}
+	return i, false
+}
+
+func csiSequenceEnd(s string, i int) (int, bool) {
+	for j := i + 2; j < len(s); j++ {
+		final := s[j] >= 0x40 && s[j] <= 0x7e
+		if final {
+			return j + 1, true
+		}
+	}
+	return i, false
+}
+
+func oscSequenceEnd(s string, i int) (int, bool) {
+	for j := i + 2; j < len(s); j++ {
+		if s[j] == '\a' {
+			return j + 1, true
+		}
+		next := j + 1
+		escape := s[j] == '\x1b'
+		terminated := escape && next < len(s) && s[next] == '\\'
+		if terminated {
+			return next + 1, true
 		}
 	}
 	return i, false
@@ -2158,7 +2322,8 @@ func packageListTimeout() time.Duration {
 		return 2 * time.Second
 	}
 	timeout, err := time.ParseDuration(value)
-	if err != nil || timeout <= 0 {
+	invalid := err != nil || timeout <= 0
+	if invalid {
 		return 2 * time.Second
 	}
 	return timeout

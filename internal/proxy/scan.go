@@ -70,24 +70,22 @@ func RunSystemScan() {
 	start := time.Now()
 	obs.Record("pre.system_scan.started", nil)
 	if disableEnabled() {
-		obs.Record("pre.system_scan.skipped", map[string]any{
-			"reason":      "env_disabled",
-			"duration_ms": durationMillis(start),
-		})
+		recordSystemScanSkipped("env_disabled", start)
 		return
 	}
 	release, ok := acquireSystemScanLock()
 	if !ok {
-		obs.Record("pre.system_scan.skipped", map[string]any{
-			"reason":      "locked",
-			"duration_ms": durationMillis(start),
-		})
+		recordSystemScanSkipped("locked", start)
 		return
 	}
 	if release != nil {
 		defer release()
 	}
 
+	runSystemScanLocked(start)
+}
+
+func runSystemScanLocked(start time.Time) {
 	c := loadCacheFn()
 	if limit, exceeded := packageLimitExceeded(len(c)); exceeded {
 		obs.Record("pre.system_scan.skipped", map[string]any{
@@ -104,9 +102,13 @@ func RunSystemScan() {
 	stats.Total = total
 	applySystemScanChanges(changes)
 	saveSystemStatsFn(stats)
+	recordSystemScanCompleted(start, stats, len(pending))
+}
+
+func recordSystemScanCompleted(start time.Time, stats SystemStats, pending int) {
 	obs.Record("pre.system_scan.completed", map[string]any{
-		"package_count":  total,
-		"pending_count":  len(pending),
+		"package_count":  stats.Total,
+		"pending_count":  pending,
 		"critical_count": stats.Crit,
 		"warning_count":  stats.Warn,
 		"error_count":    stats.Errors,
@@ -131,7 +133,8 @@ func scanBatchWithPolicy(mgr *manager.Manager, packages []string, c cache.Cache,
 func prepareBatchScan(mgr *manager.Manager, spec string, c cache.Cache, allowMissing bool) (scanResult, security.Query, bool) {
 	name, requestedVersion := manager.ParseSpec(mgr.Ecosystem, spec)
 	result := prepareScan(mgr, name, requestedVersion, c, allowMissing)
-	if result.err != nil || result.cached {
+	skipScan := result.err != nil || result.cached
+	if skipScan {
 		return result, security.Query{}, false
 	}
 	query := security.Query{Ecosystem: mgr.Ecosystem, Name: result.name, Version: result.version}
@@ -174,7 +177,10 @@ func systemScanWorkFrom(key string, entry cache.Entry) (systemScanWork, bool) {
 	if version == "" {
 		version = entry.Version
 	}
-	if ecosystem == "" || name == "" || version == "" {
+	missingIdentity := ecosystem == "" || name == ""
+	missingVersion := version == ""
+	incomplete := missingIdentity || missingVersion
+	if incomplete {
 		return systemScanWork{}, false
 	}
 	mgr := manager.Get(strings.ToLower(ecosystem))
@@ -234,7 +240,8 @@ func markSystemScanDeleted(work systemScanWork, changes *systemScanChanges) {
 }
 
 func applySystemScanChanges(changes systemScanChanges) {
-	if len(changes.deleteKeys) == 0 && len(changes.refreshKeys) == 0 {
+	noChanges := len(changes.deleteKeys) == 0 && len(changes.refreshKeys) == 0
+	if noChanges {
 		return
 	}
 	updateCacheFn(func(current cache.Cache) {
@@ -298,56 +305,53 @@ func systemScanLockPath() (string, error) {
 }
 
 func resolveScanVersion(mgr *manager.Manager, name, version string, allowMissingVersionResolution bool) (string, string, bool, bool, error) {
-	label := name
 	if version != "" {
-		label = name + "@" + version
+		return resolveRequestedVersion(mgr, name, version)
 	}
+	if !allowMissingVersionResolution {
+		return "", name, false, false, errMissingVersion
+	}
+	return resolveScanTarget(mgr, name, name, name, name)
+}
 
-	switch {
-	case version == "":
-		if !allowMissingVersionResolution {
-			return "", label, false, false, errMissingVersion
-		}
-		resolved, err := resolveVersionFn(mgr, name)
-		if err != nil {
-			return "", label, false, false, err
-		}
-		if resolved == "" {
-			return "", name, true, false, errMissingVersion
-		}
-		return resolved, name + "@" + resolved, true, isExactVersion(mgr.Ecosystem, resolved), nil
-	case shouldResolveVersion(mgr.Ecosystem, version):
+func resolveRequestedVersion(mgr *manager.Manager, name, version string) (string, string, bool, bool, error) {
+	label := name + "@" + version
+	if shouldResolveVersion(mgr.Ecosystem, version) {
 		target := name
-		if mgr.Ecosystem == "npm" && strings.ToLower(version) != "latest" {
+		useRequestedTag := mgr.Ecosystem == "npm" && strings.ToLower(version) != "latest"
+		if useRequestedTag {
 			target = label
 		}
-		resolved, err := resolveVersionFn(mgr, target)
-		if err != nil {
-			return "", label, false, false, err
-		}
-		if resolved == "" {
-			return "", name, true, false, errMissingVersion
-		}
-		return resolved, name + "@" + resolved, true, isExactVersion(mgr.Ecosystem, resolved), nil
-	case isExactVersion(mgr.Ecosystem, version):
+		return resolveScanTarget(mgr, name, target, label, name)
+	}
+	if isExactVersion(mgr.Ecosystem, version) {
 		return version, label, false, true, nil
-	case canResolveConstraint(mgr.Ecosystem, version):
-		target := name
-		usesRequirement := mgr.Ecosystem == "npm" || mgr.Ecosystem == "crates.io"
-		if usesRequirement {
-			target = label
-		}
-		resolved, err := resolveVersionFn(mgr, target)
-		if err != nil {
-			return "", label, false, false, err
-		}
-		if resolved == "" {
-			return "", label, true, false, errMissingVersion
-		}
-		return resolved, name + "@" + resolved, true, isExactVersion(mgr.Ecosystem, resolved), nil
-	default:
+	}
+	if !canResolveConstraint(mgr.Ecosystem, version) {
 		return "", label, false, false, errMissingVersion
 	}
+	return resolveScanConstraint(mgr, name, label)
+}
+
+func resolveScanConstraint(mgr *manager.Manager, name, label string) (string, string, bool, bool, error) {
+	target := name
+	usesRequirement := mgr.Ecosystem == "npm" || mgr.Ecosystem == "crates.io"
+	if usesRequirement {
+		target = label
+	}
+	return resolveScanTarget(mgr, name, target, label, label)
+}
+
+func resolveScanTarget(mgr *manager.Manager, name, target, errorLabel, emptyLabel string) (string, string, bool, bool, error) {
+	resolved, err := resolveVersionFn(mgr, target)
+	if err != nil {
+		return "", errorLabel, false, false, err
+	}
+	if resolved == "" {
+		return "", emptyLabel, true, false, errMissingVersion
+	}
+	label := name + "@" + resolved
+	return resolved, label, true, isExactVersion(mgr.Ecosystem, resolved), nil
 }
 
 func canResolveConstraint(ecosystem, version string) bool {
@@ -360,7 +364,8 @@ func canResolveConstraint(ecosystem, version string) bool {
 	if ecosystem != "npm" {
 		return false
 	}
-	return manager.IsSupportedNPMRegistrySpec(version) && !isExactVersion(ecosystem, version)
+	resolvable := manager.IsSupportedNPMRegistrySpec(version) && !isExactVersion(ecosystem, version)
+	return resolvable
 }
 
 func isExactVersion(ecosystem, version string) bool {
@@ -380,4 +385,8 @@ func isExactVersion(ecosystem, version string) bool {
 		return false
 	}
 	return false
+}
+
+func recordSystemScanSkipped(reason string, start time.Time) {
+	obs.Record("pre.system_scan.skipped", map[string]any{"reason": reason, "duration_ms": durationMillis(start)})
 }

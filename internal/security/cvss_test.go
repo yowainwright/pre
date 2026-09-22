@@ -48,20 +48,7 @@ func TestCVSSScoreInvalidPR(t *testing.T) {
 }
 
 func TestSeverityFromScore(t *testing.T) {
-	cases := []struct {
-		score float64
-		want  string
-	}{
-		{9.8, "CRITICAL"},
-		{9.0, "CRITICAL"},
-		{8.8, "HIGH"},
-		{7.0, "HIGH"},
-		{6.9, "MEDIUM"},
-		{4.0, "MEDIUM"},
-		{3.9, "LOW"},
-		{0.1, "LOW"},
-		{0.0, ""},
-	}
+	cases := severityScoreCases()
 	for _, c := range cases {
 		got := severityFromScore(c.score)
 		if got != c.want {
@@ -82,7 +69,8 @@ func TestSeverityFromVector(t *testing.T) {
 
 func TestSeverityFromVectorInvalid(t *testing.T) {
 	rating, score := severityFromVector("notavector")
-	if rating != "" || score != 0 {
+	unexpectedRating := rating != "" || score != 0
+	if unexpectedRating {
 		t.Errorf("expected empty rating and 0 score for invalid vector, got %q %.1f", rating, score)
 	}
 }
@@ -91,5 +79,24 @@ func TestCVSSScoreInvalidAV(t *testing.T) {
 	score := cvssScore("CVSS:3.1/AV:X/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")
 	if score != -1 {
 		t.Errorf("expected -1 for invalid AV metric, got %.1f", score)
+	}
+}
+
+type severityScoreCase struct {
+	score float64
+	want  string
+}
+
+func severityScoreCases() []severityScoreCase {
+	return []severityScoreCase{
+		{9.8, "CRITICAL"},
+		{9.0, "CRITICAL"},
+		{8.8, "HIGH"},
+		{7.0, "HIGH"},
+		{6.9, "MEDIUM"},
+		{4.0, "MEDIUM"},
+		{3.9, "LOW"},
+		{0.1, "LOW"},
+		{0.0, ""},
 	}
 }

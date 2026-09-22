@@ -22,31 +22,20 @@ func TestSaveAndLoadSystemStats(t *testing.T) {
 	saveSystemStats(SystemStats{Crit: 2, Warn: 5, Total: 10})
 	s := loadSystemStats()
 
-	if s.Crit != 2 || s.Warn != 5 || s.Total != 10 {
+	unexpectedStatsPrefix := s.Crit != 2 || s.Warn != 5
+	unexpectedStats := unexpectedStatsPrefix || s.Total != 10
+	if unexpectedStats {
 		t.Errorf("stats not persisted correctly: %+v", s)
 	}
-	if s.LastUpdated.IsZero() {
-		t.Error("expected LastUpdated to be set")
-	}
-	if s.LastAttempted.IsZero() {
-		t.Error("expected LastAttempted to be set")
-	}
-	written := requireObsEvent(t, "pre.system_stats.written")
-	loaded := requireObsEvent(t, "pre.system_stats.loaded")
-	if written["package_count"] != float64(10) || loaded["package_count"] != float64(10) {
-		t.Fatalf("unexpected stats obs: written=%#v loaded=%#v", written, loaded)
-	}
+	assertSuccessfulStatsTimestamps(t, s)
+	assertStatsEvents(t)
 }
 
 func TestSaveSystemStatsWithErrorsDoesNotAdvanceLastUpdated(t *testing.T) {
 	dir := t.TempDir()
 	defer withStatsCacheDir(dir)()
 
-	saveSystemStats(SystemStats{Total: 1})
-	first := loadSystemStats()
-	if first.LastUpdated.IsZero() {
-		t.Fatal("expected initial successful timestamp")
-	}
+	first := initialSuccessfulStats(t)
 
 	time.Sleep(2 * time.Millisecond)
 	saveSystemStats(SystemStats{Errors: 1, Total: 1})
@@ -64,7 +53,8 @@ func TestSaveSystemStatsWithErrorsUsesLoadSystemStatsFn(t *testing.T) {
 	dir := t.TempDir()
 	defer withStatsCacheDir(dir)()
 
-	priorUpdated := time.Now().Add(-time.Hour).Round(0)
+	anHourAgo := time.Now().Add(-time.Hour)
+	priorUpdated := anHourAgo.Round(0)
 	called := false
 	orig := loadSystemStatsFn
 	loadSystemStatsFn = func() SystemStats {
@@ -89,7 +79,8 @@ func TestLoadSystemStatsMissing(t *testing.T) {
 	defer withStatsCacheDir(dir)()
 
 	s := loadSystemStats()
-	if s.Total != 0 || !s.LastUpdated.IsZero() {
+	unexpectedStats := s.Total != 0 || !s.LastUpdated.IsZero()
+	if unexpectedStats {
 		t.Errorf("expected zero stats for missing file, got %+v", s)
 	}
 }
@@ -101,7 +92,8 @@ func TestSystemStatsPathError(t *testing.T) {
 	defer func() { statsCacheDirFn = orig }()
 
 	s := loadSystemStats()
-	if s.Total != 0 || !s.LastUpdated.IsZero() {
+	unexpectedStats := s.Total != 0 || !s.LastUpdated.IsZero()
+	if unexpectedStats {
 		t.Errorf("expected empty stats on path error, got %+v", s)
 	}
 	event := requireObsEvent(t, "pre.system_stats.load_failed")
@@ -118,7 +110,8 @@ func TestSaveSystemStatsDirError(t *testing.T) {
 
 	saveSystemStats(SystemStats{Total: 5})
 	event := requireObsEvent(t, "pre.system_stats.write_failed")
-	if event["package_count"] != float64(5) || event["error_type"] == "" {
+	unexpectedEvent := event["package_count"] != float64(5) || event["error_type"] == ""
+	if unexpectedEvent {
 		t.Fatalf("unexpected write failure event: %#v", event)
 	}
 }
@@ -150,7 +143,39 @@ func TestLoadSystemStatsPublic(t *testing.T) {
 
 	saveSystemStats(SystemStats{Crit: 1, Total: 3})
 	s := LoadSystemStats()
-	if s.Crit != 1 || s.Total != 3 {
+	unexpectedStats := s.Crit != 1 || s.Total != 3
+	if unexpectedStats {
 		t.Errorf("LoadSystemStats returned wrong values: %+v", s)
+	}
+}
+
+func assertStatsEvents(t *testing.T) {
+	t.Helper()
+	written := requireObsEvent(t, "pre.system_stats.written")
+	loaded := requireObsEvent(t, "pre.system_stats.loaded")
+	unexpectedWritten := written["package_count"] != float64(10) || loaded["package_count"] != float64(10)
+	if unexpectedWritten {
+		t.Fatalf("unexpected stats obs: written=%#v loaded=%#v", written, loaded)
+	}
+}
+
+func initialSuccessfulStats(t *testing.T) SystemStats {
+	t.Helper()
+	saveSystemStats(SystemStats{Total: 1})
+	first := loadSystemStats()
+	if first.LastUpdated.IsZero() {
+		t.Fatal("expected initial successful timestamp")
+	}
+
+	return first
+}
+
+func assertSuccessfulStatsTimestamps(t *testing.T, s SystemStats) {
+	t.Helper()
+	if s.LastUpdated.IsZero() {
+		t.Error("expected LastUpdated to be set")
+	}
+	if s.LastAttempted.IsZero() {
+		t.Error("expected LastAttempted to be set")
 	}
 }

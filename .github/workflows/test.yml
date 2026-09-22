@@ -25,10 +25,7 @@ jobs:
         run: make fmt-check
 
       - name: Lint
-        run: make lint
-
-      - name: Legibility report
-        run: make lint-all
+        run: make lint-agent-all
 
       - name: Unit tests
         run: go test -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
@@ -70,8 +67,11 @@ jobs:
       - name: Install script tests
         run: make test-scripts
 
-  homebrew-cask:
-    runs-on: macos-latest
+  release-smoke:
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     steps:
@@ -89,5 +89,5 @@ jobs:
           version: "~> v2"
           args: release --snapshot --clean --skip=sign
 
-      - name: Install generated Homebrew cask
-        run: make verify-cask-install
+      - name: Test release binary
+        run: make verify-release-binary

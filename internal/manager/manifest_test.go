@@ -23,7 +23,9 @@ func TestReadPackageJSON(t *testing.T) {
 	if len(names) != 4 {
 		t.Fatalf("expected 4 packages, got %d: %v", len(names), names)
 	}
-	if names[0] != "fsevents@^2.3.3" || names[1] != "lodash@^4.17.21" || names[2] != "react@^18.0.0" || names[3] != "typescript@^5.0.0" {
+	unexpectedPackagesPrefix := names[0] != "fsevents@^2.3.3" || names[1] != "lodash@^4.17.21"
+	unexpectedPackages := unexpectedPackagesPrefix || names[2] != "react@^18.0.0" || names[3] != "typescript@^5.0.0"
+	if unexpectedPackages {
 		t.Errorf("unexpected packages: %v", names)
 	}
 }
@@ -184,7 +186,8 @@ func TestReadPackageJSONDeduplicates(t *testing.T) {
 	if len(names) != 1 {
 		t.Errorf("expected 1 (deduped), got %d: %v", len(names), names)
 	}
-	if len(names) == 1 && names[0] != "lodash@^4.0.0" {
+	unexpectedPackages := len(names) == 1 && names[0] != "lodash@^4.0.0"
+	if unexpectedPackages {
 		t.Errorf("expected preserved npm spec, got %v", names)
 	}
 }
@@ -237,21 +240,15 @@ flask>=2.0
 }
 
 func TestReadRequirementsFileResolvesNestedFiles(t *testing.T) {
-	dir := t.TempDir()
-	nested := filepath.Join(dir, "nested.txt")
-	root := filepath.Join(dir, "requirements.txt")
-	if err := os.WriteFile(nested, []byte("urllib3==2.2.3\n"), 0644); err != nil {
-		t.Fatalf("write nested requirements: %v", err)
-	}
-	if err := os.WriteFile(root, []byte("requests==2.32.0\n--requirement nested.txt\n"), 0644); err != nil {
-		t.Fatalf("write root requirements: %v", err)
-	}
+	root := writeNestedRequirements(t)
 
 	packages, err := ReadRequirementsFile(root)
 	if err != nil {
 		t.Fatalf("read requirements: %v", err)
 	}
-	if len(packages) != 2 || packages[0] != "requests==2.32.0" || packages[1] != "urllib3==2.2.3" {
+	unexpectedPackagesPrefix := len(packages) != 2 || packages[0] != "requests==2.32.0"
+	unexpectedPackages := unexpectedPackagesPrefix || packages[1] != "urllib3==2.2.3"
+	if unexpectedPackages {
 		t.Errorf("unexpected packages: %v", packages)
 	}
 }
@@ -280,7 +277,8 @@ cask "iterm2"
 	if len(names) != 2 {
 		t.Fatalf("expected 2 packages, got %d: %v", len(names), names)
 	}
-	if names[0] != "git" || names[1] != "ripgrep" {
+	unexpectedPackages := names[0] != "git" || names[1] != "ripgrep"
+	if unexpectedPackages {
 		t.Errorf("unexpected packages: %v", names)
 	}
 }
@@ -291,7 +289,8 @@ func TestReadManifestNpmEcosystem(t *testing.T) {
 	os.WriteFile(dir+"/package.json", []byte(`{"dependencies":{"lodash":"^4.0.0"}}`), 0644)
 
 	names := readManifestDir(mgr, dir)
-	if len(names) != 1 || names[0] != "lodash@^4.0.0" {
+	unexpectedPackages := len(names) != 1 || names[0] != "lodash@^4.0.0"
+	if unexpectedPackages {
 		t.Errorf("unexpected: %v", names)
 	}
 }
@@ -338,7 +337,8 @@ func TestReadManifestPrefersLockfile(t *testing.T) {
 
 	mgr := &Manager{Ecosystem: "npm"}
 	pkgs := ReadManifest(mgr)
-	if len(pkgs) != 1 || pkgs[0] != "lodash@4.17.21" {
+	unexpectedPackages := len(pkgs) != 1 || pkgs[0] != "lodash@4.17.21"
+	if unexpectedPackages {
 		t.Errorf("expected lockfile result, got %v", pkgs)
 	}
 }
@@ -353,7 +353,8 @@ func TestReadManifestFallsBackToManifest(t *testing.T) {
 
 	mgr := &Manager{Ecosystem: "npm"}
 	pkgs := ReadManifest(mgr)
-	if len(pkgs) != 1 || pkgs[0] != "react@^18.0.0" {
+	unexpectedPackages := len(pkgs) != 1 || pkgs[0] != "react@^18.0.0"
+	if unexpectedPackages {
 		t.Errorf("expected manifest fallback result, got %v", pkgs)
 	}
 }
@@ -369,7 +370,9 @@ func TestReadPackageJSONKeepsUnsupportedSpecsForValidation(t *testing.T) {
 
 	names := readPackageJSON(dir)
 	set := manifestSet(names)
-	if len(names) != 2 || !set["localpkg"] || !set["workspacepkg"] {
+	unexpectedPackagesPrefix := len(names) != 2 || !set["localpkg"]
+	unexpectedPackages := unexpectedPackagesPrefix || !set["workspacepkg"]
+	if unexpectedPackages {
 		t.Errorf("expected unsupported specs to remain visible, got %v", names)
 	}
 }
@@ -412,9 +415,7 @@ func TestReadBrewfileMissing(t *testing.T) {
 	}
 }
 
-func TestReadCargoToml(t *testing.T) {
-	dir := t.TempDir()
-	err := os.WriteFile(dir+"/Cargo.toml", []byte(`[dependencies]
+const testReadCargoTomlFixture = `[dependencies]
 serde = "1.0"
 regex = { version = "1.11", features = ["unicode"] }
 runtime = { package = "tokio", version = "1.42" }
@@ -429,7 +430,11 @@ nix = "0.29"
 
 [workspace.dependencies]
 anyhow = "1"
-`), 0644)
+`
+
+func TestReadCargoToml(t *testing.T) {
+	dir := t.TempDir()
+	err := os.WriteFile(dir+"/Cargo.toml", []byte(testReadCargoTomlFixture), 0644)
 	if err != nil {
 		t.Fatalf("write Cargo.toml: %v", err)
 	}
@@ -448,9 +453,7 @@ anyhow = "1"
 	}
 }
 
-func TestReadCargoTomlDependencyTables(t *testing.T) {
-	dir := t.TempDir()
-	err := os.WriteFile(dir+"/Cargo.toml", []byte(`[dependencies.log]
+const testReadCargoTomlDependencyTablesFixture = `[dependencies.log]
 version = "0.4"
 
 [dev-dependencies.assertions]
@@ -463,7 +466,11 @@ version = "0.59"
 [dependencies.local]
 version = "1.0"
 path = "../local"
-`), 0644)
+`
+
+func TestReadCargoTomlDependencyTables(t *testing.T) {
+	dir := t.TempDir()
+	err := os.WriteFile(dir+"/Cargo.toml", []byte(testReadCargoTomlDependencyTablesFixture), 0644)
 	if err != nil {
 		t.Fatalf("write Cargo.toml: %v", err)
 	}
@@ -496,7 +503,8 @@ func TestReadCargoTomlDottedVersion(t *testing.T) {
 	}
 
 	packages := readCargoToml(dir)
-	if len(packages) != 1 || packages[0] != "serde@^1.0" {
+	unexpectedPackages := len(packages) != 1 || packages[0] != "serde@^1.0"
+	if unexpectedPackages {
 		t.Fatalf("unexpected dotted dependency: %v", packages)
 	}
 }
@@ -507,4 +515,19 @@ func manifestSet(packages []string) map[string]bool {
 		set[spec] = true
 	}
 	return set
+}
+
+func writeNestedRequirements(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "nested.txt")
+	root := filepath.Join(dir, "requirements.txt")
+	if err := os.WriteFile(nested, []byte("urllib3==2.2.3\n"), 0644); err != nil {
+		t.Fatalf("write nested requirements: %v", err)
+	}
+	if err := os.WriteFile(root, []byte("requests==2.32.0\n--requirement nested.txt\n"), 0644); err != nil {
+		t.Fatalf("write root requirements: %v", err)
+	}
+
+	return root
 }

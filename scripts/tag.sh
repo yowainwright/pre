@@ -8,23 +8,23 @@ NUMERIC_PRERELEASE_PATTERN='(^|\.)0[0-9]+($|\.)'
 
 # --- injectable primitives (redefine to test) ---
 
-cmd_exists() { command -v "$1" >/dev/null 2>&1; }
+cmd_exists() { command -v "${1?}" >/dev/null 2>&1; }
 
-svu_current()    { svu current; }
-svu_patch()      { svu patch; }
-svu_minor()      { svu minor; }
-svu_major()      { svu major; }
-svu_prerelease() { svu "$1" --prerelease "$2"; }
+svu_current() { svu current; }
+svu_patch() { svu patch; }
+svu_minor() { svu minor; }
+svu_major() { svu major; }
+svu_prerelease() { svu "${1?}" --prerelease "${2?}"; }
 
-git_is_dirty()          { [ -n "$(git status --porcelain)" ]; }
-git_tag_exists()        { git show-ref --verify --quiet "refs/tags/$1"; }
-git_current_branch()    { git branch --show-current; }
-git_head_sha()          { git rev-parse HEAD; }
-git_short_sha()         { git rev-parse --short HEAD; }
+git_is_dirty() { [ -n "$(git status --porcelain)" ]; }
+git_tag_exists() { git show-ref --verify --quiet "refs/tags/${1?}"; }
+git_current_branch() { git branch --show-current; }
+git_head_sha() { git rev-parse HEAD; }
+git_short_sha() { git rev-parse --short HEAD; }
 git_origin_branch_sha() { git rev-parse "refs/remotes/origin/$RELEASE_BRANCH"; }
-git_fetch_origin()      { git fetch --quiet origin "$RELEASE_BRANCH" --tags; }
-git_create_tag()        { git tag -a "$1" -m "$2"; }
-git_push_tag()          { git push origin "refs/tags/$1"; }
+git_fetch_origin() { git fetch --quiet origin "$RELEASE_BRANCH" --tags; }
+git_create_tag() { git tag -a "${1?}" -m "${2?}"; }
+git_push_tag() { git push origin "refs/tags/${1?}"; }
 
 gh_auth_valid() { gh auth status --hostname github.com >/dev/null 2>&1; }
 gh_repository() { gh repo view --json nameWithOwner --jq .nameWithOwner; }
@@ -32,28 +32,31 @@ gh_release_run_id() {
   gh run list \
     --repo "$RELEASE_REPOSITORY" \
     --workflow release.yml \
-    --branch "$1" \
-    --commit "$2" \
+    --branch "${1?}" \
+    --commit "${2?}" \
     --event push \
     --limit 1 \
     --json databaseId \
     --jq '.[0].databaseId // empty'
 }
 gh_run_url() {
-  gh run view "$1" --repo "$RELEASE_REPOSITORY" --json url --jq .url
+  gh run view "${1?}" --repo "$RELEASE_REPOSITORY" --json url --jq .url
 }
 gh_watch_run() {
-  gh run watch "$1" --repo "$RELEASE_REPOSITORY" --compact --exit-status
+  gh run watch "${1?}" --repo "$RELEASE_REPOSITORY" --compact --exit-status
 }
 
 run_release_preview() { "${MAKE:-make}" release-preview; }
-sleep_briefly()       { sleep 2; }
+sleep_briefly() { sleep 2; }
 
-read_line()      { read -r REPLY; }
+read_line() { read -r REPLY; }
 
 # --- logic ---
 
-die() { printf "release: %s\n" "$1" >&2; exit 1; }
+die() {
+  printf "release: %s\n" "${1?}" >&2
+  exit 1
+}
 
 check_prerequisites() {
   for executable in git go make gh goreleaser svu; do
@@ -64,13 +67,14 @@ check_prerequisites() {
 }
 
 validate_tag() {
-  printf '%s\n' "$1" | grep -Eq "$SEMVER_PATTERN" || die "invalid semantic version: $1"
-  version_without_build="${1%%+*}"
+  printf '%s\n' "${1?}" | grep -Eq "$SEMVER_PATTERN" || die "invalid semantic version: ${1?}"
+  input_tag="${1?}"
+  version_without_build="${input_tag%%+*}"
   case "$version_without_build" in
-    *-*) prerelease="${version_without_build#*-}" ;;
-    *) return 0 ;;
+  *-*) prerelease="${version_without_build#*-}" ;;
+  *) return 0 ;;
   esac
-  printf '%s\n' "$prerelease" | grep -Eq "$NUMERIC_PRERELEASE_PATTERN" && die "invalid semantic version: $1"
+  printf '%s\n' "$prerelease" | grep -Eq "$NUMERIC_PRERELEASE_PATTERN" && die "invalid semantic version: ${1?}"
   return 0
 }
 
@@ -80,7 +84,7 @@ check_clean() {
 }
 
 check_exists() {
-  git_tag_exists "$1" && die "$1 already exists" || return 0
+  git_tag_exists "${1?}" && die "${1?} already exists" || return 0
 }
 
 check_branch() {
@@ -112,26 +116,21 @@ check_release_context() {
 }
 
 prompt_prerelease() {
-  bump="$1"
-  base="$2"
+  bump="${1?}"
+  base="${2?}"
   alpha="$(svu_prerelease "$bump" alpha)"
   beta="$(svu_prerelease "$bump" beta)"
   rc="$(svu_prerelease "$bump" rc)"
 
-  printf "\n  pre-release?\n\n" >&2
-  printf "  1) none   →  %s\n" "$base"  >&2
-  printf "  2) alpha  →  %s\n" "$alpha" >&2
-  printf "  3) beta   →  %s\n" "$beta"  >&2
-  printf "  4) rc     →  %s\n" "$rc"    >&2
-  printf "\n  pre-release [1]: " >&2
+  show_prerelease_choices
   read_line
 
   case "${REPLY:-1}" in
-    1|none)  echo "$base"  ;;
-    2|alpha) echo "$alpha" ;;
-    3|beta)  echo "$beta"  ;;
-    4|rc)    echo "$rc"    ;;
-    *) die "invalid choice: $REPLY" ;;
+  1 | none) echo "$base" ;;
+  2 | alpha) echo "$alpha" ;;
+  3 | beta) echo "$beta" ;;
+  4 | rc) echo "$rc" ;;
+  *) die "invalid choice: $REPLY" ;;
   esac
 }
 
@@ -141,53 +140,45 @@ prompt_bump() {
   minor="$(svu_minor)"
   major="$(svu_major)"
 
-  printf "\n  current  %s\n\n" "$current" >&2
-  printf "  1) patch  →  %s\n" "$patch"   >&2
-  printf "  2) minor  →  %s\n" "$minor"   >&2
-  printf "  3) major  →  %s\n" "$major"   >&2
-  printf "  4) custom\n\n" >&2
-  printf "  bump [1]: " >&2
+  show_bump_choices
   read_line
 
   case "${REPLY:-1}" in
-    1|patch)  prompt_prerelease patch "$patch" ;;
-    2|minor)  prompt_prerelease minor "$minor" ;;
-    3|major)  prompt_prerelease major "$major" ;;
-    4|custom)
-      printf "  version (e.g. v1.2.3-beta.1): " >&2
-      read_line
-      echo "$REPLY"
-      ;;
-    v[0-9]*) echo "$REPLY" ;;
-    *) die "invalid choice: $REPLY" ;;
+  1 | patch) prompt_prerelease patch "$patch" ;;
+  2 | minor) prompt_prerelease minor "$minor" ;;
+  3 | major) prompt_prerelease major "$major" ;;
+  4 | custom) prompt_custom_version ;;
+  v[0-9]*) echo "$REPLY" ;;
+  *) die "invalid choice: $REPLY" ;;
   esac
 }
 
 select_tag() {
-  if [ -n "${1:-}" ]; then
-    printf '%s\n' "$1"
-    return
-  fi
-
-  prompt_bump
+  case "${1:-}" in
+  "") prompt_bump ;;
+  *) printf '%s\n' "$1" ;;
+  esac
 }
 
 prompt_tag_message() {
-  default_message="Release $1"
+  default_message="Release ${1?}"
   printf "\n  tag message [%s]: " "$default_message" >&2
   read_line
   printf '%s\n' "${REPLY:-$default_message}"
 }
 
 confirm_release() {
-  printf "\n  version     %s\n" "$1" >&2
+  printf "\n  version     %s\n" "${1?}" >&2
   printf "  commit      %s\n" "$(git_short_sha)" >&2
-  printf "  tag message %s\n" "$2" >&2
+  printf "  tag message %s\n" "${2?}" >&2
   printf "\n  validate, tag, push, and watch the release? [y/N] " >&2
   read_line
   case "$REPLY" in
-    y|Y|yes|YES) ;;
-    *) printf "  cancelled\n" >&2; exit 0 ;;
+  y | Y | yes | YES) ;;
+  *)
+    printf "  cancelled\n" >&2
+    exit 0
+    ;;
   esac
 }
 
@@ -200,35 +191,38 @@ recheck_release() {
   check_clean
   refresh_origin
   check_synced
-  check_exists "$1"
+  check_exists "${1?}"
 }
 
 publish_release() {
-  git_create_tag "$1" "$2" || die "could not create $1"
-  git_push_tag "$1" || die "push failed; $1 remains as a local tag"
+  git_create_tag "${1?}" "${2?}" || die "could not create ${1?}"
+  git_push_tag "${1?}" || die "push failed; ${1?} remains as a local tag"
 }
 
 wait_for_release_run() {
   attempt=0
   while [ "$attempt" -lt 30 ]; do
-    run_id="$(gh_release_run_id "$1" "$2")" || die "could not query the release workflow"
-    if [ -n "$run_id" ]; then
+    run_id="$(gh_release_run_id "${1?}" "${2?}")" || die "could not query the release workflow"
+    case "$run_id" in
+    "") ;;
+    *)
       printf '%s\n' "$run_id"
       return 0
-    fi
+      ;;
+    esac
     attempt=$((attempt + 1))
     [ "$attempt" -lt 30 ] && sleep_briefly
   done
 
-  die "release workflow did not start for $1"
+  die "release workflow did not start for ${1?}"
 }
 
 watch_release() {
   printf "\n  waiting for the release workflow\n" >&2
-  run_id="$(wait_for_release_run "$1" "$2")"
+  run_id="$(wait_for_release_run "${1?}" "${2?}")"
   run_url="$(gh_run_url "$run_id")" || die "could not load release workflow $run_id"
   printf "  %s\n\n" "$run_url" >&2
-  gh_watch_run "$run_id" || die "release workflow failed for $1"
+  gh_watch_run "$run_id" || die "release workflow failed for ${1?}"
 }
 
 main() {
@@ -250,6 +244,33 @@ main() {
   printf "\n  released %s\n  https://github.com/%s/releases/tag/%s\n" "$tag" "$RELEASE_REPOSITORY" "$tag"
 }
 
-if [ "${_PRE_TAG_SOURCED:-0}" != "1" ]; then
+run_tag() {
+  [ "${_PRE_TAG_SOURCED:-0}" = "1" ] && return 0
   main "$@"
-fi
+}
+
+prompt_custom_version() {
+  printf "  version (e.g. v1.2.3-beta.1): " >&2
+  read_line
+  echo "$REPLY"
+}
+
+show_prerelease_choices() {
+  printf "\n  pre-release?\n\n" >&2
+  printf "  1) none   →  %s\n" "$base" >&2
+  printf "  2) alpha  →  %s\n" "$alpha" >&2
+  printf "  3) beta   →  %s\n" "$beta" >&2
+  printf "  4) rc     →  %s\n" "$rc" >&2
+  printf "\n  pre-release [1]: " >&2
+}
+
+show_bump_choices() {
+  printf "\n  current  %s\n\n" "$current" >&2
+  printf "  1) patch  →  %s\n" "$patch" >&2
+  printf "  2) minor  →  %s\n" "$minor" >&2
+  printf "  3) major  →  %s\n" "$major" >&2
+  printf "  4) custom\n\n" >&2
+  printf "  bump [1]: " >&2
+}
+
+run_tag "$@"
