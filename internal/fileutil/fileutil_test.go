@@ -77,7 +77,8 @@ func TestAtomicWriteFileWriteError(t *testing.T) {
 	defer mockCreateTemp(f)()
 
 	err := AtomicWriteFile(filepath.Join(dir, "out.json"), []byte("data"), 0644)
-	if err == nil || err.Error() != "write fail" {
+	unexpectedError := err == nil || err.Error() != "write fail"
+	if unexpectedError {
 		t.Errorf("expected write error, got %v", err)
 	}
 }
@@ -88,7 +89,8 @@ func TestAtomicWriteFileChmodError(t *testing.T) {
 	defer mockCreateTemp(f)()
 
 	err := AtomicWriteFile(filepath.Join(dir, "out.json"), []byte("data"), 0644)
-	if err == nil || err.Error() != "chmod fail" {
+	unexpectedError := err == nil || err.Error() != "chmod fail"
+	if unexpectedError {
 		t.Errorf("expected chmod error, got %v", err)
 	}
 }
@@ -99,7 +101,8 @@ func TestAtomicWriteFileSyncError(t *testing.T) {
 	defer mockCreateTemp(f)()
 
 	err := AtomicWriteFile(filepath.Join(dir, "out.json"), []byte("data"), 0644)
-	if err == nil || err.Error() != "sync fail" {
+	unexpectedError := err == nil || err.Error() != "sync fail"
+	if unexpectedError {
 		t.Errorf("expected sync error, got %v", err)
 	}
 }
@@ -110,7 +113,8 @@ func TestAtomicWriteFileCloseError(t *testing.T) {
 	defer mockCreateTemp(f)()
 
 	err := AtomicWriteFile(filepath.Join(dir, "out.json"), []byte("data"), 0644)
-	if err == nil || err.Error() != "close fail" {
+	unexpectedError := err == nil || err.Error() != "close fail"
+	if unexpectedError {
 		t.Errorf("expected close error, got %v", err)
 	}
 }
@@ -128,7 +132,8 @@ func TestAtomicWriteFileBothErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected joined error, got nil")
 	}
-	if !errors.Is(err, f.syncErr) || !errors.Is(err, f.closeErr) {
+	unexpectedError := !errors.Is(err, f.syncErr) || !errors.Is(err, f.closeErr)
+	if unexpectedError {
 		t.Errorf("expected both errors joined, got %v", err)
 	}
 }

@@ -282,7 +282,8 @@ func TestInterceptDisabledBypassesScan(t *testing.T) {
 	if !execCalled {
 		t.Error("expected disabled intercept to run the package manager")
 	}
-	if loadCalled || securityCalled {
+	unexpectedLoadCalled := loadCalled || securityCalled
+	if unexpectedLoadCalled {
 		t.Error("expected disabled intercept to bypass cache loading and security checks")
 	}
 }
@@ -303,20 +304,7 @@ func TestInterceptRecordsScanDecisionWithoutPackageName(t *testing.T) {
 
 	Intercept(npmMgr(), []string{"install", "react"})
 
-	events, _, err := preobs.Events(time.Time{}, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := eventNames(events)
-	for _, want := range []string{"pre.scan.started", "pre.scan.completed", "pre.scan.approved"} {
-		if !slices.Contains(names, want) {
-			t.Fatalf("missing %s in %#v", want, names)
-		}
-	}
-	data, _ := json.Marshal(events)
-	if strings.Contains(string(data), "react") {
-		t.Fatalf("obs leaked package name: %s", string(data))
-	}
+	assertScanDecisionEvents(t)
 }
 
 func eventNames(events []preobs.Event) []string {
@@ -346,7 +334,8 @@ func TestInterceptRecordsDisabledBypass(t *testing.T) {
 
 	started := requireObsEvent(t, "pre.command.started")
 	bypassed := requireObsEvent(t, "pre.command.bypassed")
-	if started["manager_command"] != "install" || bypassed["reason"] != "env_disabled" {
+	unexpectedStarted := started["manager_command"] != "install" || bypassed["reason"] != "env_disabled"
+	if unexpectedStarted {
 		t.Fatalf("unexpected bypass obs: started=%#v bypassed=%#v", started, bypassed)
 	}
 	requireNoObsLeak(t, "react")
@@ -359,7 +348,8 @@ func TestInterceptRecordsPassthrough(t *testing.T) {
 	Intercept(npmMgr(), []string{"run", "build"})
 
 	event := requireObsEvent(t, "pre.command.passthrough")
-	if event["reason"] != "not_install_command" || event["manager_command"] != "run" {
+	unexpectedEvent := event["reason"] != "not_install_command" || event["manager_command"] != "run"
+	if unexpectedEvent {
 		t.Fatalf("unexpected passthrough event: %#v", event)
 	}
 	requireNoObsLeak(t, "build")
@@ -375,7 +365,8 @@ func TestInterceptRecordsPolicyBlock(t *testing.T) {
 	})
 
 	event := requireObsEvent(t, "pre.scan.blocked")
-	if event["reason"] != "npm_policy" || event["error_type"] == "" {
+	unexpectedEvent := event["reason"] != "npm_policy" || event["error_type"] == ""
+	if unexpectedEvent {
 		t.Fatalf("unexpected block event: %#v", event)
 	}
 	if execCalled {
@@ -421,7 +412,8 @@ func TestInterceptRecordsScanErrorBlock(t *testing.T) {
 
 	completed := requireObsEvent(t, "pre.scan.completed")
 	blocked := requireObsEvent(t, "pre.scan.blocked")
-	if completed["error_count"] != float64(1) || blocked["reason"] != "scan_error" {
+	unexpectedCompleted := completed["error_count"] != float64(1) || blocked["reason"] != "scan_error"
+	if unexpectedCompleted {
 		t.Fatalf("unexpected scan error obs: completed=%#v blocked=%#v", completed, blocked)
 	}
 	if execCalled {
@@ -448,7 +440,8 @@ func TestInterceptRecordsCriticalPromptDenied(t *testing.T) {
 
 	prompted := requireObsEvent(t, "pre.scan.prompted")
 	denied := requireObsEvent(t, "pre.scan.denied")
-	if prompted["critical_count"] != float64(1) || denied["reason"] != "user_denied" {
+	unexpectedPrompted := prompted["critical_count"] != float64(1) || denied["reason"] != "user_denied"
+	if unexpectedPrompted {
 		t.Fatalf("unexpected denied obs: prompted=%#v denied=%#v", prompted, denied)
 	}
 }
@@ -574,50 +567,7 @@ func TestInterceptUnsafePackageLockBlocks(t *testing.T) {
 }
 
 func TestInterceptManifestCommandUsesSelectedProject(t *testing.T) {
-	tests := []struct {
-		name        string
-		manager     *manager.Manager
-		args        func(string) []string
-		lockName    string
-		lock        string
-		packageName string
-	}{
-		{
-			name: "npm prefix", manager: npmMgr(),
-			args:        func(dir string) []string { return []string{"ci", "--prefix", dir} },
-			lockName:    "package-lock.json",
-			lock:        `{"packages":{"node_modules/react":{"version":"18.2.0"}}}`,
-			packageName: "react",
-		},
-		{
-			name: "bun cwd", manager: bunMgr(),
-			args:        func(dir string) []string { return []string{"install", "--cwd", dir} },
-			lockName:    "bun.lock",
-			lock:        "{\n  \"packages\": {\n    \"react\": [\"react@18.2.0\", {}],\n  },\n}\n",
-			packageName: "react",
-		},
-		{
-			name: "pnpm dir", manager: pnpmMgr(),
-			args:        func(dir string) []string { return []string{"install", "--dir", dir} },
-			lockName:    "pnpm-lock.yaml",
-			lock:        "packages:\n  react@18.2.0:\n    resolution: {integrity: sha512-abc}\n",
-			packageName: "react",
-		},
-		{
-			name: "uv project", manager: uvMgr(),
-			args:        func(dir string) []string { return []string{"sync", "--project", dir} },
-			lockName:    "uv.lock",
-			lock:        "[[package]]\nname = \"requests\"\nversion = \"2.32.0\"\n",
-			packageName: "requests",
-		},
-		{
-			name: "poetry project", manager: poetryMgr(),
-			args:        func(dir string) []string { return []string{"install", "-P", dir} },
-			lockName:    "poetry.lock",
-			lock:        "[[package]]\nname = \"requests\"\nversion = \"2.32.0\"\n",
-			packageName: "requests",
-		},
-	}
+	tests := append(npmProjectCases(), pythonProjectCases()...)
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -823,7 +773,8 @@ func TestInterceptUVPipInstall(t *testing.T) {
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
 	defer withSecurityCheck(func(ecosystem, name, version string) ([]security.Vulnerability, error) {
-		securityCalled = ecosystem == "PyPI" && name == "requests" && version == "2.32.0"
+		expectedPackage := ecosystem == "PyPI" && name == "requests"
+		securityCalled = expectedPackage && version == "2.32.0"
 		return nil, nil
 	})()
 
@@ -845,7 +796,8 @@ func TestInterceptUVPipListPassesThrough(t *testing.T) {
 
 	Intercept(uvMgr(), []string{"pip", "list"})
 
-	if !execCalled || securityCalled {
+	unexpectedExecCalled := !execCalled || securityCalled
+	if unexpectedExecCalled {
 		t.Error("expected uv pip list to pass through without scanning")
 	}
 }
@@ -865,13 +817,16 @@ func TestInterceptCargoAddResolvesRequirement(t *testing.T) {
 		return "1.0.217", nil
 	})()
 	defer withSecurityCheck(func(ecosystem, name, version string) ([]security.Vulnerability, error) {
-		scanned = ecosystem == "crates.io" && name == "serde" && version == "1.0.217"
+		expectedPackage := ecosystem == "crates.io" && name == "serde"
+		scanned = expectedPackage && version == "1.0.217"
 		return nil, nil
 	})()
 
 	Intercept(cargoMgr(), []string{"add", "serde@1.0.0"})
 
-	if resolvedTarget != "serde@^1.0.0" || !scanned || !executed {
+	unexpectedResolvedTargetPrefix := resolvedTarget != "serde@^1.0.0" || !scanned
+	unexpectedResolvedTarget := unexpectedResolvedTargetPrefix || !executed
+	if unexpectedResolvedTarget {
 		t.Errorf("unexpected Cargo interception: target=%q scanned=%v executed=%v", resolvedTarget, scanned, executed)
 	}
 }
@@ -897,7 +852,8 @@ func TestInterceptCargoUpdateUsesSelectedManifestRequirement(t *testing.T) {
 	args := []string{"update", "--manifest-path", "nested/Cargo.toml", "serde"}
 	Intercept(cargoMgr(), args)
 
-	if gotPath != "nested/Cargo.toml" || gotTarget != "serde" {
+	unexpectedGotPath := gotPath != "nested/Cargo.toml" || gotTarget != "serde"
+	if unexpectedGotPath {
 		t.Fatalf("unexpected Cargo project request: path=%q target=%q", gotPath, gotTarget)
 	}
 }
@@ -959,7 +915,8 @@ func TestCargoRepeatedRegistryFlagsBlockCustomSource(t *testing.T) {
 	args := []string{"install", "--registry", "crates-io", "--registry=internal", "tool"}
 
 	err := cargoInstallError(cargoMgr(), args)
-	if err == nil || !strings.Contains(err.Error(), "custom-registry") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "custom-registry")
+	if unexpectedError {
 		t.Fatalf("expected custom registry error, got %v", err)
 	}
 }
@@ -970,7 +927,8 @@ func TestInterceptCargoDefaultRegistryEnvironmentBlocks(t *testing.T) {
 	args := []string{"add", "serde"}
 
 	err := cargoInstallError(cargoMgr(), args)
-	if err == nil || !strings.Contains(err.Error(), "default registry") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "default registry")
+	if unexpectedError {
 		t.Fatalf("expected default registry error, got %v", err)
 	}
 }
@@ -982,7 +940,8 @@ func TestCargoConfigDefaultRegistryBlocks(t *testing.T) {
 	args := []string{"-C", projectDir, "add", "serde"}
 
 	err := cargoInstallError(cargoMgr(), args)
-	if err == nil || !strings.Contains(err.Error(), "default registry") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "default registry")
+	if unexpectedError {
 		t.Fatalf("expected default registry error, got %v", err)
 	}
 }
@@ -994,7 +953,8 @@ func TestCargoInlineDefaultRegistryBlocks(t *testing.T) {
 	args := []string{"-C", projectDir, "add", "serde"}
 
 	err := cargoInstallError(cargoMgr(), args)
-	if err == nil || !strings.Contains(err.Error(), "default registry") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "default registry")
+	if unexpectedError {
 		t.Fatalf("expected inline default registry error, got %v", err)
 	}
 }
@@ -1029,7 +989,8 @@ func TestCargoConfigSourceOverrideBlocks(t *testing.T) {
 	args := []string{"-C", projectDir, "fetch"}
 
 	err := cargoInstallError(cargoMgr(), args)
-	if err == nil || !strings.Contains(err.Error(), "resolution override") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "resolution override")
+	if unexpectedError {
 		t.Fatalf("expected resolution override error, got %v", err)
 	}
 }
@@ -1042,7 +1003,8 @@ func TestCargoInlinePatchConfigBlocks(t *testing.T) {
 	args := []string{"-C", projectDir, "fetch"}
 
 	err := cargoInstallError(cargoMgr(), args)
-	if err == nil || !strings.Contains(err.Error(), "resolution override") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "resolution override")
+	if unexpectedError {
 		t.Fatalf("expected inline patch error, got %v", err)
 	}
 }
@@ -1055,7 +1017,8 @@ func TestCargoResolverLockfileConfigBlocks(t *testing.T) {
 	args := []string{"-C", projectDir, "fetch"}
 
 	err := cargoInstallError(cargoMgr(), args)
-	if err == nil || !strings.Contains(err.Error(), "resolution override") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "resolution override")
+	if unexpectedError {
 		t.Fatalf("expected lockfile override error, got %v", err)
 	}
 }
@@ -1065,7 +1028,8 @@ func TestCargoCommandConfigOverrideBlocks(t *testing.T) {
 	args := []string{"--config", "registry.default='internal'", "add", "serde"}
 
 	err := cargoInstallError(cargoMgr(), args)
-	if err == nil || !strings.Contains(err.Error(), "--config") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "--config")
+	if unexpectedError {
 		t.Fatalf("expected command config error, got %v", err)
 	}
 }
@@ -1075,7 +1039,8 @@ func TestCargoCommandLockfileOverrideBlocks(t *testing.T) {
 	args := []string{"update", "--lockfile-path", "other.lock"}
 
 	err := cargoInstallError(cargoMgr(), args)
-	if err == nil || !strings.Contains(err.Error(), "--lockfile-path") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "--lockfile-path")
+	if unexpectedError {
 		t.Fatalf("expected lockfile path error, got %v", err)
 	}
 }
@@ -1090,7 +1055,8 @@ func TestCargoInstallUsesCargoHomeDefaultRegistry(t *testing.T) {
 	}
 
 	err := cargoInstallError(cargoMgr(), []string{"install", "ripgrep"})
-	if err == nil || !strings.Contains(err.Error(), "default registry") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "default registry")
+	if unexpectedError {
 		t.Fatalf("expected Cargo home registry error, got %v", err)
 	}
 }
@@ -1111,7 +1077,8 @@ func TestCargoCratesIOIndexEnvironmentBlocks(t *testing.T) {
 	t.Setenv("CARGO_REGISTRIES_CRATES_IO_INDEX", "https://registry.example/index")
 
 	err := cargoInstallError(cargoMgr(), []string{"add", "serde"})
-	if err == nil || !strings.Contains(err.Error(), "index override") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "index override")
+	if unexpectedError {
 		t.Fatalf("expected index override error, got %v", err)
 	}
 }
@@ -1123,7 +1090,8 @@ func TestCargoCratesIOIndexConfigBlocks(t *testing.T) {
 	writeCargoConfig(t, projectDir, config)
 
 	err := cargoInstallError(cargoMgr(), []string{"-C", projectDir, "add", "serde"})
-	if err == nil || !strings.Contains(err.Error(), "resolution override") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "resolution override")
+	if unexpectedError {
 		t.Fatalf("expected registry index error, got %v", err)
 	}
 }
@@ -1135,7 +1103,8 @@ func TestCargoCratesIOSourceRegistryConfigBlocks(t *testing.T) {
 	writeCargoConfig(t, projectDir, config)
 
 	err := cargoInstallError(cargoMgr(), []string{"-C", projectDir, "fetch"})
-	if err == nil || !strings.Contains(err.Error(), "resolution override") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "resolution override")
+	if unexpectedError {
 		t.Fatalf("expected source registry error, got %v", err)
 	}
 }
@@ -1144,7 +1113,8 @@ func TestCargoOfflineFlagBlocks(t *testing.T) {
 	t.Setenv("CARGO_HOME", t.TempDir())
 
 	err := cargoInstallError(cargoMgr(), []string{"add", "--offline", "serde"})
-	if err == nil || !strings.Contains(err.Error(), "offline") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "offline")
+	if unexpectedError {
 		t.Fatalf("expected offline error, got %v", err)
 	}
 }
@@ -1155,7 +1125,8 @@ func TestCargoOfflineConfigBlocks(t *testing.T) {
 	writeCargoConfig(t, projectDir, "[net]\noffline = true\n")
 
 	err := cargoInstallError(cargoMgr(), []string{"-C", projectDir, "add", "serde"})
-	if err == nil || !strings.Contains(err.Error(), "offline") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "offline")
+	if unexpectedError {
 		t.Fatalf("expected offline config error, got %v", err)
 	}
 }
@@ -1176,7 +1147,8 @@ func TestCargoOfflineEnvironmentBlocks(t *testing.T) {
 	t.Setenv("CARGO_NET_OFFLINE", "true")
 
 	err := cargoInstallError(cargoMgr(), []string{"install", "ripgrep"})
-	if err == nil || !strings.Contains(err.Error(), "offline") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "offline")
+	if unexpectedError {
 		t.Fatalf("expected offline environment error, got %v", err)
 	}
 }
@@ -1185,7 +1157,8 @@ func TestCargoResolutionChangingUnstableOptionBlocks(t *testing.T) {
 	t.Setenv("CARGO_HOME", t.TempDir())
 
 	err := cargoInstallError(cargoMgr(), []string{"-Zminimal-versions", "update"})
-	if err == nil || !strings.Contains(err.Error(), "unstable option") {
+	unexpectedError := err == nil || !strings.Contains(err.Error(), "unstable option")
+	if unexpectedError {
 		t.Fatalf("expected unstable option error, got %v", err)
 	}
 }
@@ -1254,7 +1227,9 @@ func TestCargoManifestPathAppliesCargoWorkingDirectory(t *testing.T) {
 	args := []string{"-C", "workspace", "update", "--manifest-path", "member/Cargo.toml"}
 	path, explicit, err := cargoManifestPath(args)
 	want := filepath.Join("workspace", "member", "Cargo.toml")
-	if err != nil || !explicit || path != want {
+	unexpectedErrorPrefix := err != nil || !explicit
+	unexpectedError := unexpectedErrorPrefix || path != want
+	if unexpectedError {
 		t.Fatalf("cargoManifestPath() = %q, %v, %v; want %q, true, nil", path, explicit, err, want)
 	}
 }
@@ -1271,8 +1246,9 @@ func TestDiscoverCargoManifestSearchesParents(t *testing.T) {
 	}
 
 	startPath := filepath.Join(nestedDir, "Cargo.toml")
-	got, err := discoverCargoManifest(startPath)
-	if err != nil || got != manifestPath {
+	got, err := manager.DiscoverCargoManifest(startPath)
+	unexpectedError := err != nil || got != manifestPath
+	if unexpectedError {
 		t.Fatalf("discoverCargoManifest() = %q, %v; want %q, nil", got, err, manifestPath)
 	}
 }
@@ -1310,13 +1286,15 @@ func TestInterceptRequirementFile(t *testing.T) {
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
 	defer withSecurityCheck(func(ecosystem, name, version string) ([]security.Vulnerability, error) {
-		securityCalled = ecosystem == "PyPI" && name == "requests" && version == "2.32.0"
+		expectedPackage := ecosystem == "PyPI" && name == "requests"
+		securityCalled = expectedPackage && version == "2.32.0"
 		return nil, nil
 	})()
 
 	Intercept(pipMgr(), []string{"install", "-r", path})
 
-	if !execCalled || !securityCalled {
+	unexpectedExecCalled := !execCalled || !securityCalled
+	if unexpectedExecCalled {
 		t.Error("expected requirements file packages to be scanned before install")
 	}
 }
@@ -1784,7 +1762,8 @@ func TestInterceptPackageLimitBlocksBeforeScan(t *testing.T) {
 	if execCalled {
 		t.Error("expected package-limit block not to run the package manager")
 	}
-	if loadCalled || securityCalled {
+	unexpectedLoadCalled := loadCalled || securityCalled
+	if unexpectedLoadCalled {
 		t.Error("expected package-limit block to skip cache loading and security checks")
 	}
 }
@@ -1815,7 +1794,9 @@ func TestInterceptManifestFallbackBlocksMissingVersion(t *testing.T) {
 	expectProcessExit(t, 1, func() {
 		Intercept(pipMgr(), []string{"install"})
 	})
-	if resolveCalled || securityCalled || execCalled {
+	unexpectedResolveCalledPrefix := resolveCalled || securityCalled
+	unexpectedResolveCalled := unexpectedResolveCalledPrefix || execCalled
+	if unexpectedResolveCalled {
 		t.Error("expected unversioned manifest dependency to block before resolution")
 	}
 }
@@ -1839,7 +1820,8 @@ func TestInterceptRequirementFileBlocksMissingVersion(t *testing.T) {
 	expectProcessExit(t, 1, func() {
 		Intercept(pipMgr(), []string{"install", "-r", path})
 	})
-	if resolveCalled || execCalled {
+	unexpectedResolveCalled := resolveCalled || execCalled
+	if unexpectedResolveCalled {
 		t.Error("expected unversioned requirements dependency to block before resolution")
 	}
 }
@@ -1861,7 +1843,8 @@ func TestInterceptDirectPackageResolvesMissingVersion(t *testing.T) {
 	})()
 
 	Intercept(npmMgr(), []string{"install", "react"})
-	if !resolveCalled || !securityCalled {
+	unexpectedResolveCalled := !resolveCalled || !securityCalled
+	if unexpectedResolveCalled {
 		t.Error("expected direct unversioned package to resolve and scan")
 	}
 }
@@ -1876,8 +1859,10 @@ func TestScanPackageVersionInSpec(t *testing.T) {
 		return nil, nil
 	})()
 
-	r := scanSingleResult(npmMgr(), "react@18.0.0", make(cache.Cache), true)
-	if r.err != nil || len(r.vulns) != 0 {
+	const allowMissingVersion = true
+	r := scanSingleResult(npmMgr(), "react@18.0.0", make(cache.Cache), allowMissingVersion)
+	unexpectedScan := r.err != nil || len(r.vulns) != 0
+	if unexpectedScan {
 		t.Errorf("expected clean result, got err=%v vulns=%d", r.err, len(r.vulns))
 	}
 }
@@ -1890,7 +1875,8 @@ func TestScanPackageResolvesVersion(t *testing.T) {
 		return "17.0.0", nil
 	})()
 
-	r := scanSingleResult(npmMgr(), "react", make(cache.Cache), true)
+	const allowMissingVersion = true
+	r := scanSingleResult(npmMgr(), "react", make(cache.Cache), allowMissingVersion)
 	if r.version != "17.0.0" {
 		t.Errorf("expected resolved version 17.0.0, got %q", r.version)
 	}
@@ -1898,7 +1884,8 @@ func TestScanPackageResolvesVersion(t *testing.T) {
 
 func TestScanPackageResolvesLatestVersionTag(t *testing.T) {
 	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
-		if name != "react" || ver != "18.3.1" {
+		unexpectedName := name != "react" || ver != "18.3.1"
+		if unexpectedName {
 			t.Errorf("expected resolved react@18.3.1, got %s@%s", name, ver)
 		}
 		return nil, nil
@@ -1910,7 +1897,8 @@ func TestScanPackageResolvesLatestVersionTag(t *testing.T) {
 		return "18.3.1", nil
 	})()
 
-	r := scanSingleResult(npmMgr(), "react@latest", make(cache.Cache), true)
+	const allowMissingVersion = true
+	r := scanSingleResult(npmMgr(), "react@latest", make(cache.Cache), allowMissingVersion)
 	if !r.updated {
 		t.Error("expected latest tag to trigger version resolution")
 	}
@@ -1921,7 +1909,8 @@ func TestScanPackageResolvesLatestVersionTag(t *testing.T) {
 
 func TestScanPackageResolvesNPMDistTag(t *testing.T) {
 	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
-		if name != "react" || ver != "19.0.0-rc.1" {
+		unexpectedName := name != "react" || ver != "19.0.0-rc.1"
+		if unexpectedName {
 			t.Errorf("expected resolved react@19.0.0-rc.1, got %s@%s", name, ver)
 		}
 		return nil, nil
@@ -1933,7 +1922,8 @@ func TestScanPackageResolvesNPMDistTag(t *testing.T) {
 		return "19.0.0-rc.1", nil
 	})()
 
-	r := scanSingleResult(npmMgr(), "react@next", make(cache.Cache), true)
+	const allowMissingVersion = true
+	r := scanSingleResult(npmMgr(), "react@next", make(cache.Cache), allowMissingVersion)
 	if !r.updated {
 		t.Error("expected dist-tag to trigger version resolution")
 	}
@@ -1956,24 +1946,21 @@ func TestScanPackageGoBranchDoesNotResolveAsLatest(t *testing.T) {
 	})()
 
 	c := make(cache.Cache)
-	r := scanSingleResult(goMgr(), "golang.org/x/tools/gopls@master", c, true)
+	const allowMissingVersion = true
+	r := scanSingleResult(goMgr(), "golang.org/x/tools/gopls@master", c, allowMissingVersion)
 	if resolveCalled {
 		t.Error("expected floating Go branch to avoid latest-version resolution")
 	}
 	if securityCalled {
 		t.Error("expected floating Go branch to skip security check")
 	}
-	if !errors.Is(r.err, errMissingVersion) || r.cacheable {
-		t.Errorf("expected floating Go branch result to be non-cacheable skip, got %+v", r)
-	}
-	if cache.Hit(c, cache.Key("Go", "golang.org/x/tools/gopls", "master")) {
-		t.Error("expected floating Go branch not to be cached as an exact version")
-	}
+	assertSkippedGoBranch(t, r, c)
 }
 
 func TestScanPackageResolvesHomebrewVersionedFormula(t *testing.T) {
 	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
-		if name != "openssl@3" || ver != "3.3.1" {
+		unexpectedName := name != "openssl@3" || ver != "3.3.1"
+		if unexpectedName {
 			t.Errorf("expected resolved openssl@3 3.3.1, got %s@%s", name, ver)
 		}
 		return nil, nil
@@ -1985,7 +1972,8 @@ func TestScanPackageResolvesHomebrewVersionedFormula(t *testing.T) {
 		return "3.3.1", nil
 	})()
 
-	r := scanSingleResult(brewMgr(), "openssl@3", make(cache.Cache), true)
+	const allowMissingVersion = true
+	r := scanSingleResult(brewMgr(), "openssl@3", make(cache.Cache), allowMissingVersion)
 	if !r.updated {
 		t.Error("expected versioned formula name to resolve via brew info")
 	}
@@ -1999,7 +1987,8 @@ func TestScanPackageResolutionError(t *testing.T) {
 		return "", errors.New("resolution failed")
 	})()
 
-	r := scanSingleResult(npmMgr(), "react", make(cache.Cache), true)
+	const allowMissingVersion = true
+	r := scanSingleResult(npmMgr(), "react", make(cache.Cache), allowMissingVersion)
 	if r.err == nil {
 		t.Error("expected error on resolution failure")
 	}
@@ -2015,7 +2004,8 @@ func TestScanPackageCacheHit(t *testing.T) {
 	c := make(cache.Cache)
 	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
 
-	r := scanSingleResult(npmMgr(), "react@18.0.0", c, true)
+	const allowMissingVersion = true
+	r := scanSingleResult(npmMgr(), "react@18.0.0", c, allowMissingVersion)
 	if !r.cached {
 		t.Error("expected cached=true on cache hit")
 	}
@@ -2035,7 +2025,8 @@ func TestScanPackageEmptyResolvedVersion(t *testing.T) {
 	})()
 
 	c := make(cache.Cache)
-	r := scanSingleResult(npmMgr(), "react", c, true)
+	const allowMissingVersion = true
+	r := scanSingleResult(npmMgr(), "react", c, allowMissingVersion)
 	if !errors.Is(r.err, errMissingVersion) {
 		t.Errorf("expected missing-version error, got %v", r.err)
 	}
@@ -2078,21 +2069,25 @@ func TestExtractPackagesStripsFlags(t *testing.T) {
 	if len(result) != 2 {
 		t.Errorf("expected 2 packages, got %d: %v", len(result), result)
 	}
-	if result[0] != "react" || result[1] != "lodash" {
+	unexpectedResult := result[0] != "react" || result[1] != "lodash"
+	if unexpectedResult {
 		t.Errorf("unexpected packages: %v", result)
 	}
 }
 
 func TestExtractPackagesSkipsWorkspaceValue(t *testing.T) {
 	result := extractPackages(npmMgr(), []string{"react", "--workspace", "app"})
-	if len(result) != 1 || result[0] != "react" {
+	unexpectedResult := len(result) != 1 || result[0] != "react"
+	if unexpectedResult {
 		t.Errorf("expected only react, got %v", result)
 	}
 }
 
 func TestExtractPackagesKeepsArgsAfterTerminator(t *testing.T) {
 	result := extractPackages(npmMgr(), []string{"--", "react", "--save-dev", "lodash"})
-	if len(result) != 2 || result[0] != "react" || result[1] != "lodash" {
+	unexpectedResultPrefix := len(result) != 2 || result[0] != "react"
+	unexpectedResult := unexpectedResultPrefix || result[1] != "lodash"
+	if unexpectedResult {
 		t.Errorf("expected react and lodash after --, got %v", result)
 	}
 }
@@ -2100,21 +2095,24 @@ func TestExtractPackagesKeepsArgsAfterTerminator(t *testing.T) {
 func TestExtractPackagesSkipsCustomNPMManagerWorkspaceValue(t *testing.T) {
 	mgr := &manager.Manager{Name: "custom-npm", Ecosystem: "npm", InstallCmds: []string{"install"}}
 	result := extractPackages(mgr, []string{"--workspace", "app", "react"})
-	if len(result) != 1 || result[0] != "react" {
+	unexpectedResult := len(result) != 1 || result[0] != "react"
+	if unexpectedResult {
 		t.Errorf("expected only react, got %v", result)
 	}
 }
 
 func TestExtractPackagesSkipsNPMValueFlags(t *testing.T) {
 	result := extractPackages(npmMgr(), []string{"--save-prefix", "~", "--tag=next", "react"})
-	if len(result) != 1 || result[0] != "react" {
+	unexpectedResult := len(result) != 1 || result[0] != "react"
+	if unexpectedResult {
 		t.Errorf("expected only react, got %v", result)
 	}
 }
 
 func TestExtractPackagesSkipsRequirementFile(t *testing.T) {
 	result := extractPackages(pipMgr(), []string{"-r", "requirements.txt", "requests"})
-	if len(result) != 1 || result[0] != "requests" {
+	unexpectedResult := len(result) != 1 || result[0] != "requests"
+	if unexpectedResult {
 		t.Errorf("expected only requests, got %v", result)
 	}
 }
@@ -2122,7 +2120,9 @@ func TestExtractPackagesSkipsRequirementFile(t *testing.T) {
 func TestRequirementFilePaths(t *testing.T) {
 	args := []string{"-r", "base.txt", "--requirements=dev.txt", "requests"}
 	paths := requirementFilePaths(uvMgr(), args)
-	if len(paths) != 2 || paths[0] != "base.txt" || paths[1] != "dev.txt" {
+	unexpectedPathsPrefix := len(paths) != 2 || paths[0] != "base.txt"
+	unexpectedPaths := unexpectedPathsPrefix || paths[1] != "dev.txt"
+	if unexpectedPaths {
 		t.Errorf("unexpected requirement paths: %v", paths)
 	}
 }
@@ -2138,7 +2138,8 @@ func TestInstallPackageArgsManifestOnlyCommands(t *testing.T) {
 	}
 	for _, test := range tests {
 		packageArgs, intercepted := installPackageArgs(test.manager, test.args)
-		if !intercepted || len(packageArgs) != 0 {
+		unexpectedIntercepted := !intercepted || len(packageArgs) != 0
+		if unexpectedIntercepted {
 			t.Errorf("expected manifest-only install for %s, got %v", test.manager.Name, packageArgs)
 		}
 	}
@@ -2157,7 +2158,8 @@ func TestInstallPackageArgsParsesGlobalOptions(t *testing.T) {
 	for _, test := range tests {
 		packageArgs, intercepted := installPackageArgs(test.manager, test.args)
 		matches := slices.Equal(packageArgs, test.want)
-		if !intercepted || !matches {
+		unexpectedIntercepted := !intercepted || !matches
+		if unexpectedIntercepted {
 			t.Errorf("expected %s install args %v, got %v", test.manager.Name, test.want, packageArgs)
 		}
 	}
@@ -2166,7 +2168,8 @@ func TestInstallPackageArgsParsesGlobalOptions(t *testing.T) {
 func TestInstallPackageArgsBypassesGoRemoval(t *testing.T) {
 	args := []string{"get", "example.com/mod@none"}
 	packageArgs, intercepted := installPackageArgs(goMgr(), args)
-	if intercepted || packageArgs != nil {
+	unexpectedIntercepted := intercepted || packageArgs != nil
+	if unexpectedIntercepted {
 		t.Errorf("expected Go removal passthrough, got intercepted=%v args=%v", intercepted, packageArgs)
 	}
 }
@@ -2184,33 +2187,11 @@ func TestInstallPackagesSkipsGoRemovalInMixedGet(t *testing.T) {
 }
 
 func TestInstallPackageArgsCargoCommands(t *testing.T) {
-	tests := []struct {
-		args        []string
-		want        []string
-		intercepted bool
-	}{
-		{args: []string{"fetch", "--locked"}, intercepted: true},
-		{args: []string{"--color", "always", "fetch", "--locked"}, intercepted: true},
-		{args: []string{"update"}, intercepted: true},
-		{args: []string{"update", "serde", "--precise", "1.0.217"}, want: []string{"serde@1.0.217"}, intercepted: true},
-		{args: []string{"update", "serde", "--precise", "abc123"}, intercepted: true},
-		{args: []string{"add", "serde@1.0.217"}, want: []string{"serde@^1.0.217"}, intercepted: true},
-		{args: []string{"+nightly", "add", "serde@1.0.217"}, want: []string{"serde@^1.0.217"}, intercepted: true},
-		{args: []string{"add", "--git", "https://example.com/repo", "custom"}, intercepted: true},
-		{args: []string{"install", "ripgrep", "--version", "14.1.1"}, want: []string{"ripgrep@14.1.1"}, intercepted: true},
-		{args: []string{"install", "ripgrep@14.1.1"}, want: []string{"ripgrep@14.1.1"}, intercepted: true},
-		{args: []string{"install", "ripgrep", "cargo-edit", "--version", "14.1.1"}, want: []string{"ripgrep@14.1.1", "cargo-edit@14.1.1"}, intercepted: true},
-		{args: []string{"install", "--registry", "internal", "tool"}, intercepted: true},
-		{args: []string{"install", "--registry", "crates-io", "tool"}, want: []string{"tool"}, intercepted: true},
-		{args: []string{"install", "--list"}, intercepted: false},
-		{args: []string{"add", "--help"}, intercepted: false},
-		{args: []string{"--help", "update"}, intercepted: false},
-		{args: []string{"--explain", "update"}, intercepted: false},
-		{args: []string{"fetch", "-h"}, intercepted: false},
-	}
+	tests := append(cargoInstallCases(), cargoPassthroughCases()...)
 	for _, test := range tests {
 		got, intercepted := installPackageArgs(cargoMgr(), test.args)
-		if intercepted != test.intercepted || !slices.Equal(got, test.want) {
+		unexpectedIntercepted := intercepted != test.intercepted || !slices.Equal(got, test.want)
+		if unexpectedIntercepted {
 			t.Errorf("installPackageArgs(%v) = %v, %v; want %v, %v", test.args, got, intercepted, test.want, test.intercepted)
 		}
 	}
@@ -2228,21 +2209,24 @@ func TestCargoUpdateTargetsIncludesRepeatedPackageFlags(t *testing.T) {
 func TestExtractPackagesSkipsPythonManagerValueFlags(t *testing.T) {
 	mgr := &manager.Manager{Name: "poetry", Ecosystem: "PyPI", InstallCmds: []string{"add"}}
 	result := extractPackages(mgr, []string{"--group", "dev", "--source", "internal", "requests"})
-	if len(result) != 1 || result[0] != "requests" {
+	unexpectedResult := len(result) != 1 || result[0] != "requests"
+	if unexpectedResult {
 		t.Errorf("expected only requests, got %v", result)
 	}
 }
 
 func TestExtractPackagesSkipsEditablePath(t *testing.T) {
 	result := extractPackages(pipMgr(), []string{"-e", ".", "requests"})
-	if len(result) != 1 || result[0] != "requests" {
+	unexpectedResult := len(result) != 1 || result[0] != "requests"
+	if unexpectedResult {
 		t.Errorf("expected only requests, got %v", result)
 	}
 }
 
 func TestExtractPackagesSkipsUnsupportedSources(t *testing.T) {
 	result := extractPackages(npmMgr(), []string{"github:user/repo", "git@github.com:user/repo.git", "alias@npm:react@18", "react"})
-	if len(result) != 1 || result[0] != "react" {
+	unexpectedResult := len(result) != 1 || result[0] != "react"
+	if unexpectedResult {
 		t.Errorf("expected only react, got %v", result)
 	}
 }
@@ -2313,7 +2297,9 @@ func TestExecRealSuccess(t *testing.T) {
 		t.Error("expected no exit for successful command")
 	}
 	completed := requireObsEvent(t, "pre.manager.exec.completed")
-	if completed["exit_code"] != float64(0) || completed["success"] != true {
+	const expectedSuccess = true
+	unexpectedCompleted := completed["exit_code"] != float64(0) || completed["success"] != expectedSuccess
+	if unexpectedCompleted {
 		t.Fatalf("unexpected exec completion event: %#v", completed)
 	}
 	requireNoObsLeak(t, "hello")
@@ -2327,7 +2313,9 @@ func TestExecRealExitError(t *testing.T) {
 	})
 
 	completed := requireObsEvent(t, "pre.manager.exec.completed")
-	if completed["exit_code"] != float64(2) || completed["success"] != false {
+	const expectedSuccess = false
+	unexpectedCompleted := completed["exit_code"] != float64(2) || completed["success"] != expectedSuccess
+	if unexpectedCompleted {
 		t.Fatalf("unexpected exec failure event: %#v", completed)
 	}
 }
@@ -2340,7 +2328,139 @@ func TestExecRealNonexistentCommand(t *testing.T) {
 	})
 
 	completed := requireObsEvent(t, "pre.manager.exec.completed")
-	if completed["exit_code"] != float64(1) || completed["success"] != false {
+	const expectedSuccess = false
+	unexpectedCompleted := completed["exit_code"] != float64(1) || completed["success"] != expectedSuccess
+	if unexpectedCompleted {
 		t.Fatalf("unexpected exec command error event: %#v", completed)
+	}
+}
+
+func assertScanDecisionEvents(t *testing.T) {
+	t.Helper()
+	events, _, err := preobs.Events(time.Time{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := eventNames(events)
+	for _, want := range []string{"pre.scan.started", "pre.scan.completed", "pre.scan.approved"} {
+		if !slices.Contains(names, want) {
+			t.Fatalf("missing %s in %#v", want, names)
+		}
+	}
+	data, _ := json.Marshal(events)
+	if strings.Contains(string(data), "react") {
+		t.Fatalf("obs leaked package name: %s", string(data))
+	}
+}
+
+type selectedProjectCase struct {
+	name        string
+	manager     *manager.Manager
+	args        func(string) []string
+	lockName    string
+	lock        string
+	packageName string
+}
+
+func npmPrefixCase() selectedProjectCase {
+	return selectedProjectCase{
+		name: "npm prefix", manager: npmMgr(),
+		args:        func(dir string) []string { return []string{"ci", "--prefix", dir} },
+		lockName:    "package-lock.json",
+		lock:        `{"packages":{"node_modules/react":{"version":"18.2.0"}}}`,
+		packageName: "react",
+	}
+}
+
+func bunCWDCase() selectedProjectCase {
+	return selectedProjectCase{
+		name: "bun cwd", manager: bunMgr(),
+		args:        func(dir string) []string { return []string{"install", "--cwd", dir} },
+		lockName:    "bun.lock",
+		lock:        "{\n  \"packages\": {\n    \"react\": [\"react@18.2.0\", {}],\n  },\n}\n",
+		packageName: "react",
+	}
+}
+
+func pnpmDirCase() selectedProjectCase {
+	return selectedProjectCase{
+		name: "pnpm dir", manager: pnpmMgr(),
+		args:        func(dir string) []string { return []string{"install", "--dir", dir} },
+		lockName:    "pnpm-lock.yaml",
+		lock:        "packages:\n  react@18.2.0:\n    resolution: {integrity: sha512-abc}\n",
+		packageName: "react",
+	}
+}
+
+func uvProjectCase() selectedProjectCase {
+	return selectedProjectCase{
+		name: "uv project", manager: uvMgr(),
+		args:        func(dir string) []string { return []string{"sync", "--project", dir} },
+		lockName:    "uv.lock",
+		lock:        "[[package]]\nname = \"requests\"\nversion = \"2.32.0\"\n",
+		packageName: "requests",
+	}
+}
+
+func poetryProjectCase() selectedProjectCase {
+	return selectedProjectCase{
+		name: "poetry project", manager: poetryMgr(),
+		args:        func(dir string) []string { return []string{"install", "-P", dir} },
+		lockName:    "poetry.lock",
+		lock:        "[[package]]\nname = \"requests\"\nversion = \"2.32.0\"\n",
+		packageName: "requests",
+	}
+}
+
+func npmProjectCases() []selectedProjectCase {
+	return []selectedProjectCase{npmPrefixCase(), bunCWDCase(), pnpmDirCase()}
+}
+
+func pythonProjectCases() []selectedProjectCase {
+	return []selectedProjectCase{uvProjectCase(), poetryProjectCase()}
+}
+
+type cargoCommandCase struct {
+	args        []string
+	want        []string
+	intercepted bool
+}
+
+func cargoInstallCases() []cargoCommandCase {
+	return []cargoCommandCase{
+		{args: []string{"fetch", "--locked"}, intercepted: true},
+		{args: []string{"--color", "always", "fetch", "--locked"}, intercepted: true},
+		{args: []string{"update"}, intercepted: true},
+		{args: []string{"update", "serde", "--precise", "1.0.217"}, want: []string{"serde@1.0.217"}, intercepted: true},
+		{args: []string{"update", "serde", "--precise", "abc123"}, intercepted: true},
+		{args: []string{"add", "serde@1.0.217"}, want: []string{"serde@^1.0.217"}, intercepted: true},
+		{args: []string{"+nightly", "add", "serde@1.0.217"}, want: []string{"serde@^1.0.217"}, intercepted: true},
+		{args: []string{"add", "--git", "https://example.com/repo", "custom"}, intercepted: true},
+		{args: []string{"install", "ripgrep", "--version", "14.1.1"}, want: []string{"ripgrep@14.1.1"}, intercepted: true},
+		{args: []string{"install", "ripgrep@14.1.1"}, want: []string{"ripgrep@14.1.1"}, intercepted: true},
+		{args: []string{"install", "ripgrep", "cargo-edit", "--version", "14.1.1"}, want: []string{"ripgrep@14.1.1", "cargo-edit@14.1.1"}, intercepted: true},
+		{args: []string{"install", "--registry", "internal", "tool"}, intercepted: true},
+		{args: []string{"install", "--registry", "crates-io", "tool"}, want: []string{"tool"}, intercepted: true},
+	}
+}
+
+func cargoPassthroughCases() []cargoCommandCase {
+	return []cargoCommandCase{
+		{args: []string{"install", "--list"}, intercepted: false},
+		{args: []string{"add", "--help"}, intercepted: false},
+		{args: []string{"--help", "update"}, intercepted: false},
+		{args: []string{"--explain", "update"}, intercepted: false},
+		{args: []string{"fetch", "-h"}, intercepted: false},
+	}
+}
+
+func assertSkippedGoBranch(t *testing.T, r scanResult, c cache.Cache) {
+	t.Helper()
+	unexpectedError := !errors.Is(r.err, errMissingVersion) || r.cacheable
+	if unexpectedError {
+		t.Errorf("expected floating Go branch result to be non-cacheable skip, got %+v", r)
+	}
+	if cache.Hit(c, cache.Key("Go", "golang.org/x/tools/gopls", "master")) {
+		t.Error("expected floating Go branch not to be cached as an exact version")
 	}
 }

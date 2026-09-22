@@ -20,41 +20,46 @@ func unmarshalBunLock(data []byte, target any) error {
 func stripJSONCComments(data []byte) ([]byte, error) {
 	result := make([]byte, 0, len(data))
 	for index := 0; index < len(data); {
-		if data[index] == '"' {
-			next := copyJSONString(data, index)
-			result = append(result, data[index:next]...)
-			index = next
-			continue
+		var err error
+		result, index, err = copyJSONCPart(result, data, index)
+		if err != nil {
+			return nil, err
 		}
-		if startsJSONCComment(data, index, '/') {
-			index = skipJSONCLineComment(data, index+2)
-			continue
-		}
-		if startsJSONCComment(data, index, '*') {
-			var err error
-			result, index, err = skipJSONCBlockComment(result, data, index+2)
-			if err != nil {
-				return nil, err
-			}
-			continue
-		}
-		result = append(result, data[index])
-		index++
 	}
 	return result, nil
 }
 
+func copyJSONCPart(result, data []byte, index int) ([]byte, int, error) {
+	if data[index] == '"' {
+		next := copyJSONString(data, index)
+		return append(result, data[index:next]...), next, nil
+	}
+	if startsJSONCComment(data, index, '/') {
+		return result, skipJSONCLineComment(data, index+2), nil
+	}
+	if startsJSONCComment(data, index, '*') {
+		return skipJSONCBlockComment(result, data, index+2)
+	}
+	return append(result, data[index]), index + 1, nil
+}
+
 func startsJSONCComment(data []byte, index int, marker byte) bool {
-	return index+1 < len(data) && data[index] == '/' && data[index+1] == marker
+	if index+1 >= len(data) {
+		return false
+	}
+	startsComment := data[index] == '/' && data[index+1] == marker
+	return startsComment
 }
 
 func copyJSONString(data []byte, start int) int {
 	escaped := false
 	for index := start + 1; index < len(data); index++ {
-		if data[index] == '"' && !escaped {
+		endsString := data[index] == '"' && !escaped
+		if endsString {
 			return index + 1
 		}
-		if data[index] == '\\' && !escaped {
+		startsEscape := data[index] == '\\' && !escaped
+		if startsEscape {
 			escaped = true
 			continue
 		}
@@ -75,7 +80,8 @@ func skipJSONCBlockComment(result, data []byte, index int) ([]byte, int, error) 
 		if data[index] == '\n' {
 			result = append(result, '\n')
 		}
-		if data[index] == '*' && data[index+1] == '/' {
+		endsComment := data[index] == '*' && data[index+1] == '/'
+		if endsComment {
 			return result, index + 2, nil
 		}
 		index++
@@ -92,7 +98,8 @@ func stripJSONCTrailingCommas(data []byte) []byte {
 			index = next - 1
 			continue
 		}
-		if data[index] == ',' && jsonCCommaIsTrailing(data, index) {
+		trailingComma := data[index] == ',' && jsonCCommaIsTrailing(data, index)
+		if trailingComma {
 			continue
 		}
 		result = append(result, data[index])

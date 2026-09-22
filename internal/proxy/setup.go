@@ -98,45 +98,44 @@ const shellCommandParserText = `  local _pre_arg
 
 func Setup() {
 	rcFile, err := detectRCFile()
+	if err == nil {
+		err = setupRCFile(rcFile)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pre setup: %v\n", err)
 		processExit(1)
-		return
 	}
+}
 
+func setupRCFile(rcFile string) error {
 	content, err := os.ReadFile(rcFile)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintf(os.Stderr, "pre setup: %v\n", err)
-		processExit(1)
-		return
+	readFailed := err != nil && !errors.Is(err, os.ErrNotExist)
+	if readFailed {
+		return err
 	}
-	alreadyInstalled := strings.Contains(string(content), shellHookStart)
-	if alreadyInstalled {
-		cleaned, removed := removeShellHookBlock(string(content))
-		if !removed {
-			fmt.Println("pre: already set up in", rcFile)
-			return
-		}
-		appended := append([]byte(cleaned), []byte(buildShellHook())...)
-		if err := writeRCFile(rcFile, appended); err != nil {
-			fmt.Fprintf(os.Stderr, "pre setup: %v\n", err)
-			processExit(1)
-			return
-		}
-		fmt.Println("pre: refreshed hooks in", rcFile)
-		fmt.Println("pre: restart your shell or run: source", rcFile)
-		return
+	if strings.Contains(string(content), shellHookStart) {
+		return refreshRCHooks(rcFile, string(content))
 	}
+	return installRCHooks(rcFile, content, "added hooks to")
+}
 
+func refreshRCHooks(rcFile, content string) error {
+	cleaned, removed := removeShellHookBlock(content)
+	if !removed {
+		fmt.Println("pre: already set up in", rcFile)
+		return nil
+	}
+	return installRCHooks(rcFile, []byte(cleaned), "refreshed hooks in")
+}
+
+func installRCHooks(rcFile string, content []byte, action string) error {
 	appended := append(content, []byte(buildShellHook())...)
 	if err := writeRCFile(rcFile, appended); err != nil {
-		fmt.Fprintf(os.Stderr, "pre setup: %v\n", err)
-		processExit(1)
-		return
+		return err
 	}
-
-	fmt.Println("pre: added hooks to", rcFile)
+	fmt.Println("pre:", action, rcFile)
 	fmt.Println("pre: restart your shell or run: source", rcFile)
+	return nil
 }
 
 func buildShellHook() string {
@@ -238,7 +237,11 @@ func RemoveShellHooks() (string, bool, error) {
 		}
 		return rcFile, false, err
 	}
-	cleaned, removed := removeShellHookBlock(string(content))
+	return removeRCHooks(rcFile, string(content))
+}
+
+func removeRCHooks(rcFile, content string) (string, bool, error) {
+	cleaned, removed := removeShellHookBlock(content)
 	if !removed {
 		return rcFile, false, nil
 	}
@@ -302,57 +305,66 @@ func rcWritePerm(path string) (os.FileMode, error) {
 }
 
 func removeShellHookBlock(content string) (string, bool) {
-	idx := strings.Index(content, shellHookStart)
-	if idx < 0 {
+	start := strings.Index(content, shellHookStart)
+	if start < 0 {
 		return content, false
 	}
-
-	afterStart := content[idx:]
-	if endIdx := strings.Index(afterStart, shellHookEnd); endIdx >= 0 {
-		end := idx + endIdx + len(shellHookEnd)
-		if end < len(content) && content[end] == '\r' {
-			end++
-		}
-		if end < len(content) && content[end] == '\n' {
-			end++
-		}
-		return joinShellHookParts(content[:idx], content[end:]), true
+	afterStart := content[start:]
+	if endIndex := strings.Index(afterStart, shellHookEnd); endIndex >= 0 {
+		end := start + endIndex + len(shellHookEnd)
+		end = skipHookLineEnding(content, end)
+		return joinShellHookParts(content[:start], content[end:]), true
 	}
+	return removeLegacyShellHookBlock(content, start), true
+}
 
-	return removeLegacyShellHookBlock(content, idx), true
+func skipHookLineEnding(content string, end int) int {
+	hasCarriageReturn := end < len(content) && content[end] == '\r'
+	if hasCarriageReturn {
+		end++
+	}
+	hasNewline := end < len(content) && content[end] == '\n'
+	if hasNewline {
+		end++
+	}
+	return end
 }
 
 func removeLegacyShellHookBlock(content string, start int) string {
-	before := content[:start]
 	rest := content[start:]
-	offset := 0
+	end := legacyHookEnd(rest)
+	return joinShellHookParts(content[:start], rest[end:])
+}
 
+func legacyHookEnd(rest string) int {
+	offset := 0
 	for offset < len(rest) {
 		line, n := nextLine(rest[offset:])
 		trimmed := strings.TrimSpace(line)
 		switch {
-		case offset == 0 && trimmed == shellHookStart:
-			offset += n
-		case trimmed == "":
+		case offset == 0 && trimmed == shellHookStart, trimmed == "":
 			offset += n
 		case isLegacyHookFunctionLine(trimmed):
 			offset += n
-			if strings.Contains(trimmed, "}") {
-				continue
-			}
-			for offset < len(rest) {
-				line, n = nextLine(rest[offset:])
-				offset += n
-				if strings.TrimSpace(line) == "}" {
-					break
-				}
+			if !strings.Contains(trimmed, "}") {
+				offset = legacyFunctionEnd(rest, offset)
 			}
 		default:
-			return joinShellHookParts(before, rest[offset:])
+			return offset
 		}
 	}
+	return offset
+}
 
-	return joinShellHookParts(before, "")
+func legacyFunctionEnd(rest string, offset int) int {
+	for offset < len(rest) {
+		line, n := nextLine(rest[offset:])
+		offset += n
+		if strings.TrimSpace(line) == "}" {
+			break
+		}
+	}
+	return offset
 }
 
 func nextLine(s string) (string, int) {
@@ -375,7 +387,8 @@ func joinShellHookParts(before, after string) string {
 	case after == "":
 		return before + "\n"
 	default:
-		return before + "\n" + after
+		joined := before + "\n" + after
+		return joined
 	}
 }
 

@@ -56,11 +56,17 @@ run_vet() {
 }
 
 build_legibility() {
-  go run "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}" custom
+  build_status=0
+  build_output="$(go run "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}" custom 2>&1)" || build_status=$?
+  [ "$build_status" -eq 0 ] && return 0
+  printf '%s\n' "$build_output" >&2
+  return "$build_status"
 }
 
 legibility_is_current() {
-  [ -x "$LEGIBILITY_BIN" ] && [ ! ".custom-gcl.yml" -nt "$LEGIBILITY_BIN" ]
+  [ -x "$LEGIBILITY_BIN" ] || return 1
+  newer_config="$(find .custom-gcl.yml -newer "$LEGIBILITY_BIN" -print)" || return "$?"
+  [ -z "$newer_config" ]
 }
 
 ensure_legibility() {

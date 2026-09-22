@@ -116,7 +116,8 @@ func TestNpmVersionSelectsHighestMatchingVersion(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	wantArgs := []string{"view", "--json", "--", "example@^1", "version"}
-	if ver != "1.9.0" || !slices.Equal(requested, wantArgs) {
+	unexpectedVer := ver != "1.9.0" || !slices.Equal(requested, wantArgs)
+	if unexpectedVer {
 		t.Errorf("expected range query to resolve 1.9.0, got version=%q args=%v", ver, requested)
 	}
 }

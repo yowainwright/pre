@@ -53,13 +53,7 @@ func TestRunSystemScan(t *testing.T) {
 	if !securityCalled {
 		t.Error("expected system scan to query OSV for cached entry")
 	}
-	completed := requireObsEvent(t, "pre.system_scan.completed")
-	if completed["package_count"] != float64(1) {
-		t.Fatalf("unexpected system scan event: %#v", completed)
-	}
-	if completed["pending_count"] != float64(1) {
-		t.Fatalf("unexpected system scan event: %#v", completed)
-	}
+	assertSystemScanCompleted(t)
 }
 
 func TestRunSystemScanEnvDisabledSkipsWork(t *testing.T) {
@@ -97,20 +91,15 @@ func TestRunSystemScanPackageLimitSkipsWork(t *testing.T) {
 	})()
 	defer withSaveSystemStats(func(SystemStats) { statsSaved = true })()
 
-	c := make(cache.Cache)
-	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
-	cache.Set(c, cache.Key("npm", "lodash", "4.17.21"))
-	defer withLoadCache(func() cache.Cache { return c })()
+	loadTwoCachedPackages(t)
 
 	RunSystemScan()
 
-	if securityCalled || statsSaved {
+	unexpectedSecurityCalled := securityCalled || statsSaved
+	if unexpectedSecurityCalled {
 		t.Error("expected package limit to skip system scan work")
 	}
-	skipped := requireObsEvent(t, "pre.system_scan.skipped")
-	if skipped["reason"] != "package_limit" {
-		t.Fatalf("unexpected package limit event: %#v", skipped)
-	}
+	assertPackageLimitEvent(t)
 }
 
 func TestRunSystemScanWithVulns(t *testing.T) {
@@ -151,7 +140,8 @@ func TestRunSystemScanSecurityError(t *testing.T) {
 
 	RunSystemScan()
 
-	if savedStats.Crit != 0 || savedStats.Warn != 0 {
+	unexpectedSavedStats := savedStats.Crit != 0 || savedStats.Warn != 0
+	if unexpectedSavedStats {
 		t.Errorf("expected no vulns when check errors, Crit=%d Warn=%d", savedStats.Crit, savedStats.Warn)
 	}
 	if savedStats.Errors != 1 {
@@ -236,7 +226,8 @@ func TestRunSystemScanSkipsBadKey(t *testing.T) {
 
 	RunSystemScan()
 
-	if savedStats.Crit != 0 || savedStats.Warn != 0 {
+	unexpectedSavedStats := savedStats.Crit != 0 || savedStats.Warn != 0
+	if unexpectedSavedStats {
 		t.Errorf("expected no vulns for skipped key, Crit=%d Warn=%d", savedStats.Crit, savedStats.Warn)
 	}
 }
@@ -266,7 +257,8 @@ func TestScanPackageSecurityError(t *testing.T) {
 		return nil, errors.New("security check failed")
 	})()
 
-	r := scanSingleResult(npmMgr(), "react@18.0.0", make(cache.Cache), true)
+	const allowMissingVersion = true
+	r := scanSingleResult(npmMgr(), "react@18.0.0", make(cache.Cache), allowMissingVersion)
 	if r.err == nil {
 		t.Error("expected error from security check in scanPackage")
 	}
@@ -343,18 +335,24 @@ func TestResolveScanVersionCargoRequirement(t *testing.T) {
 		return "1.8.0", nil
 	})()
 
-	version, _, resolved, exact, err := resolveScanVersion(cargoMgr(), "serde", "^1.0", true)
+	const allowMissingVersion = true
+	version, _, resolved, exact, err := resolveScanVersion(cargoMgr(), "serde", "^1.0", allowMissingVersion)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if target != "serde@^1.0" || version != "1.8.0" || !resolved || !exact {
+	unexpectedTargetPrefix := target != "serde@^1.0" || version != "1.8.0"
+	unexpectedTarget := unexpectedTargetPrefix || !resolved || !exact
+	if unexpectedTarget {
 		t.Errorf("unexpected Cargo resolution: target=%q version=%q resolved=%v exact=%v", target, version, resolved, exact)
 	}
 }
 
 func TestResolveScanVersionEmptyNoAllow(t *testing.T) {
-	_, label, updated, exact, err := resolveScanVersion(npmMgr(), "react", "", false)
-	if !errors.Is(err, errMissingVersion) || updated || exact {
+	const allowMissingVersion = false
+	_, label, updated, exact, err := resolveScanVersion(npmMgr(), "react", "", allowMissingVersion)
+	unexpectedErrorPrefix := !errors.Is(err, errMissingVersion) || updated
+	unexpectedError := unexpectedErrorPrefix || exact
+	if unexpectedError {
 		t.Errorf("expected skip: label=%q updated=%v exact=%v err=%v", label, updated, exact, err)
 	}
 }
@@ -363,7 +361,8 @@ func TestResolveScanVersionConstraintEmptyResolved(t *testing.T) {
 	defer withResolveVersion(func(*manager.Manager, string) (string, error) {
 		return "", nil
 	})()
-	_, _, updated, exact, err := resolveScanVersion(npmMgr(), "react", "^18.0.0", false)
+	const allowMissingVersion = false
+	_, _, updated, exact, err := resolveScanVersion(npmMgr(), "react", "^18.0.0", allowMissingVersion)
 	if !errors.Is(err, errMissingVersion) {
 		t.Fatalf("expected missing-version error, got: %v", err)
 	}
@@ -376,8 +375,11 @@ func TestResolveScanVersionConstraintEmptyResolved(t *testing.T) {
 }
 
 func TestResolveScanVersionDefault(t *testing.T) {
-	_, _, updated, exact, err := resolveScanVersion(npmMgr(), "react", "file:/local/pkg", false)
-	if !errors.Is(err, errMissingVersion) || updated || exact {
+	const allowMissingVersion = false
+	_, _, updated, exact, err := resolveScanVersion(npmMgr(), "react", "file:/local/pkg", allowMissingVersion)
+	unexpectedErrorPrefix := !errors.Is(err, errMissingVersion) || updated
+	unexpectedError := unexpectedErrorPrefix || exact
+	if unexpectedError {
 		t.Errorf("expected default skip: updated=%v exact=%v err=%v", updated, exact, err)
 	}
 }
@@ -390,11 +392,13 @@ func TestScanPackageParsesPyPIExtrasAndExactVersion(t *testing.T) {
 		return nil, nil
 	})()
 
-	result := scanSingleResult(pipMgr(), "requests[socks]==2.19.0", make(cache.Cache), false)
+	const allowMissingVersion = false
+	result := scanSingleResult(pipMgr(), "requests[socks]==2.19.0", make(cache.Cache), allowMissingVersion)
 	if result.err != nil {
 		t.Fatalf("unexpected error: %v", result.err)
 	}
-	if checkedName != "requests" || checkedVersion != "2.19.0" {
+	unexpectedCheckedName := checkedName != "requests" || checkedVersion != "2.19.0"
+	if unexpectedCheckedName {
 		t.Errorf("expected requests 2.19.0, got %q %q", checkedName, checkedVersion)
 	}
 }
@@ -406,7 +410,8 @@ func TestScanPackageRejectsUnresolvedPyPIConstraint(t *testing.T) {
 		return nil, nil
 	})()
 
-	result := scanSingleResult(pipMgr(), "urllib3<1.26", make(cache.Cache), false)
+	const allowMissingVersion = false
+	result := scanSingleResult(pipMgr(), "urllib3<1.26", make(cache.Cache), allowMissingVersion)
 	if !errors.Is(result.err, errMissingVersion) {
 		t.Fatalf("expected missing version error, got %v", result.err)
 	}
@@ -457,7 +462,8 @@ func TestScanBatchResolvesNPMSemverConstraint(t *testing.T) {
 	if resolveArg != "react@^18.0.0" {
 		t.Errorf("expected range-aware resolution for semver constraint, got %q", resolveArg)
 	}
-	if results[0].version != "18.2.0" || !results[0].cacheable {
+	unexpectedResults := results[0].version != "18.2.0" || !results[0].cacheable
+	if unexpectedResults {
 		t.Errorf("expected cacheable resolved result, got %+v", results[0])
 	}
 }
@@ -524,7 +530,8 @@ func TestScanPackageWithoutVersionDoesNotResolveWhenDisabled(t *testing.T) {
 	})()
 
 	c := make(cache.Cache)
-	r := scanSingleResult(npmMgr(), "react", c, false)
+	const allowMissingVersion = false
+	r := scanSingleResult(npmMgr(), "react", c, allowMissingVersion)
 
 	if resolveCalled {
 		t.Error("expected disabled missing-version resolution")
@@ -532,12 +539,7 @@ func TestScanPackageWithoutVersionDoesNotResolveWhenDisabled(t *testing.T) {
 	if securityCalled {
 		t.Error("expected missing-version package to skip security check")
 	}
-	if !errors.Is(r.err, errMissingVersion) || r.version != "" || r.cacheable {
-		t.Errorf("expected non-cacheable generic result, got %+v", r)
-	}
-	if len(c) != 0 {
-		t.Errorf("expected cache to remain empty, got %v", c)
-	}
+	assertUnresolvedScan(t, r, c)
 }
 
 func TestRunSystemScanSkipsWhenLocked(t *testing.T) {
@@ -693,6 +695,52 @@ func TestTryAcquireSystemScanLockStaleLock(t *testing.T) {
 	dir := t.TempDir()
 	defer withStatsCacheDir(dir)()
 
+	writeStaleSystemLock(t, dir)
+
+	release, ok := tryAcquireSystemScanLock()
+	if !ok {
+		t.Fatal("expected ok=true after evicting stale lock")
+	}
+	if release == nil {
+		t.Fatal("expected non-nil release")
+	}
+	release()
+}
+
+func assertSystemScanCompleted(t *testing.T) {
+	t.Helper()
+	completed := requireObsEvent(t, "pre.system_scan.completed")
+	if completed["package_count"] != float64(1) {
+		t.Fatalf("unexpected system scan event: %#v", completed)
+	}
+	if completed["pending_count"] != float64(1) {
+		t.Fatalf("unexpected system scan event: %#v", completed)
+	}
+}
+
+func assertUnresolvedScan(t *testing.T, r scanResult, c cache.Cache) {
+	t.Helper()
+	unexpectedErrorPrefix := !errors.Is(r.err, errMissingVersion) || r.version != ""
+	unexpectedError := unexpectedErrorPrefix || r.cacheable
+	if unexpectedError {
+		t.Errorf("expected non-cacheable generic result, got %+v", r)
+	}
+	if len(c) != 0 {
+		t.Errorf("expected cache to remain empty, got %v", c)
+	}
+}
+
+func loadTwoCachedPackages(t *testing.T) {
+	t.Helper()
+	c := make(cache.Cache)
+	cache.Set(c, cache.Key("npm", "react", "18.0.0"))
+	cache.Set(c, cache.Key("npm", "lodash", "4.17.21"))
+	t.Cleanup(withLoadCache(func() cache.Cache { return c }))
+
+}
+
+func writeStaleSystemLock(t *testing.T, dir string) {
+	t.Helper()
 	lockDir := filepath.Join(dir, "pre")
 	if err := os.MkdirAll(lockDir, 0755); err != nil {
 		t.Fatal(err)
@@ -706,12 +754,12 @@ func TestTryAcquireSystemScanLockStaleLock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	release, ok := tryAcquireSystemScanLock()
-	if !ok {
-		t.Fatal("expected ok=true after evicting stale lock")
+}
+
+func assertPackageLimitEvent(t *testing.T) {
+	t.Helper()
+	skipped := requireObsEvent(t, "pre.system_scan.skipped")
+	if skipped["reason"] != "package_limit" {
+		t.Fatalf("unexpected package limit event: %#v", skipped)
 	}
-	if release == nil {
-		t.Fatal("expected non-nil release")
-	}
-	release()
 }

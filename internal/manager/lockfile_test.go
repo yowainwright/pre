@@ -12,9 +12,7 @@ import (
 
 // npm: package-lock.json
 
-func TestReadPackageLockJSON(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(dir+"/package-lock.json", []byte(`{
+const testReadPackageLockJSONFixture = `{
 		"lockfileVersion": 3,
 		"packages": {
 			"": {"version": "1.0.0"},
@@ -22,14 +20,20 @@ func TestReadPackageLockJSON(t *testing.T) {
 			"node_modules/react": {"version": "18.2.0"},
 			"node_modules/react-dom": {"version": "18.2.0"}
 		}
-	}`), 0644)
+	}`
+
+func TestReadPackageLockJSON(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/package-lock.json", []byte(testReadPackageLockJSONFixture), 0644)
 
 	pkgs := readPackageLockJSON(dir)
 	if len(pkgs) != 3 {
 		t.Fatalf("expected 3, got %d: %v", len(pkgs), pkgs)
 	}
 	m := toSet(pkgs)
-	if !m["lodash@4.17.21"] || !m["react@18.2.0"] || !m["react-dom@18.2.0"] {
+	missingPackagesPrefix := !m["lodash@4.17.21"] || !m["react@18.2.0"]
+	missingPackages := missingPackagesPrefix || !m["react-dom@18.2.0"]
+	if missingPackages {
 		t.Errorf("missing expected packages: %v", pkgs)
 	}
 }
@@ -44,7 +48,8 @@ func TestReadPackageLockJSONSkipsRoot(t *testing.T) {
 	}`), 0644)
 
 	pkgs := readPackageLockJSON(dir)
-	if len(pkgs) != 1 || pkgs[0] != "express@4.18.0" {
+	unexpectedPackages := len(pkgs) != 1 || pkgs[0] != "express@4.18.0"
+	if unexpectedPackages {
 		t.Errorf("expected [express@4.18.0], got %v", pkgs)
 	}
 }
@@ -60,7 +65,8 @@ func TestReadPackageLockJSONPreservesMultipleVersions(t *testing.T) {
 
 	pkgs := readPackageLockJSON(dir)
 	m := toSet(pkgs)
-	if !m["lodash@4.17.21"] || !m["lodash@4.17.20"] {
+	missingPackages := !m["lodash@4.17.21"] || !m["lodash@4.17.20"]
+	if missingPackages {
 		t.Errorf("expected both lodash versions, got %v", pkgs)
 	}
 }
@@ -74,14 +80,13 @@ func TestReadPackageLockJSONUsesDeclaredPackageName(t *testing.T) {
 	}`), 0o644)
 
 	packages := readPackageLockJSON(dir)
-	if len(packages) != 1 || packages[0] != "evil-pkg@4.17.21" {
+	unexpectedPackages := len(packages) != 1 || packages[0] != "evil-pkg@4.17.21"
+	if unexpectedPackages {
 		t.Fatalf("unexpected package-lock packages: %v", packages)
 	}
 }
 
-func TestReadPackageLockJSONV1Dependencies(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(dir+"/package-lock.json", []byte(`{
+const testReadPackageLockJSONV1DependenciesFixture = `{
 		"lockfileVersion": 1,
 		"dependencies": {
 			"lodash": {"version": "4.17.21"},
@@ -92,11 +97,17 @@ func TestReadPackageLockJSONV1Dependencies(t *testing.T) {
 				}
 			}
 		}
-	}`), 0644)
+	}`
+
+func TestReadPackageLockJSONV1Dependencies(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/package-lock.json", []byte(testReadPackageLockJSONV1DependenciesFixture), 0644)
 
 	pkgs := readPackageLockJSON(dir)
 	m := toSet(pkgs)
-	if !m["lodash@4.17.21"] || !m["pkg-a@1.0.0"] || !m["lodash@4.17.20"] {
+	missingPackagesPrefix := !m["lodash@4.17.21"] || !m["pkg-a@1.0.0"]
+	missingPackages := missingPackagesPrefix || !m["lodash@4.17.20"]
+	if missingPackages {
 		t.Errorf("expected v1 dependencies and nested dependencies, got %v", pkgs)
 	}
 	if len(pkgs) != 3 {
@@ -117,31 +128,23 @@ func TestReadPackageLockJSONRootOnlyPackagesFallsBackToDependencies(t *testing.T
 	}`), 0644)
 
 	pkgs := readPackageLockJSON(dir)
-	if len(pkgs) != 1 || pkgs[0] != "lodash@4.17.21" {
+	unexpectedPackages := len(pkgs) != 1 || pkgs[0] != "lodash@4.17.21"
+	if unexpectedPackages {
 		t.Errorf("expected dependency fallback for root-only packages map, got %v", pkgs)
 	}
 }
 
 func TestReadPackageLockJSONV1DepthLimit(t *testing.T) {
 	dir := t.TempDir()
-	lockfile := struct {
-		LockfileVersion int                              `json:"lockfileVersion"`
-		Dependencies    map[string]packageLockDependency `json:"dependencies"`
-	}{
-		LockfileVersion: 1,
-		Dependencies:    nestedPackageLockDeps(0, maxPackageLockDependencyDepth+5),
-	}
-	data, err := json.Marshal(lockfile)
-	if err != nil {
-		t.Fatalf("marshal lockfile: %v", err)
-	}
+	data := nestedPackageLockJSON(t)
 	os.WriteFile(dir+"/package-lock.json", data, 0644)
 
 	pkgs := readPackageLockJSON(dir)
 	m := toSet(pkgs)
 	lastAllowed := fmt.Sprintf("pkg-%02d@1.0.%d", maxPackageLockDependencyDepth-1, maxPackageLockDependencyDepth-1)
 	firstSkipped := fmt.Sprintf("pkg-%02d@1.0.%d", maxPackageLockDependencyDepth, maxPackageLockDependencyDepth)
-	if !m["pkg-00@1.0.0"] || !m[lastAllowed] {
+	missingPackages := !m["pkg-00@1.0.0"] || !m[lastAllowed]
+	if missingPackages {
 		t.Errorf("expected packages through depth limit, got %v", pkgs)
 	}
 	if m[firstSkipped] {
@@ -180,9 +183,7 @@ func TestReadPackageLockJSONMissing(t *testing.T) {
 
 // npm: bun.lock
 
-func TestReadBunLock(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(dir+"/bun.lock", []byte(`# bun lockfile v1 (https://bun.sh)
+const testReadBunLockFixture = `# bun lockfile v1 (https://bun.sh)
 
 {
   "lockfileVersion": 0,
@@ -192,14 +193,20 @@ func TestReadBunLock(t *testing.T) {
     "@scope/pkg@1.0.0": ["@scope/pkg@1.0.0", {}]
   }
 }
-`), 0644)
+`
+
+func TestReadBunLock(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/bun.lock", []byte(testReadBunLockFixture), 0644)
 
 	pkgs := readBunLock(dir)
 	if len(pkgs) != 3 {
 		t.Fatalf("expected 3, got %d: %v", len(pkgs), pkgs)
 	}
 	m := toSet(pkgs)
-	if !m["lodash@4.17.21"] || !m["react@18.2.0"] || !m["@scope/pkg@1.0.0"] {
+	missingPackagesPrefix := !m["lodash@4.17.21"] || !m["react@18.2.0"]
+	missingPackages := missingPackagesPrefix || !m["@scope/pkg@1.0.0"]
+	if missingPackages {
 		t.Errorf("unexpected packages: %v", pkgs)
 	}
 }
@@ -219,7 +226,8 @@ func TestReadBunLockAllowsJSONC(t *testing.T) {
 	os.WriteFile(dir+"/bun.lock", []byte(lock), 0o644)
 
 	packages := readBunLock(dir)
-	if len(packages) != 1 || packages[0] != "react@18.2.0" {
+	unexpectedPackages := len(packages) != 1 || packages[0] != "react@18.2.0"
+	if unexpectedPackages {
 		t.Fatalf("unexpected Bun packages: %v", packages)
 	}
 }
@@ -245,7 +253,8 @@ func TestReadBunLockPreservesMultipleVersions(t *testing.T) {
 
 	pkgs := readBunLock(dir)
 	m := toSet(pkgs)
-	if !m["lodash@4.17.21"] || !m["lodash@4.17.20"] {
+	missingPackages := !m["lodash@4.17.21"] || !m["lodash@4.17.20"]
+	if missingPackages {
 		t.Errorf("expected both lodash versions, got %v", pkgs)
 	}
 }
@@ -287,9 +296,7 @@ func TestBunPackageSpecBadValue(t *testing.T) {
 	}
 }
 
-func TestReadBunLockNewFormat(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(dir+"/bun.lock", []byte(`# Bun Lockfile v1
+const testReadBunLockNewFormatFixture = `# Bun Lockfile v1
 
 {
   "lockfileVersion": 1,
@@ -299,14 +306,20 @@ func TestReadBunLockNewFormat(t *testing.T) {
     "next": ["next@15.2.3", {}, "sha512-ghi"]
   }
 }
-`), 0644)
+`
+
+func TestReadBunLockNewFormat(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/bun.lock", []byte(testReadBunLockNewFormatFixture), 0644)
 
 	pkgs := readBunLock(dir)
 	if len(pkgs) != 3 {
 		t.Fatalf("expected 3, got %d: %v", len(pkgs), pkgs)
 	}
 	m := toSet(pkgs)
-	if !m["react@18.2.0"] || !m["@opentelemetry/api@1.9.0"] || !m["next@15.2.3"] {
+	missingPackagesPrefix := !m["react@18.2.0"] || !m["@opentelemetry/api@1.9.0"]
+	missingPackages := missingPackagesPrefix || !m["next@15.2.3"]
+	if missingPackages {
 		t.Errorf("unexpected packages: %v", pkgs)
 	}
 }
@@ -322,7 +335,8 @@ func TestReadBunLockNestedScopedPackage(t *testing.T) {
 `), 0o644)
 
 	packages := readBunLock(dir)
-	if len(packages) != 1 || packages[0] != "@babel/core@7.26.10" {
+	unexpectedPackages := len(packages) != 1 || packages[0] != "@babel/core@7.26.10"
+	if unexpectedPackages {
 		t.Fatalf("unexpected Bun packages: %v", packages)
 	}
 }
@@ -335,9 +349,7 @@ func TestReadBunLockMissing(t *testing.T) {
 
 // npm: pnpm-lock.yaml
 
-func TestReadPNPMLockV6(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(dir+"/pnpm-lock.yaml", []byte(`lockfileVersion: '6.0'
+const testReadPNPMLockV6Fixture = `lockfileVersion: '6.0'
 
 packages:
   /lodash@4.17.21:
@@ -346,21 +358,24 @@ packages:
     resolution: {integrity: sha512-def}
 
 snapshots: {}
-`), 0644)
+`
+
+func TestReadPNPMLockV6(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/pnpm-lock.yaml", []byte(testReadPNPMLockV6Fixture), 0644)
 
 	pkgs := readPNPMLock(dir)
 	if len(pkgs) != 2 {
 		t.Fatalf("expected 2, got %d: %v", len(pkgs), pkgs)
 	}
 	m := toSet(pkgs)
-	if !m["lodash@4.17.21"] || !m["@scope/pkg@1.0.0"] {
+	missingPackages := !m["lodash@4.17.21"] || !m["@scope/pkg@1.0.0"]
+	if missingPackages {
 		t.Errorf("unexpected packages: %v", pkgs)
 	}
 }
 
-func TestReadPNPMLockV9(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(dir+"/pnpm-lock.yaml", []byte(`lockfileVersion: '9.0'
+const testReadPNPMLockV9Fixture = `lockfileVersion: '9.0'
 
 packages:
   lodash@4.17.21:
@@ -369,7 +384,11 @@ packages:
     resolution: {integrity: sha512-xyz}
   '@scope/pkg@1.0.0':
     resolution: {integrity: sha512-def}
-`), 0644)
+`
+
+func TestReadPNPMLockV9(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/pnpm-lock.yaml", []byte(testReadPNPMLockV9Fixture), 0644)
 
 	pkgs := readPNPMLock(dir)
 	if len(pkgs) != 3 {
@@ -401,7 +420,8 @@ packages:
 
 	pkgs := readPNPMLock(dir)
 	m := toSet(pkgs)
-	if !m["lodash@4.17.21"] || !m["lodash@4.17.20"] {
+	missingPackages := !m["lodash@4.17.21"] || !m["lodash@4.17.20"]
+	if missingPackages {
 		t.Errorf("expected both lodash versions, got %v", pkgs)
 	}
 }
@@ -418,7 +438,9 @@ packages:
 `), 0o644)
 
 	packages := toSet(readPNPMLock(dir))
-	if len(packages) != 2 || !packages["react-dom@18.2.0"] || !packages["@scope/pkg@1.0.0"] {
+	unexpectedPackagesPrefix := len(packages) != 2 || !packages["react-dom@18.2.0"]
+	unexpectedPackages := unexpectedPackagesPrefix || !packages["@scope/pkg@1.0.0"]
+	if unexpectedPackages {
 		t.Fatalf("unexpected pnpm packages: %v", packages)
 	}
 }
@@ -438,7 +460,8 @@ golang.org/x/sync v0.1.0/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlUs/hafntRnmEBH5A=
 		t.Fatalf("expected 2 (deduped /go.mod entries), got %d: %v", len(pkgs), pkgs)
 	}
 	m := toSet(pkgs)
-	if !m["github.com/pkg/errors@v0.9.1"] || !m["golang.org/x/sync@v0.1.0"] {
+	missingPackages := !m["github.com/pkg/errors@v0.9.1"] || !m["golang.org/x/sync@v0.1.0"]
+	if missingPackages {
 		t.Errorf("unexpected packages: %v", pkgs)
 	}
 }
@@ -451,9 +474,7 @@ func TestReadGoSumMissing(t *testing.T) {
 
 // Python: uv.lock
 
-func TestReadUVLock(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(dir+"/uv.lock", []byte(`version = 1
+const testReadUVLockFixture = `version = 1
 requires-python = ">=3.11"
 
 [[package]]
@@ -465,14 +486,19 @@ source = { registry = "https://pypi.org/simple" }
 name = "certifi"
 version = "2024.2.2"
 source = { registry = "https://pypi.org/simple" }
-`), 0644)
+`
+
+func TestReadUVLock(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/uv.lock", []byte(testReadUVLockFixture), 0644)
 
 	pkgs := readUVLock(dir)
 	if len(pkgs) != 2 {
 		t.Fatalf("expected 2, got %d: %v", len(pkgs), pkgs)
 	}
 	m := toSet(pkgs)
-	if !m["requests==2.31.0"] || !m["certifi==2024.2.2"] {
+	missingPackages := !m["requests==2.31.0"] || !m["certifi==2024.2.2"]
+	if missingPackages {
 		t.Errorf("unexpected packages: %v", pkgs)
 	}
 }
@@ -485,9 +511,7 @@ func TestReadUVLockMissing(t *testing.T) {
 
 // Python: poetry.lock
 
-func TestReadPoetryLock(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(dir+"/poetry.lock", []byte(`[[package]]
+const testReadPoetryLockFixture = `[[package]]
 name = "requests"
 version = "2.28.0"
 description = "Python HTTP for Humans."
@@ -496,14 +520,19 @@ description = "Python HTTP for Humans."
 name = "flask"
 version = "2.3.0"
 description = "A simple framework."
-`), 0644)
+`
+
+func TestReadPoetryLock(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/poetry.lock", []byte(testReadPoetryLockFixture), 0644)
 
 	pkgs := readPoetryLock(dir)
 	if len(pkgs) != 2 {
 		t.Fatalf("expected 2, got %d: %v", len(pkgs), pkgs)
 	}
 	m := toSet(pkgs)
-	if !m["requests==2.28.0"] || !m["flask==2.3.0"] {
+	missingPackages := !m["requests==2.28.0"] || !m["flask==2.3.0"]
+	if missingPackages {
 		t.Errorf("unexpected packages: %v", pkgs)
 	}
 }
@@ -516,9 +545,7 @@ func TestReadPoetryLockMissing(t *testing.T) {
 
 // Python: Pipfile.lock
 
-func TestReadPipfileLock(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(dir+"/Pipfile.lock", []byte(`{
+const testReadPipfileLockFixture = `{
 		"_meta": {"hash": {"sha256": "abc"}},
 		"default": {
 			"requests": {"version": "==2.31.0"},
@@ -527,14 +554,20 @@ func TestReadPipfileLock(t *testing.T) {
 		"develop": {
 			"pytest": {"version": "==7.4.0"}
 		}
-	}`), 0644)
+	}`
+
+func TestReadPipfileLock(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/Pipfile.lock", []byte(testReadPipfileLockFixture), 0644)
 
 	pkgs := readPipfileLock(dir)
 	if len(pkgs) != 3 {
 		t.Fatalf("expected 3, got %d: %v", len(pkgs), pkgs)
 	}
 	m := toSet(pkgs)
-	if !m["requests==2.31.0"] || !m["certifi==2024.2.2"] || !m["pytest==7.4.0"] {
+	missingPackagesPrefix := !m["requests==2.31.0"] || !m["certifi==2024.2.2"]
+	missingPackages := missingPackagesPrefix || !m["pytest==7.4.0"]
+	if missingPackages {
 		t.Errorf("unexpected packages: %v", pkgs)
 	}
 }
@@ -554,7 +587,8 @@ func TestReadPipfileLockNoVersion(t *testing.T) {
 		"develop": {}
 	}`), 0644)
 	pkgs := readPipfileLock(dir)
-	if len(pkgs) != 1 || pkgs[0] != "requests" {
+	unexpectedPackages := len(pkgs) != 1 || pkgs[0] != "requests"
+	if unexpectedPackages {
 		t.Errorf("expected [requests] for empty version, got %v", pkgs)
 	}
 }
@@ -567,9 +601,7 @@ func TestReadPipfileLockMissing(t *testing.T) {
 
 // Homebrew: Brewfile.lock.json
 
-func TestReadBrewfileLockJSON(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(dir+"/Brewfile.lock.json", []byte(`{
+const testReadBrewfileLockJSONFixture = `{
 		"entries": {
 			"brew": {
 				"git": {"version": "2.43.0", "full_name": "git"},
@@ -577,14 +609,19 @@ func TestReadBrewfileLockJSON(t *testing.T) {
 			},
 			"cask": {}
 		}
-	}`), 0644)
+	}`
+
+func TestReadBrewfileLockJSON(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/Brewfile.lock.json", []byte(testReadBrewfileLockJSONFixture), 0644)
 
 	pkgs := readBrewfileLockJSON(dir)
 	if len(pkgs) != 2 {
 		t.Fatalf("expected 2, got %d: %v", len(pkgs), pkgs)
 	}
 	m := toSet(pkgs)
-	if !m["git@@2.43.0"] || !m["ripgrep@@14.0.3"] {
+	missingPackages := !m["git@@2.43.0"] || !m["ripgrep@@14.0.3"]
+	if missingPackages {
 		t.Errorf("unexpected packages: %v", pkgs)
 	}
 }
@@ -639,7 +676,8 @@ func TestReadNPMLockfileFallbackToBun(t *testing.T) {
 }
 `), 0644)
 	pkgs := readNPMLockfile(dir)
-	if len(pkgs) != 1 || pkgs[0] != "react@18.0.0" {
+	unexpectedPackages := len(pkgs) != 1 || pkgs[0] != "react@18.0.0"
+	if unexpectedPackages {
 		t.Errorf("expected fallback to bun.lock, got %v", pkgs)
 	}
 }
@@ -653,7 +691,8 @@ packages:
     resolution: {integrity: sha512-abc}
 `), 0644)
 	pkgs := readNPMLockfile(dir)
-	if len(pkgs) != 1 || pkgs[0] != "react@18.0.0" {
+	unexpectedPackages := len(pkgs) != 1 || pkgs[0] != "react@18.0.0"
+	if unexpectedPackages {
 		t.Errorf("expected fallback to pnpm-lock.yaml, got %v", pkgs)
 	}
 }
@@ -667,7 +706,8 @@ name = "requests"
 version = "2.31.0"
 `), 0644)
 	pkgs := readPyLockfile(dir)
-	if len(pkgs) != 1 || pkgs[0] != "requests==2.31.0" {
+	unexpectedPackages := len(pkgs) != 1 || pkgs[0] != "requests==2.31.0"
+	if unexpectedPackages {
 		t.Errorf("expected uv.lock result, got %v", pkgs)
 	}
 }
@@ -679,7 +719,8 @@ name = "flask"
 version = "2.3.0"
 `), 0644)
 	pkgs := readPyLockfile(dir)
-	if len(pkgs) != 1 || pkgs[0] != "flask==2.3.0" {
+	unexpectedPackages := len(pkgs) != 1 || pkgs[0] != "flask==2.3.0"
+	if unexpectedPackages {
 		t.Errorf("expected poetry.lock fallback, got %v", pkgs)
 	}
 }
@@ -691,7 +732,8 @@ func TestReadPyLockfilePipfileFallback(t *testing.T) {
 		"develop": {}
 	}`), 0644)
 	pkgs := readPyLockfile(dir)
-	if len(pkgs) != 1 || pkgs[0] != "requests==2.31.0" {
+	unexpectedPackages := len(pkgs) != 1 || pkgs[0] != "requests==2.31.0"
+	if unexpectedPackages {
 		t.Errorf("expected Pipfile.lock fallback, got %v", pkgs)
 	}
 }
@@ -729,19 +771,14 @@ func TestReadLockfileNPM(t *testing.T) {
 	}`), 0644)
 	mgr := &Manager{Ecosystem: "npm"}
 	pkgs := ReadLockfile(mgr, dir)
-	if len(pkgs) != 1 || pkgs[0] != "lodash@4.17.21" {
+	unexpectedPackages := len(pkgs) != 1 || pkgs[0] != "lodash@4.17.21"
+	if unexpectedPackages {
 		t.Errorf("unexpected: %v", pkgs)
 	}
 }
 
 func TestReadLockfileUsesNPMManagerLock(t *testing.T) {
-	dir := t.TempDir()
-	packageLock := `{"packages":{"node_modules/from-npm":{"version":"1.0.0"}}}`
-	bunLock := `{"packages":{"from-bun@2.0.0":["from-bun@2.0.0",{}]}}`
-	pnpmLock := "packages:\n  from-pnpm@3.0.0:\n"
-	os.WriteFile(dir+"/package-lock.json", []byte(packageLock), 0o644)
-	os.WriteFile(dir+"/bun.lock", []byte(bunLock), 0o644)
-	os.WriteFile(dir+"/pnpm-lock.yaml", []byte(pnpmLock), 0o644)
+	dir := writeNPMManagerLocks(t)
 
 	tests := []struct {
 		manager string
@@ -754,31 +791,29 @@ func TestReadLockfileUsesNPMManagerLock(t *testing.T) {
 	for _, test := range tests {
 		mgr := &Manager{Name: test.manager, Ecosystem: "npm"}
 		packages := ReadLockfile(mgr, dir)
-		if len(packages) != 1 || packages[0] != test.want {
+		unexpectedPackages := len(packages) != 1 || packages[0] != test.want
+		if unexpectedPackages {
 			t.Errorf("%s: expected %q, got %v", test.manager, test.want, packages)
 		}
 	}
 }
 
 func TestReadLockfileUsesPythonManagerLock(t *testing.T) {
-	dir := t.TempDir()
-	uvLock := "[[package]]\nname = \"from-uv\"\nversion = \"1.0.0\"\n"
-	poetryLock := "[[package]]\nname = \"from-poetry\"\nversion = \"2.0.0\"\n"
-	pipfileLock := `{"default":{"from-pip":{"version":"==3.0.0"}}}`
-	os.WriteFile(dir+"/uv.lock", []byte(uvLock), 0o644)
-	os.WriteFile(dir+"/poetry.lock", []byte(poetryLock), 0o644)
-	os.WriteFile(dir+"/Pipfile.lock", []byte(pipfileLock), 0o644)
+	dir := writePythonManagerLocks(t)
 
 	uvPackages := ReadLockfile(&Manager{Name: "uv", Ecosystem: "PyPI"}, dir)
 	poetryPackages := ReadLockfile(&Manager{Name: "poetry", Ecosystem: "PyPI"}, dir)
 	pipPackages := ReadLockfile(&Manager{Name: "pip", Ecosystem: "PyPI"}, dir)
-	if len(uvPackages) != 1 || uvPackages[0] != "from-uv==1.0.0" {
+	unexpectedUvPackages := len(uvPackages) != 1 || uvPackages[0] != "from-uv==1.0.0"
+	if unexpectedUvPackages {
 		t.Fatalf("unexpected uv packages: %v", uvPackages)
 	}
-	if len(poetryPackages) != 1 || poetryPackages[0] != "from-poetry==2.0.0" {
+	unexpectedPoetryPackages := len(poetryPackages) != 1 || poetryPackages[0] != "from-poetry==2.0.0"
+	if unexpectedPoetryPackages {
 		t.Fatalf("unexpected Poetry packages: %v", poetryPackages)
 	}
-	if len(pipPackages) != 1 || pipPackages[0] != "from-pip==3.0.0" {
+	unexpectedPipPackages := len(pipPackages) != 1 || pipPackages[0] != "from-pip==3.0.0"
+	if unexpectedPipPackages {
 		t.Fatalf("unexpected pip packages: %v", pipPackages)
 	}
 }
@@ -790,7 +825,8 @@ func TestReadLockfileHomebrew(t *testing.T) {
 	}`), 0644)
 	mgr := &Manager{Ecosystem: "Homebrew"}
 	pkgs := ReadLockfile(mgr, dir)
-	if len(pkgs) != 1 || pkgs[0] != "git@@2.43.0" {
+	unexpectedPackages := len(pkgs) != 1 || pkgs[0] != "git@@2.43.0"
+	if unexpectedPackages {
 		t.Errorf("unexpected: %v", pkgs)
 	}
 }
@@ -812,7 +848,8 @@ func TestReadPackageLockJSONNested(t *testing.T) {
 	}`), 0644)
 	pkgs := readPackageLockJSON(dir)
 	m := toSet(pkgs)
-	if !m["bar@1.0.0"] || !m["bar@2.0.0"] {
+	missingPackages := !m["bar@1.0.0"] || !m["bar@2.0.0"]
+	if missingPackages {
 		t.Errorf("expected both bar versions in result, got %v", pkgs)
 	}
 	if len(pkgs) != 2 {
@@ -864,9 +901,7 @@ func TestReadPipfileLockDuplicate(t *testing.T) {
 	}
 }
 
-func TestReadCargoLock(t *testing.T) {
-	dir := t.TempDir()
-	err := os.WriteFile(dir+"/Cargo.lock", []byte(`version = 4
+const testReadCargoLockFixture = `version = 4
 
 [[package]]
 name = "app"
@@ -886,7 +921,11 @@ source = "sparse+https://index.crates.io/"
 name = "git-only"
 version = "1.2.3"
 source = "git+https://example.com/repo"
-`), 0644)
+`
+
+func TestReadCargoLock(t *testing.T) {
+	dir := t.TempDir()
+	err := os.WriteFile(dir+"/Cargo.lock", []byte(testReadCargoLockFixture), 0644)
 	if err != nil {
 		t.Fatalf("write Cargo.lock: %v", err)
 	}
@@ -894,7 +933,9 @@ source = "git+https://example.com/repo"
 	mgr := &Manager{Ecosystem: "crates.io"}
 	pkgs := ReadLockfile(mgr, dir)
 	set := toSet(pkgs)
-	if len(pkgs) != 2 || !set["serde@1.0.217"] || !set["regex@1.11.1"] {
+	unexpectedPackagesPrefix := len(pkgs) != 2 || !set["serde@1.0.217"]
+	unexpectedPackages := unexpectedPackagesPrefix || !set["regex@1.11.1"]
+	if unexpectedPackages {
 		t.Errorf("unexpected Cargo.lock packages: %v", pkgs)
 	}
 }
@@ -1012,4 +1053,46 @@ func toSet(ss []string) map[string]bool {
 		m[s] = true
 	}
 	return m
+}
+
+func nestedPackageLockJSON(t *testing.T) []byte {
+	t.Helper()
+	lockfile := struct {
+		LockfileVersion int                              `json:"lockfileVersion"`
+		Dependencies    map[string]packageLockDependency `json:"dependencies"`
+	}{
+		LockfileVersion: 1,
+		Dependencies:    nestedPackageLockDeps(0, maxPackageLockDependencyDepth+5),
+	}
+	data, err := json.Marshal(lockfile)
+	if err != nil {
+		t.Fatalf("marshal lockfile: %v", err)
+	}
+	return data
+}
+
+func writeNPMManagerLocks(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	packageLock := `{"packages":{"node_modules/from-npm":{"version":"1.0.0"}}}`
+	bunLock := `{"packages":{"from-bun@2.0.0":["from-bun@2.0.0",{}]}}`
+	pnpmLock := "packages:\n  from-pnpm@3.0.0:\n"
+	os.WriteFile(dir+"/package-lock.json", []byte(packageLock), 0o644)
+	os.WriteFile(dir+"/bun.lock", []byte(bunLock), 0o644)
+	os.WriteFile(dir+"/pnpm-lock.yaml", []byte(pnpmLock), 0o644)
+
+	return dir
+}
+
+func writePythonManagerLocks(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	uvLock := "[[package]]\nname = \"from-uv\"\nversion = \"1.0.0\"\n"
+	poetryLock := "[[package]]\nname = \"from-poetry\"\nversion = \"2.0.0\"\n"
+	pipfileLock := `{"default":{"from-pip":{"version":"==3.0.0"}}}`
+	os.WriteFile(dir+"/uv.lock", []byte(uvLock), 0o644)
+	os.WriteFile(dir+"/poetry.lock", []byte(poetryLock), 0o644)
+	os.WriteFile(dir+"/Pipfile.lock", []byte(pipfileLock), 0o644)
+
+	return dir
 }

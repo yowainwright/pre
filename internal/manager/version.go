@@ -18,7 +18,7 @@ var (
 	pypiBase    = "https://pypi.org"
 	cratesBase  = "https://crates.io"
 	versionHTTP = &http.Client{Timeout: 10 * time.Second}
-	crateNameRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	crateNameRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
 	runCmd      = func(name string, args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -82,11 +82,15 @@ func crateVersion(spec string) (string, error) {
 }
 
 func IsValidCrateName(name string) bool {
+	if len(name) > 64 {
+		return false
+	}
 	return crateNameRE.MatchString(name)
 }
 
 func decodeCrateVersion(resp *http.Response, name, requirement string) (string, error) {
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+	unsuccessfulResponse := resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices
+	if unsuccessfulResponse {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return "", fmt.Errorf("crates.io: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
@@ -94,14 +98,18 @@ func decodeCrateVersion(resp *http.Response, name, requirement string) (string, 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", fmt.Errorf("parse crates.io: %w", err)
 	}
+	return selectCrateVersion(result.Versions, name, requirement)
+}
+
+func selectCrateVersion(versions []crateVersionInfo, name, requirement string) (string, error) {
 	if requirement != "" {
-		version, ok := selectCargoVersion(result.Versions, requirement)
+		version, ok := selectCargoVersion(versions, requirement)
 		if !ok {
 			return "", fmt.Errorf("crates.io: no version of %q matches %q", name, requirement)
 		}
 		return version, nil
 	}
-	if version, ok := selectCargoVersion(result.Versions, "*"); ok {
+	if version, ok := selectCargoVersion(versions, "*"); ok {
 		return version, nil
 	}
 	return "", fmt.Errorf("crates.io: no non-yanked stable version for %q", name)
@@ -118,16 +126,19 @@ func brewVersion(name string) (string, error) {
 	}
 	version := brewPackageVersion(info)
 	if version == "" {
-		return "", fmt.Errorf("Homebrew package %q not found", name)
+		return "", fmt.Errorf("homebrew package %q not found", name)
 	}
 	return version, nil
 }
 
 func brewPackageVersion(info brewInfo) string {
-	if len(info.Formulae) > 0 && info.Formulae[0].Versions.Stable != "" {
-		return info.Formulae[0].Versions.Stable
+	if len(info.Formulae) > 0 {
+		formula := info.Formulae[0]
+		if formula.Versions.Stable != "" {
+			return formula.Versions.Stable
+		}
 	}
-	if len(info.Casks) > 0 && info.Casks[0].Version != "" {
+	if len(info.Casks) > 0 {
 		return info.Casks[0].Version
 	}
 	return ""
@@ -174,7 +185,12 @@ func goVersion(modulePath string) (string, error) {
 		return "", fmt.Errorf("go proxy: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+	return decodeGoVersion(resp, modulePath)
+}
+
+func decodeGoVersion(resp *http.Response, modulePath string) (string, error) {
+	unsuccessfulResponse := resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices
+	if unsuccessfulResponse {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return "", fmt.Errorf("go proxy: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
@@ -199,7 +215,8 @@ func escapeGoModulePath(modulePath string) (string, error) {
 		if char == '!' {
 			return "", fmt.Errorf("invalid module path %q", modulePath)
 		}
-		if char >= 'A' && char <= 'Z' {
+		uppercase := char >= 'A' && char <= 'Z'
+		if uppercase {
 			escaped.WriteByte('!')
 			char += 'a' - 'A'
 		}
@@ -214,7 +231,12 @@ func pypiVersion(pkg string) (string, error) {
 		return "", fmt.Errorf("pypi: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+	return decodePyPIVersion(resp, pkg)
+}
+
+func decodePyPIVersion(resp *http.Response, pkg string) (string, error) {
+	unsuccessfulResponse := resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices
+	if unsuccessfulResponse {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return "", fmt.Errorf("pypi: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}

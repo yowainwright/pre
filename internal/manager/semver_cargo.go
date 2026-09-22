@@ -29,7 +29,8 @@ func selectCargoVersion(versions []crateVersionInfo, requirement string) (string
 	bestRaw := ""
 	for _, candidate := range versions {
 		version, ok := parseCargoSemver(candidate.Num)
-		if candidate.Yanked || !ok || !cargoRequirementMatches(requirement, version) {
+		skipCandidate := candidate.Yanked || !ok || !cargoRequirementMatches(requirement, version)
+		if skipCandidate {
 			continue
 		}
 		isNewBest := bestRaw == "" || compareCargoSemver(version, best) > 0
@@ -43,7 +44,8 @@ func selectCargoVersion(versions []crateVersionInfo, requirement string) (string
 
 func parseCargoSemver(input string) (cargoSemver, bool) {
 	partial, ok := parseCargoPartialVersion(input)
-	if !ok || partial.components != 3 {
+	invalidVersion := !ok || partial.components != 3
+	if invalidVersion {
 		return cargoSemver{}, false
 	}
 	return partial.version, true
@@ -53,13 +55,15 @@ func parseCargoPartialVersion(input string) (cargoPartialVersion, bool) {
 	withoutBuild := strings.SplitN(strings.TrimSpace(input), "+", 2)[0]
 	core, prerelease, _ := strings.Cut(withoutBuild, "-")
 	parts := strings.Split(core, ".")
-	if len(parts) == 0 || len(parts) > 3 {
+	invalidComponents := len(parts) == 0 || len(parts) > 3
+	if invalidComponents {
 		return cargoPartialVersion{}, false
 	}
 	numbers := [3]int{}
 	for index, part := range parts {
 		value, err := strconv.Atoi(part)
-		if err != nil || value < 0 {
+		invalidNumber := err != nil || value < 0
+		if invalidNumber {
 			return cargoPartialVersion{}, false
 		}
 		numbers[index] = value
@@ -137,7 +141,8 @@ func compareInt(left, right int) int {
 
 func cargoRequirementMatches(requirement string, version cargoSemver) bool {
 	requirement = strings.TrimSpace(requirement)
-	if version.prerelease != "" && !cargoRequirementAllowsPrerelease(requirement, version) {
+	excludedPrerelease := version.prerelease != "" && !cargoRequirementAllowsPrerelease(requirement, version)
+	if excludedPrerelease {
 		return false
 	}
 	for _, comparator := range strings.Split(requirement, ",") {
@@ -152,7 +157,8 @@ func cargoRequirementAllowsPrerelease(requirement string, version cargoSemver) b
 	for _, comparator := range strings.Split(requirement, ",") {
 		_, rawVersion := splitCargoComparator(strings.TrimSpace(comparator))
 		partial, ok := parseCargoPartialVersion(rawVersion)
-		if !ok || partial.version.prerelease == "" {
+		missingPrerelease := !ok || partial.version.prerelease == ""
+		if missingPrerelease {
 			continue
 		}
 		if sameCargoVersionCore(partial.version, version) {
@@ -166,11 +172,13 @@ func sameCargoVersionCore(left, right cargoSemver) bool {
 	sameMajor := left.major == right.major
 	sameMinor := left.minor == right.minor
 	samePatch := left.patch == right.patch
-	return sameMajor && sameMinor && samePatch
+	sameCore := sameMajor && sameMinor && samePatch
+	return sameCore
 }
 
 func cargoComparatorMatches(comparator string, version cargoSemver) bool {
-	if comparator == "" || comparator == "*" {
+	matchesAny := comparator == "" || comparator == "*"
+	if matchesAny {
 		return true
 	}
 	if hasCargoWildcard(comparator) {
@@ -249,15 +257,18 @@ func cargoLessOrEqualMatches(partial cargoPartialVersion, version cargoSemver, c
 }
 
 func cargoRangeMatches(lowerComparison int, version, upper cargoSemver) bool {
-	return lowerComparison >= 0 && compareCargoSemver(version, upper) < 0
+	inRange := lowerComparison >= 0 && compareCargoSemver(version, upper) < 0
+	return inRange
 }
 
 func cargoCaretUpperBound(partial cargoPartialVersion) cargoSemver {
 	version := partial.version
-	if version.major > 0 || partial.components == 1 {
+	advanceMajor := version.major > 0 || partial.components == 1
+	if advanceMajor {
 		return cargoSemver{major: version.major + 1}
 	}
-	if version.minor > 0 || partial.components == 2 {
+	advanceMinor := version.minor > 0 || partial.components == 2
+	if advanceMinor {
 		return cargoSemver{minor: version.minor + 1}
 	}
 	return cargoSemver{patch: version.patch + 1}
@@ -285,7 +296,8 @@ func cargoPartialUpperBound(partial cargoPartialVersion) cargoSemver {
 func cargoWildcardMatches(comparator string, version cargoSemver) bool {
 	normalized := cargoWildcardReplacer.Replace(comparator)
 	prefix := strings.TrimSuffix(normalized, ".*")
-	if prefix == "*" || prefix == "" {
+	matchesAny := prefix == "*" || prefix == ""
+	if matchesAny {
 		return true
 	}
 	partial, ok := parseCargoPartialVersion(prefix)
@@ -295,7 +307,8 @@ func cargoWildcardMatches(comparator string, version cargoSemver) bool {
 	lowerComparison := compareCargoSemver(version, partial.version)
 	upper := cargoWildcardUpperBound(partial)
 	upperComparison := compareCargoSemver(version, upper)
-	return lowerComparison >= 0 && upperComparison < 0
+	inRange := lowerComparison >= 0 && upperComparison < 0
+	return inRange
 }
 
 func cargoWildcardUpperBound(partial cargoPartialVersion) cargoSemver {

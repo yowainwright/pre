@@ -48,18 +48,25 @@ func Get(name string) *Manager {
 func mergeManagers(base, extra []Manager) []Manager {
 	result := make([]Manager, len(base))
 	copy(result, base)
-	for _, e := range extra {
-		replaced := false
-		for i, b := range result {
-			if b.Name == e.Name {
-				result[i] = e
-				replaced = true
-				break
-			}
+	positions := managerPositions(base)
+	for _, manager := range extra {
+		if index, exists := positions[manager.Name]; exists {
+			result[index] = manager
+			continue
 		}
-		if !replaced {
-			result = append(result, e)
-		}
+		positions[manager.Name] = len(result)
+		result = append(result, manager)
 	}
 	return result
+}
+
+func managerPositions(managers []Manager) map[string]int {
+	positions := make(map[string]int, len(managers))
+	for index, manager := range managers {
+		if _, exists := positions[manager.Name]; exists {
+			continue
+		}
+		positions[manager.Name] = index
+	}
+	return positions
 }

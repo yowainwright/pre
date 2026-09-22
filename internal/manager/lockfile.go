@@ -157,16 +157,22 @@ func (s *cargoLockState) set(key, value string) {
 func (s *cargoLockState) flush() {
 	current := s.current
 	s.current = cargoLockPackage{}
-	if current.name == "" || current.version == "" {
+	missingIdentity := current.name == "" || current.version == ""
+	if missingIdentity {
 		return
 	}
-	if current.source != "" && !isCratesIOSource(current.source) {
+	unsupportedSource := current.source != "" && !isCratesIOSource(current.source)
+	if unsupportedSource {
 		s.unsupportedSource = true
 		return
 	}
 	if !isCratesIOSource(current.source) {
 		return
 	}
+	s.appendPackage(current)
+}
+
+func (s *cargoLockState) appendPackage(current cargoLockPackage) {
 	spec := current.name + "@" + current.version
 	if s.seen[spec] {
 		return
@@ -180,7 +186,8 @@ func isCratesIOSource(source string) bool {
 	legacySource := trimmed == "registry+https://github.com/rust-lang/crates.io-index"
 	registrySource := trimmed == "registry+https://index.crates.io"
 	sparseSource := trimmed == "sparse+https://index.crates.io"
-	return legacySource || registrySource || sparseSource
+	supported := legacySource || registrySource || sparseSource
+	return supported
 }
 
 // npm: package-lock.json → bun.lock → pnpm-lock.yaml
@@ -304,11 +311,16 @@ func readBunLock(dir string) []string {
 	if err := unmarshalBunLock(data, &lockfile); err != nil {
 		return nil
 	}
-	seen := make(map[string]bool, len(lockfile.Packages))
+	return bunLockPackages(lockfile.Packages)
+}
+
+func bunLockPackages(packages map[string]json.RawMessage) []string {
+	seen := make(map[string]bool, len(packages))
 	var result []string
-	for key, raw := range lockfile.Packages {
+	for key, raw := range packages {
 		spec := bunPackageSpec(key, raw)
-		if spec == "" || seen[spec] {
+		skipPackage := spec == "" || seen[spec]
+		if skipPackage {
 			continue
 		}
 		seen[spec] = true
@@ -323,15 +335,20 @@ func bunPackageSpec(key string, raw json.RawMessage) string {
 	if atIdx > 0 {
 		return key
 	}
+	return bunRawPackageSpec(raw)
+}
+
+func bunRawPackageSpec(raw json.RawMessage) string {
 	var parts []json.RawMessage
-	if json.Unmarshal(raw, &parts) != nil || len(parts) == 0 {
+	invalidParts := json.Unmarshal(raw, &parts) != nil || len(parts) == 0
+	if invalidParts {
 		return ""
 	}
 	var nameVersion string
 	if json.Unmarshal(parts[0], &nameVersion) != nil {
 		return ""
 	}
-	atIdx = strings.LastIndex(nameVersion, "@")
+	atIdx := strings.LastIndex(nameVersion, "@")
 	if atIdx <= 0 {
 		return ""
 	}
@@ -343,39 +360,53 @@ func readPNPMLock(dir string) []string {
 	if err != nil {
 		return nil
 	}
+	return parsePNPMLock(data)
+}
+
+func parsePNPMLock(data []byte) []string {
 	seen := make(map[string]bool)
 	var result []string
 	inPackages := false
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "packages:" {
-			inPackages = true
+		var spec string
+		spec, inPackages = pnpmLockLine(scanner.Text(), inPackages)
+		skip := spec == "" || seen[spec]
+		if skip {
 			continue
 		}
-		if inPackages && len(line) > 0 && line[0] != ' ' && !strings.HasPrefix(line, "#") {
-			inPackages = false
-			continue
-		}
-		if !inPackages || !strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "   ") {
-			continue
-		}
-		trimmed := strings.TrimSuffix(strings.TrimSpace(line), ":")
-		trimmed = trimYAMLKeyQuotes(trimmed)
-		trimmed = strings.TrimPrefix(trimmed, "/")
-		trimmed = strings.SplitN(trimmed, "(", 2)[0]
-		atIdx := strings.LastIndex(trimmed, "@")
-		if atIdx <= 0 {
-			continue
-		}
-		name, version := trimmed[:atIdx], trimmed[atIdx+1:]
-		spec := name + "@" + version
-		if !seen[spec] {
-			seen[spec] = true
-			result = append(result, spec)
-		}
+		seen[spec] = true
+		result = append(result, spec)
 	}
 	return result
+}
+
+func pnpmLockLine(line string, inPackages bool) (string, bool) {
+	if line == "packages:" {
+		return "", true
+	}
+	nonemptyTopLevel := len(line) > 0 && line[0] != ' '
+	topLevel := nonemptyTopLevel && !strings.HasPrefix(line, "#")
+	endsPackages := inPackages && topLevel
+	if endsPackages {
+		return "", false
+	}
+	skipLine := !inPackages || !strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "   ")
+	if skipLine {
+		return "", inPackages
+	}
+	return pnpmPackageSpec(line), inPackages
+}
+
+func pnpmPackageSpec(line string) string {
+	trimmed := strings.TrimSuffix(strings.TrimSpace(line), ":")
+	trimmed = trimYAMLKeyQuotes(trimmed)
+	trimmed = strings.TrimPrefix(trimmed, "/")
+	trimmed = strings.SplitN(trimmed, "(", 2)[0]
+	if strings.LastIndex(trimmed, "@") <= 0 {
+		return ""
+	}
+	return trimmed
 }
 
 func trimYAMLKeyQuotes(key string) string {
@@ -384,7 +415,8 @@ func trimYAMLKeyQuotes(key string) string {
 	}
 	first := key[0]
 	last := key[len(key)-1]
-	isQuoted := first == last && (first == '\'' || first == '"')
+	quoteCharacter := first == '\'' || first == '"'
+	isQuoted := first == last && quoteCharacter
 	if isQuoted {
 		return key[1 : len(key)-1]
 	}
@@ -398,6 +430,10 @@ func readGoSum(dir string) []string {
 	if err != nil {
 		return nil
 	}
+	return parseGoSum(data)
+}
+
+func parseGoSum(data []byte) []string {
 	seen := make(map[string]bool)
 	var result []string
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
@@ -456,34 +492,51 @@ func parsePoetryFormat(path string) []string {
 	if err != nil {
 		return nil
 	}
+	return poetryPackages(data)
+}
+
+func poetryPackages(data []byte) []string {
 	var result []string
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	var name, version string
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "[[package]]" {
-			if name != "" && version != "" {
-				result = append(result, name+"=="+version)
-			}
+			result = appendPoetryPackage(result, name, version)
 			name, version = "", ""
 			continue
 		}
-		k, v, ok := strings.Cut(line, " = ")
-		if !ok {
-			continue
-		}
-		v = strings.Trim(v, "\"")
-		switch k {
-		case "name":
-			name = v
-		case "version":
-			version = v
-		}
+		name, version = poetryPackageField(line, name, version)
 	}
-	if name != "" && version != "" {
-		result = append(result, name+"=="+version)
+	return appendPoetryPackage(result, name, version)
+}
+
+func poetryPackageField(line, name, version string) (string, string) {
+	key, value, ok := strings.Cut(line, " = ")
+	if !ok {
+		return name, version
 	}
-	return result
+	value = strings.Trim(value, "\"")
+	switch key {
+	case "name":
+		name = value
+	case "version":
+		version = value
+	}
+	return name, version
+}
+
+func appendPoetryPackage(result []string, name, version string) []string {
+	incomplete := name == "" || version == ""
+	if incomplete {
+		return result
+	}
+	spec := name + "==" + version
+	return append(result, spec)
+}
+
+type pipfilePackage struct {
+	Version string `json:"version"`
 }
 
 func readPipfileLock(dir string) []string {
@@ -491,53 +544,68 @@ func readPipfileLock(dir string) []string {
 	if err != nil {
 		return nil
 	}
-	var lockfile map[string]map[string]struct {
-		Version string `json:"version"`
-	}
+	var lockfile map[string]map[string]pipfilePackage
 	if err := json.Unmarshal(data, &lockfile); err != nil {
 		return nil
 	}
+	return pipfilePackages(lockfile)
+}
+
+func pipfilePackages(lockfile map[string]map[string]pipfilePackage) []string {
 	seen := make(map[string]bool)
 	var result []string
-	for section, pkgs := range lockfile {
+	for section, packages := range lockfile {
 		if section == "_meta" {
 			continue
 		}
-		for name, pkg := range pkgs {
-			ver := strings.TrimPrefix(pkg.Version, "==")
-			spec := name
-			if ver != "" {
-				spec = name + "==" + ver
-			}
-			if seen[spec] {
-				continue
-			}
-			seen[spec] = true
-			result = append(result, spec)
+		result = appendPipfilePackages(result, seen, packages)
+	}
+	return result
+}
+
+func appendPipfilePackages(result []string, seen map[string]bool, packages map[string]pipfilePackage) []string {
+	for name, pkg := range packages {
+		version := strings.TrimPrefix(pkg.Version, "==")
+		spec := name
+		if version != "" {
+			spec = name + "==" + version
 		}
+		if seen[spec] {
+			continue
+		}
+		seen[spec] = true
+		result = append(result, spec)
 	}
 	return result
 }
 
 // Homebrew: Brewfile.lock.json
 
+type brewLockPackage struct {
+	Version string `json:"version"`
+}
+
+type brewLockfile struct {
+	Entries struct {
+		Brew map[string]brewLockPackage `json:"brew"`
+	} `json:"entries"`
+}
+
 func readBrewfileLockJSON(dir string) []string {
 	data, err := os.ReadFile(filepath.Join(dir, "Brewfile.lock.json"))
 	if err != nil {
 		return nil
 	}
-	var lockfile struct {
-		Entries struct {
-			Brew map[string]struct {
-				Version string `json:"version"`
-			} `json:"brew"`
-		} `json:"entries"`
-	}
+	var lockfile brewLockfile
 	if err := json.Unmarshal(data, &lockfile); err != nil {
 		return nil
 	}
-	result := make([]string, 0, len(lockfile.Entries.Brew))
-	for name, pkg := range lockfile.Entries.Brew {
+	return brewLockPackages(lockfile.Entries.Brew)
+}
+
+func brewLockPackages(packages map[string]brewLockPackage) []string {
+	result := make([]string, 0, len(packages))
+	for name, pkg := range packages {
 		if pkg.Version != "" {
 			result = append(result, name+brewLockVersionSeparator+pkg.Version)
 		} else {

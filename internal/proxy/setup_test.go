@@ -288,11 +288,7 @@ func TestWriteRCFileRejectsInvalidSymlinks(t *testing.T) {
 }
 
 func TestSetupRefreshesExistingHooks(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
-
-	rcPath := filepath.Join(dir, ".zshrc")
+	rcPath := setupTestRCPath(t)
 	initial := "export FOO=bar\n# pre security proxy\nfunction npm() {}\n"
 	os.WriteFile(rcPath, []byte(initial), 0644)
 
@@ -313,11 +309,7 @@ func TestSetupRefreshesExistingHooks(t *testing.T) {
 }
 
 func TestTeardownRemovesHooks(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
-
-	rcPath := filepath.Join(dir, ".zshrc")
+	rcPath := setupTestRCPath(t)
 	os.WriteFile(rcPath, []byte("export FOO=bar\n"+buildShellHook()+"export BAR=baz\n"), 0644)
 
 	Teardown()
@@ -335,11 +327,7 @@ func TestTeardownRemovesHooks(t *testing.T) {
 }
 
 func TestTeardownRemovesLegacyHooksWithoutDeletingTrailingContent(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
-
-	rcPath := filepath.Join(dir, ".zshrc")
+	rcPath := setupTestRCPath(t)
 	os.WriteFile(rcPath, []byte("export FOO=bar\n# pre security proxy\nfunction bun() {}\nexport BAR=baz\n"), 0644)
 
 	Teardown()
@@ -434,15 +422,9 @@ func TestSetupPreservesUnreadableRCFile(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root can read files without read permission")
 	}
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
-	rcPath := filepath.Join(dir, ".zshrc")
+	rcPath := setupTestRCPath(t)
 	original := []byte("export IMPORTANT=value\n")
-	if err := os.WriteFile(rcPath, original, 0o200); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chmod(rcPath, 0o600)
+	writeUnreadableRC(t, rcPath, original)
 
 	exitCode := 0
 	origExit := processExit
@@ -453,16 +435,7 @@ func TestSetupPreservesUnreadableRCFile(t *testing.T) {
 	if exitCode != 1 {
 		t.Fatalf("expected setup to fail, got exit code %d", exitCode)
 	}
-	if err := os.Chmod(rcPath, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	content, err := os.ReadFile(rcPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(content) != string(original) {
-		t.Fatalf("expected RC file to remain unchanged, got %q", content)
-	}
+	assertRCUnchanged(t, rcPath, original)
 }
 
 func TestShellHookStatusNotInstalled(t *testing.T) {
@@ -481,7 +454,8 @@ func TestShellHookStatusNotInstalled(t *testing.T) {
 
 func TestNextLineNoNewline(t *testing.T) {
 	line, n := nextLine("hello")
-	if line != "hello" || n != 5 {
+	unexpectedLine := line != "hello" || n != 5
+	if unexpectedLine {
 		t.Errorf("expected (hello, 5), got (%q, %d)", line, n)
 	}
 }
@@ -511,5 +485,36 @@ func TestManagerAllInHook(t *testing.T) {
 		if !strings.Contains(hook, "function "+mgr.Name+"()") {
 			t.Errorf("expected hook for manager %s", mgr.Name)
 		}
+	}
+}
+
+func setupTestRCPath(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("SHELL", "/bin/zsh")
+	return filepath.Join(dir, ".zshrc")
+}
+
+func writeUnreadableRC(t *testing.T, rcPath string, original []byte) {
+	t.Helper()
+	if err := os.WriteFile(rcPath, original, 0o200); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(rcPath, 0o600) })
+
+}
+
+func assertRCUnchanged(t *testing.T, rcPath string, original []byte) {
+	t.Helper()
+	if err := os.Chmod(rcPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(rcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(original) {
+		t.Fatalf("expected RC file to remain unchanged, got %q", content)
 	}
 }

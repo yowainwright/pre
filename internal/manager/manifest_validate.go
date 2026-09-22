@@ -293,7 +293,8 @@ func validateAllNPMLocks(dir string) error {
 
 func validatePackageLock(path string) error {
 	lockfile, err := readPackageLock(path)
-	if err != nil || lockfile == nil {
+	lockUnavailable := err != nil || lockfile == nil
+	if lockUnavailable {
 		return err
 	}
 	if err := validatePackageLockPackages(lockfile.Packages, path); err != nil {
@@ -304,7 +305,8 @@ func validatePackageLock(path string) error {
 
 func readPackageLock(path string) (*packageLock, error) {
 	data, exists, err := readOptionalProjectFile(path)
-	if err != nil || !exists {
+	fileUnavailable := err != nil || !exists
+	if fileUnavailable {
 		return nil, err
 	}
 	var lockfile *packageLock
@@ -323,7 +325,8 @@ func validatePackageLockPackages(packages map[string]packageLockEntry, path stri
 			continue
 		}
 		name := packageLockPackageName(packagePath)
-		if entry.Name != "" && entry.Name != name {
+		identityMismatch := entry.Name != "" && entry.Name != name
+		if identityMismatch {
 			return fmt.Errorf("package identity mismatch for %q in %s", name, path)
 		}
 		if err := validatePackageLockSource(name, entry.Version, entry.Resolved, entry.Link, path); err != nil {
@@ -334,14 +337,17 @@ func validatePackageLockPackages(packages map[string]packageLockEntry, path stri
 }
 
 func validatePackageLockDependencies(dependencies map[string]packageLockDependency, path string, depth int) error {
-	if depth >= maxPackageLockDependencyDepth && len(dependencies) > 0 {
+	depthExceeded := depth >= maxPackageLockDependencyDepth && len(dependencies) > 0
+	if depthExceeded {
 		return fmt.Errorf("package dependency depth exceeds %d in %s", maxPackageLockDependencyDepth, path)
 	}
 	for name, dependency := range dependencies {
-		if dependency.Name != "" && dependency.Name != name {
+		identityMismatch := dependency.Name != "" && dependency.Name != name
+		if identityMismatch {
 			return fmt.Errorf("package identity mismatch for %q in %s", name, path)
 		}
-		if err := validatePackageLockSource(name, dependency.Version, dependency.Resolved, false, path); err != nil {
+		const linked = false
+		if err := validatePackageLockSource(name, dependency.Version, dependency.Resolved, linked, path); err != nil {
 			return err
 		}
 		if err := validatePackageLockDependencies(dependency.Dependencies, path, depth+1); err != nil {
@@ -354,7 +360,8 @@ func validatePackageLockDependencies(dependencies map[string]packageLockDependen
 func validatePackageLockSource(name, version, resolved string, link bool, path string) error {
 	hasUnsupportedVersion := version != "" && !IsSupportedNPMRegistrySpec(strings.TrimSpace(version))
 	hasUnsupportedSource := resolved != "" && !isNPMRegistryURL(resolved, name)
-	if link || hasUnsupportedVersion || hasUnsupportedSource {
+	unsupportedSource := link || hasUnsupportedVersion || hasUnsupportedSource
+	if unsupportedSource {
 		return fmt.Errorf("unsupported npm lockfile source for %q in %s", name, path)
 	}
 	return nil
@@ -367,7 +374,9 @@ func isNPMRegistryURL(value, name string) bool {
 	}
 	hasRegistryHost := strings.EqualFold(parsed.Hostname(), npmRegistryHost) && parsed.Port() == ""
 	hasPackagePath := strings.HasPrefix(parsed.Path, "/"+name+"/-/")
-	return parsed.Scheme == "https" && parsed.User == nil && hasRegistryHost && hasPackagePath
+	hasSecureURL := parsed.Scheme == "https" && parsed.User == nil
+	supported := hasSecureURL && hasRegistryHost && hasPackagePath
+	return supported
 }
 
 func validatePythonProject(name, dir string) error {
@@ -399,12 +408,14 @@ func validatePythonManagerFiles(name, dir string) (string, error) {
 func requireLockForPyproject(dir, lockName string) error {
 	pyprojectPath := filepath.Join(dir, "pyproject.toml")
 	_, pyprojectExists, err := readOptionalProjectFile(pyprojectPath)
-	if err != nil || !pyprojectExists {
+	manifestUnavailable := err != nil || !pyprojectExists
+	if manifestUnavailable {
 		return err
 	}
 	lockPath := filepath.Join(dir, lockName)
 	_, lockExists, err := readOptionalProjectFile(lockPath)
-	if err != nil || lockExists {
+	lockCheckComplete := err != nil || lockExists
+	if lockCheckComplete {
 		return err
 	}
 	return fmt.Errorf("%s is required to pre-scan pyproject.toml", lockName)
@@ -449,7 +460,8 @@ func validateJSONFiles(dir string, names ...string) error {
 
 func validateJSONFile(path string) error {
 	data, exists, err := readOptionalProjectFile(path)
-	if err != nil || !exists {
+	fileUnavailable := err != nil || !exists
+	if fileUnavailable {
 		return err
 	}
 	var object map[string]json.RawMessage
@@ -464,7 +476,8 @@ func validateJSONFile(path string) error {
 
 func validateBunLock(path string) error {
 	data, exists, err := readOptionalProjectFile(path)
-	if err != nil || !exists {
+	fileUnavailable := err != nil || !exists
+	if fileUnavailable {
 		return err
 	}
 	var object map[string]json.RawMessage
@@ -479,7 +492,8 @@ func validateBunLock(path string) error {
 
 func validatePackageJSON(path string) error {
 	data, exists, err := readOptionalProjectFile(path)
-	if err != nil || !exists {
+	fileUnavailable := err != nil || !exists
+	if fileUnavailable {
 		return err
 	}
 	var manifest *npmPackageManifest
@@ -499,10 +513,8 @@ func validateNPMDependencySources(manifest npmPackageManifest, path string) erro
 		manifest.OptionalDependencies,
 	}
 	for _, dependencies := range groups {
-		for name, spec := range dependencies {
-			if !IsSupportedNPMRegistrySpec(strings.TrimSpace(spec)) {
-				return fmt.Errorf("unsupported npm dependency source for %q in %s", name, path)
-			}
+		if err := validateNPMDependencyGroup(dependencies, path); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -520,7 +532,8 @@ func validateTextFiles(dir string, names ...string) error {
 
 func validateTextFile(path string) error {
 	data, exists, err := readOptionalProjectFile(path)
-	if err != nil || !exists {
+	fileUnavailable := err != nil || !exists
+	if fileUnavailable {
 		return err
 	}
 	scanner := bufio.NewScanner(bytes.NewReader(data))
@@ -534,7 +547,8 @@ func validateTextFile(path string) error {
 
 func validateRequirements(path string) error {
 	_, exists, err := readOptionalProjectFile(path)
-	if err != nil || !exists {
+	fileUnavailable := err != nil || !exists
+	if fileUnavailable {
 		return err
 	}
 	_, err = ReadRequirementsFile(path)
@@ -553,4 +567,13 @@ func readOptionalProjectFile(path string) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("read %s: %w", path, err)
 	}
 	return data, true, nil
+}
+
+func validateNPMDependencyGroup(dependencies map[string]string, path string) error {
+	for name, spec := range dependencies {
+		if !IsSupportedNPMRegistrySpec(strings.TrimSpace(spec)) {
+			return fmt.Errorf("unsupported npm dependency source for %q in %s", name, path)
+		}
+	}
+	return nil
 }

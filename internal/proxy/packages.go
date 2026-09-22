@@ -13,7 +13,8 @@ import (
 )
 
 func installPackageArgs(mgr *manager.Manager, args []string) ([]string, bool) {
-	if mgr == nil || len(args) == 0 {
+	missingCommand := mgr == nil || len(args) == 0
+	if missingCommand {
 		return nil, false
 	}
 	if mgr.Name == "cargo" {
@@ -37,7 +38,9 @@ func interceptCommandArgs(mgr *manager.Manager, command string, args []string) (
 		}
 		return args, true
 	}
-	isUVPipInstall := mgr.Name == "uv" && command == "pip" && len(args) > 0 && args[0] == "install"
+	isUVPip := mgr.Name == "uv" && command == "pip"
+	hasInstallArg := len(args) > 0 && args[0] == "install"
+	isUVPipInstall := isUVPip && hasInstallArg
 	if isUVPipInstall {
 		return args[1:], true
 	}
@@ -156,7 +159,8 @@ func cargoCommandPackages(mgr *manager.Manager, command string, args []string) [
 func cargoSubcommandIndex(args []string) int {
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
-		if index == 0 && strings.HasPrefix(arg, "+") {
+		toolchainSelector := index == 0 && strings.HasPrefix(arg, "+")
+		if toolchainSelector {
 			continue
 		}
 		if cargoGlobalFlagConsumesValue(arg) {
@@ -209,7 +213,8 @@ func normalizeCargoAddSpec(spec string) string {
 	if startsWithDigit {
 		version = "^" + version
 	}
-	return name + "@" + version
+	normalized := name + "@" + version
+	return normalized
 }
 
 func cargoInstallPackages(mgr *manager.Manager, args []string) []string {
@@ -234,12 +239,14 @@ func cargoInstallSpec(name, version string) string {
 	if version == "" {
 		return name
 	}
-	return name + "@" + version
+	spec := name + "@" + version
+	return spec
 }
 
 func cargoUpdatePackages(mgr *manager.Manager, args []string) []string {
 	precise := cargoFlagValue(args, "--precise")
-	if precise == "" || !crateExactVersionRE.MatchString(precise) {
+	invalidPrecise := precise == "" || !crateExactVersionRE.MatchString(precise)
+	if invalidPrecise {
 		return nil
 	}
 	targets := cargoUpdateTargets(mgr, args)
@@ -259,18 +266,19 @@ func cargoFlagValue(args []string, flags ...string) string {
 }
 
 func cargoFlagValues(args []string, flags ...string) []string {
+	known := cargoFlagSet(flags)
 	var values []string
 	for index, arg := range args {
-		for _, flag := range flags {
-			prefix := flag + "="
-			if value, ok := strings.CutPrefix(arg, prefix); ok {
-				values = append(values, value)
-				break
-			}
-			if arg == flag && index+1 < len(args) {
-				values = append(values, args[index+1])
-				break
-			}
+		flag, value, inline := strings.Cut(arg, "=")
+		if !known[flag] {
+			continue
+		}
+		if inline {
+			values = append(values, value)
+			continue
+		}
+		if index+1 < len(args) {
+			values = append(values, args[index+1])
 		}
 	}
 	return values
@@ -300,11 +308,12 @@ func cargoHasFlag(args []string, flags ...string) bool {
 }
 
 func cargoInstallError(mgr *manager.Manager, args []string) error {
-	if mgr == nil || mgr.Name != "cargo" {
+	notCargo := mgr == nil || mgr.Name != "cargo"
+	if notCargo {
 		return nil
 	}
 	if cargoUsesExternalSource(args) {
-		return errors.New("Cargo Git, path, and custom-registry sources cannot be scanned")
+		return errors.New("cargo Git, path, and custom-registry sources cannot be scanned")
 	}
 	if err := cargoConfigurationError(args); err != nil {
 		return err
@@ -314,7 +323,8 @@ func cargoInstallError(mgr *manager.Manager, args []string) error {
 }
 
 func npmInstallError(mgr *manager.Manager, args []string) error {
-	if mgr == nil || mgr.Ecosystem != "npm" {
+	notNPM := mgr == nil || mgr.Ecosystem != "npm"
+	if notNPM {
 		return nil
 	}
 	if err := npmSourceFlagError(mgr, args); err != nil {
@@ -398,7 +408,8 @@ func unsupportedNPMPackageSource(spec string) bool {
 		return true
 	}
 	requested := npmRequestedSpec(spec)
-	return requested != "" && !manager.IsSupportedNPMRegistrySpec(requested)
+	unsupported := requested != "" && !manager.IsSupportedNPMRegistrySpec(requested)
+	return unsupported
 }
 
 func npmRequestedSpec(spec string) string {
@@ -408,7 +419,9 @@ func npmRequestedSpec(spec string) string {
 		}
 		return ""
 	}
-	if name, requested, found := strings.Cut(spec, "@"); found && name != "" {
+	name, requested, found := strings.Cut(spec, "@")
+	hasRequestedVersion := found && name != ""
+	if hasRequestedVersion {
 		return requested
 	}
 	return spec
@@ -423,7 +436,8 @@ func cargoManifestPath(args []string) (string, bool, error) {
 	if err != nil {
 		return "", changedDir, err
 	}
-	if changedDir && !filepath.IsAbs(path) {
+	relativeToWorkingDir := changedDir && !filepath.IsAbs(path)
+	if relativeToWorkingDir {
 		path = filepath.Join(workingDir, path)
 	}
 	return path, explicit, nil
@@ -450,7 +464,9 @@ func cargoWorkingDirectory(args []string) (string, bool, error) {
 			}
 			return args[index+1], true, nil
 		}
-		if value, ok := strings.CutPrefix(arg, "-C"); ok && value != "" {
+		value, ok := strings.CutPrefix(arg, "-C")
+		hasInlineDirectory := ok && value != ""
+		if hasInlineDirectory {
 			value = strings.TrimPrefix(value, "=")
 			if value == "" {
 				return "", true, errors.New("-C requires a value")
@@ -509,7 +525,8 @@ func readProjectPackages(mgr *manager.Manager, dir string, args []string) ([]str
 func installProjectDir(mgr *manager.Manager, args []string) (string, error) {
 	flags := projectDirectoryFlags(mgr)
 	values, err := projectDirectoryValues(args, flags)
-	if err != nil || len(values) == 0 {
+	directoryUnavailable := err != nil || len(values) == 0
+	if directoryUnavailable {
 		return ".", err
 	}
 	for _, value := range values[1:] {
@@ -560,13 +577,16 @@ func projectDirectoryValues(args, flags []string) ([]string, error) {
 func projectDirectoryValueAt(args []string, index int, flags []string) (string, bool, error) {
 	for _, flag := range flags {
 		if value, ok := strings.CutPrefix(args[index], flag+"="); ok {
-			return requireProjectDirectory(value, false, flag)
+			const consumedNext = false
+			return requireProjectDirectory(value, consumedNext, flag)
 		}
 		if args[index] == flag {
-			if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") {
+			missingValue := index+1 >= len(args) || strings.HasPrefix(args[index+1], "-")
+			if missingValue {
 				return "", false, fmt.Errorf("%s requires a value", flag)
 			}
-			return requireProjectDirectory(args[index+1], true, flag)
+			const consumedNext = true
+			return requireProjectDirectory(args[index+1], consumedNext, flag)
 		}
 	}
 	return "", false, nil
@@ -581,35 +601,49 @@ func requireProjectDirectory(value string, consumed bool, flag string) (string, 
 
 func cargoFallbackPackages(mgr *manager.Manager, args []string) ([]string, error) {
 	path, explicit, err := cargoProjectManifest(args)
-	if err != nil && errors.Is(err, os.ErrNotExist) {
+	missingManifest := err != nil && errors.Is(err, os.ErrNotExist)
+	if missingManifest {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	return cargoFallbackFromManifest(mgr, args, path, explicit)
+}
+
+func cargoFallbackFromManifest(mgr *manager.Manager, args []string, path string, explicit bool) ([]string, error) {
 	commandIndex := cargoSubcommandIndex(args)
 	if commandIndex < 0 {
-		return nil, errors.New("Cargo subcommand is missing")
+		return nil, errors.New("cargo subcommand is missing")
 	}
 	commandArgs := args[commandIndex+1:]
 	packages, err := readCargoFallback(mgr, args[commandIndex], commandArgs, path)
-	if err != nil && !explicit && errors.Is(err, os.ErrNotExist) {
+	missingImplicitManifest := err != nil && !explicit && errors.Is(err, os.ErrNotExist)
+	if missingImplicitManifest {
 		return nil, nil
 	}
 	return packages, err
 }
 
 func validateCargoDirectPackages(mgr *manager.Manager, args, packages []string) error {
-	if mgr == nil || mgr.Name != "cargo" || len(packages) == 0 {
+	notCargo := mgr == nil || mgr.Name != "cargo"
+	skipValidation := notCargo || len(packages) == 0
+	if skipValidation {
 		return nil
 	}
 	commandIndex := cargoSubcommandIndex(args)
 	projectCommands := []string{"add", "update"}
-	if commandIndex < 0 || !slices.Contains(projectCommands, args[commandIndex]) {
+	notProjectCommand := commandIndex < 0 || !slices.Contains(projectCommands, args[commandIndex])
+	if notProjectCommand {
 		return nil
 	}
+	return validateCargoProjectArgs(args)
+}
+
+func validateCargoProjectArgs(args []string) error {
 	path, explicit, err := cargoProjectManifest(args)
-	if err != nil && !explicit && errors.Is(err, os.ErrNotExist) {
+	missingImplicitManifest := err != nil && !explicit && errors.Is(err, os.ErrNotExist)
+	if missingImplicitManifest {
 		return nil
 	}
 	if err != nil {
@@ -621,15 +655,12 @@ func validateCargoDirectPackages(mgr *manager.Manager, args, packages []string) 
 
 func cargoProjectManifest(args []string) (string, bool, error) {
 	path, explicit, err := cargoManifestPath(args)
-	if err != nil || explicit {
+	manifestResolved := err != nil || explicit
+	if manifestResolved {
 		return path, explicit, err
 	}
-	path, err = discoverCargoManifest(path)
+	path, err = manager.DiscoverCargoManifest(path)
 	return path, false, err
-}
-
-func discoverCargoManifest(startPath string) (string, error) {
-	return manager.DiscoverCargoManifest(startPath)
 }
 
 func readCargoFallback(mgr *manager.Manager, command string, args []string, path string) ([]string, error) {
@@ -686,7 +717,8 @@ func installPackages(mgr *manager.Manager, args []string) ([]string, error) {
 }
 
 func withoutGoRemovals(mgr *manager.Manager, packages []string) []string {
-	if mgr == nil || mgr.Ecosystem != "Go" {
+	notGo := mgr == nil || mgr.Ecosystem != "Go"
+	if notGo {
 		return packages
 	}
 	result := make([]string, 0, len(packages))
@@ -699,9 +731,14 @@ func withoutGoRemovals(mgr *manager.Manager, packages []string) []string {
 }
 
 func requirementFilePaths(mgr *manager.Manager, args []string) []string {
-	if mgr == nil || mgr.Ecosystem != "PyPI" {
+	notPython := mgr == nil || mgr.Ecosystem != "PyPI"
+	if notPython {
 		return nil
 	}
+	return pythonRequirementPaths(args)
+}
+
+func pythonRequirementPaths(args []string) []string {
 	var paths []string
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
@@ -722,7 +759,8 @@ func requirementFilePaths(mgr *manager.Manager, args []string) []string {
 func requirementPathAt(args []string, index int) (string, bool) {
 	arg := args[index]
 	flags := []string{"-r", "--requirement", "--requirements"}
-	if slices.Contains(flags, arg) && index+1 < len(args) {
+	hasSeparatePath := slices.Contains(flags, arg) && index+1 < len(args)
+	if hasSeparatePath {
 		return args[index+1], true
 	}
 	return inlineRequirementPath(arg), false
@@ -730,7 +768,9 @@ func requirementPathAt(args []string, index int) (string, bool) {
 
 func inlineRequirementPath(arg string) string {
 	for _, prefix := range []string{"--requirement=", "--requirements=", "-r"} {
-		if path, ok := strings.CutPrefix(arg, prefix); ok && path != "" {
+		path, ok := strings.CutPrefix(arg, prefix)
+		hasInlinePath := ok && path != ""
+		if hasInlinePath {
 			return path
 		}
 	}
@@ -752,33 +792,40 @@ func uniquePackages(packages []string) []string {
 
 func extractPackages(mgr *manager.Manager, args []string) []string {
 	result := make([]string, 0, len(args))
-	skipNext := false
 	afterTerminator := false
-
-	for _, arg := range args {
-		if skipNext {
-			skipNext = false
-			continue
-		}
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
 		if arg == "--" {
 			afterTerminator = true
 			continue
 		}
-		if !afterTerminator && packageFlagConsumesValue(mgr, arg) {
-			if !strings.Contains(arg, "=") {
-				skipNext = true
-			}
+		skip, consumeNext := packageOption(mgr, arg, afterTerminator)
+		if consumeNext {
+			index++
+		}
+		if skip {
 			continue
 		}
-		if !afterTerminator && strings.HasPrefix(arg, "-") {
-			continue
-		}
-		if isPackageArg(mgr, arg) {
-			result = append(result, arg)
-		}
+		result = appendPackageArg(result, mgr, arg)
 	}
-
 	return result
+}
+
+func appendPackageArg(result []string, mgr *manager.Manager, arg string) []string {
+	if !isPackageArg(mgr, arg) {
+		return result
+	}
+	return append(result, arg)
+}
+
+func packageOption(mgr *manager.Manager, arg string, afterTerminator bool) (bool, bool) {
+	if afterTerminator {
+		return false, false
+	}
+	if packageFlagConsumesValue(mgr, arg) {
+		return true, !strings.Contains(arg, "=")
+	}
+	return strings.HasPrefix(arg, "-"), false
 }
 
 func packageFlagConsumesValue(mgr *manager.Manager, arg string) bool {
@@ -790,6 +837,10 @@ func packageFlagConsumesValue(mgr *manager.Manager, arg string) bool {
 		flag = flag[:idx]
 	}
 
+	return ecosystemFlagConsumesValue(mgr, flag)
+}
+
+func ecosystemFlagConsumesValue(mgr *manager.Manager, flag string) bool {
 	switch mgr.Ecosystem {
 	case "npm":
 		return npmFlagConsumesValue(flag)
@@ -798,7 +849,8 @@ func packageFlagConsumesValue(mgr *manager.Manager, arg string) bool {
 	case "Go":
 		return goFlagConsumesValue(flag)
 	case "Homebrew":
-		return flag == "--appdir" || flag == "--cc"
+		consumesValue := flag == "--appdir" || flag == "--cc"
+		return consumesValue
 	case "crates.io":
 		return cargoFlagConsumesValue(flag)
 	}
@@ -849,21 +901,24 @@ func cargoFlagConsumesValue(flag string) bool {
 }
 
 func isPackageArg(mgr *manager.Manager, arg string) bool {
-	if arg == "" || hasUnsupportedPackagePrefix(arg) {
+	unsupportedPrefix := arg == "" || hasUnsupportedPackagePrefix(arg)
+	if unsupportedPrefix {
 		return false
 	}
-	if mgr != nil && mgr.Ecosystem == "npm" && strings.Contains(arg, "@npm:") {
-		return false
+	if mgr == nil {
+		return true
 	}
-	if mgr != nil && mgr.Ecosystem == "PyPI" && isPythonPackageFile(arg) {
-		return false
-	}
-	if mgr != nil && mgr.Ecosystem == "crates.io" {
+	switch mgr.Ecosystem {
+	case "npm":
+		return !strings.Contains(arg, "@npm:")
+	case "PyPI":
+		return !isPythonPackageFile(arg)
+	case "crates.io":
 		name, _ := manager.ParseSpec(mgr.Ecosystem, arg)
 		return manager.IsValidCrateName(name)
+	default:
+		return true
 	}
-
-	return true
 }
 
 func hasUnsupportedPackagePrefix(arg string) bool {
@@ -906,4 +961,12 @@ func shouldResolveVersion(ecosystem, version string) bool {
 	}
 
 	return false
+}
+
+func cargoFlagSet(flags []string) map[string]bool {
+	known := make(map[string]bool, len(flags))
+	for _, flag := range flags {
+		known[flag] = true
+	}
+	return known
 }

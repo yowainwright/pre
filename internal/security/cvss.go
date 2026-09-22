@@ -19,55 +19,66 @@ func cvssScore(vector string) float64 {
 	if len(parts) < 2 {
 		return -1
 	}
-	m := make(map[string]string, len(parts))
-	for _, p := range parts[1:] {
-		k, v, ok := strings.Cut(p, ":")
-		if ok {
-			m[k] = v
-		}
-	}
-
-	av, avOK := cvssAttackVectorWeights[m["AV"]]
-	ac, acOK := cvssComplexityWeights[m["AC"]]
-	ui, uiOK := cvssInteractionWeights[m["UI"]]
-	c, cOK := cvssImpactWeights[m["C"]]
-	i, iOK := cvssImpactWeights[m["I"]]
-	a, aOK := cvssImpactWeights[m["A"]]
-	if !avOK || !acOK || !uiOK || !cOK || !iOK || !aOK {
+	metrics := cvssMetrics(parts[1:])
+	exploitability, ok := cvssExploitability(metrics)
+	if !ok {
 		return -1
 	}
-
-	scopeChanged := m["S"] == "C"
-	var pr float64
-	var prOK bool
-	if scopeChanged {
-		pr, prOK = cvssChangedWeights[m["PR"]]
-	} else {
-		pr, prOK = cvssPrivilegeWeights[m["PR"]]
-	}
-	if !prOK {
+	impact, ok := cvssImpact(metrics)
+	if !ok {
 		return -1
-	}
-
-	iss := 1 - (1-c)*(1-i)*(1-a)
-	var impact float64
-	if scopeChanged {
-		impact = 7.52*(iss-0.029) - 3.25*math.Pow(iss-0.02, 15)
-	} else {
-		impact = 6.42 * iss
 	}
 	if impact <= 0 {
 		return 0
 	}
+	return cvssBaseScore(impact, exploitability, metrics["S"] == "C")
+}
 
-	exploitability := 8.22 * av * ac * pr * ui
-	var raw float64
+func cvssMetrics(parts []string) map[string]string {
+	metrics := make(map[string]string, len(parts))
+	for _, part := range parts {
+		key, value, ok := strings.Cut(part, ":")
+		if ok {
+			metrics[key] = value
+		}
+	}
+	return metrics
+}
+
+func cvssExploitability(metrics map[string]string) (float64, bool) {
+	av, avOK := cvssAttackVectorWeights[metrics["AV"]]
+	ac, acOK := cvssComplexityWeights[metrics["AC"]]
+	ui, uiOK := cvssInteractionWeights[metrics["UI"]]
+	weights := cvssPrivilegeWeights
+	if metrics["S"] == "C" {
+		weights = cvssChangedWeights
+	}
+	pr, prOK := weights[metrics["PR"]]
+	valid := avOK && acOK && uiOK && prOK
+	score := 8.22 * av * ac * pr * ui
+	return score, valid
+}
+
+func cvssImpact(metrics map[string]string) (float64, bool) {
+	c, cOK := cvssImpactWeights[metrics["C"]]
+	i, iOK := cvssImpactWeights[metrics["I"]]
+	a, aOK := cvssImpactWeights[metrics["A"]]
+	valid := cOK && iOK && aOK
+	iss := 1 - (1-c)*(1-i)*(1-a)
+	impact := 6.42 * iss
+	if metrics["S"] == "C" {
+		impact = 7.52*(iss-0.029) - 3.25*math.Pow(iss-0.02, 15)
+	}
+	return impact, valid
+}
+
+func cvssBaseScore(impact, exploitability float64, scopeChanged bool) float64 {
+	raw := math.Min(impact+exploitability, 10)
 	if scopeChanged {
 		raw = math.Min(1.08*(impact+exploitability), 10)
-	} else {
-		raw = math.Min(impact+exploitability, 10)
 	}
-	return math.Ceil(raw*10) / 10
+	rounded := math.Ceil(raw*10) / 10
+	return rounded
 }
 
 func severityFromScore(score float64) string {
