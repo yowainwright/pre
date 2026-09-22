@@ -704,6 +704,9 @@ func cargoUpdateTargets(mgr *manager.Manager, args []string) []string {
 }
 
 func installPackages(mgr *manager.Manager, args []string) ([]string, error) {
+	if err := pythonInstallError(mgr, args); err != nil {
+		return nil, err
+	}
 	packages := extractPackages(mgr, args)
 	packages = withoutGoRemovals(mgr, packages)
 	for _, path := range requirementFilePaths(mgr, args) {
@@ -714,6 +717,43 @@ func installPackages(mgr *manager.Manager, args []string) ([]string, error) {
 		packages = append(packages, fromFile...)
 	}
 	return uniquePackages(packages), nil
+}
+
+func pythonInstallError(mgr *manager.Manager, args []string) error {
+	notPython := mgr == nil || mgr.Ecosystem != "PyPI"
+	if notPython {
+		return nil
+	}
+	afterTerminator := false
+	for index := 0; index < len(args); index++ {
+		if args[index] == "--" {
+			afterTerminator = true
+			continue
+		}
+		consumed, err := pythonInstallArgument(mgr, args[index], afterTerminator)
+		if err != nil {
+			return err
+		}
+		index += consumed
+	}
+	return nil
+}
+
+func pythonInstallArgument(mgr *manager.Manager, arg string, afterTerminator bool) (int, error) {
+	shortEditable := strings.HasPrefix(arg, "-e")
+	longEditable := arg == "--editable" || strings.HasPrefix(arg, "--editable=")
+	editableFlag := shortEditable || longEditable
+	editable := !afterTerminator && editableFlag
+	skip, consumeNext := packageOption(mgr, arg, afterTerminator)
+	unsupportedTarget := !skip && !isPackageArg(mgr, arg)
+	unsupportedSource := editable || unsupportedTarget
+	if unsupportedSource {
+		return 0, errors.New("unsupported python dependency source cannot be scanned")
+	}
+	if consumeNext {
+		return 1, nil
+	}
+	return 0, nil
 }
 
 func withoutGoRemovals(mgr *manager.Manager, packages []string) []string {

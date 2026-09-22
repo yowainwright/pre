@@ -1576,7 +1576,7 @@ func buildUVUpdateArgs(req packageActionReq, name string) ([]string, error) {
 }
 
 func buildPoetryArgs(req packageActionReq, name string) ([]string, error) {
-	versionedName := name + "@" + req.Version
+	versionedName := packageWithVersion(req.Manager, name, req.Version)
 	switch req.Action {
 	case actionInstall:
 		return []string{"add", packageWithVersion(req.Manager, req.Package, req.Version)}, nil

@@ -607,15 +607,7 @@ func TestInterceptNPMExternalSourceBlocks(t *testing.T) {
 	}
 	for _, spec := range specs {
 		t.Run(spec, func(t *testing.T) {
-			execCalled := false
-			defer withExecFn(func(string, []string) { execCalled = true })()
-
-			expectProcessExit(t, 1, func() {
-				Intercept(npmMgr(), []string{"install", spec})
-			})
-			if execCalled {
-				t.Error("expected external npm source to block install")
-			}
+			assertInstallBlocked(t, []string{"npm", "install", spec})
 		})
 	}
 }
@@ -638,6 +630,27 @@ func TestInterceptNPMManifestExternalSourceBlocks(t *testing.T) {
 	}
 }
 
+func TestInterceptPythonUnsupportedSourcesBlock(t *testing.T) {
+	tests := [][]string{
+		{"pip", "install", "requests==2.32.0", "local.whl"},
+		{"pip3", "install", "local.tar.gz"},
+		{"pip", "install", "--", "./local"},
+		{"pip", "install", "https://example.com/private.whl"},
+		{"pip", "install", "git+https://example.com/private.git"},
+		{"pip", "install", "-e", "."},
+		{"pip", "install", "-e."},
+		{"pip", "install", "--editable", "."},
+		{"uv", "pip", "install", "local.whl"},
+		{"uv", "add", "--editable=."},
+		{"poetry", "add", "./local"},
+	}
+	for _, args := range tests {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			assertInstallBlocked(t, args)
+		})
+	}
+}
+
 func TestInterceptUnknownVersionUpdatesBlock(t *testing.T) {
 	tests := [][]string{
 		{"brew", "upgrade"},
@@ -651,19 +664,17 @@ func TestInterceptUnknownVersionUpdatesBlock(t *testing.T) {
 	}
 	for _, args := range tests {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			assertUnknownVersionUpdateBlocked(t, args)
+			assertInstallBlocked(t, args)
 		})
 	}
 }
 
-func assertUnknownVersionUpdateBlocked(t *testing.T, args []string) {
+func assertInstallBlocked(t *testing.T, args []string) {
 	t.Helper()
 	t.Setenv(envDisable, "0")
-	const wantError = true
-	assertInstallTargetPolicy(t, args, wantError)
 	defer withExecFn(func(string, []string) { t.Fatal("unexpected install") })()
 	defer withLoadCache(func() cache.Cache {
-		t.Fatal("expected update rejection before scanning")
+		t.Fatal("expected install rejection before scanning")
 		return nil
 	})()
 	expectProcessExit(t, 1, func() {
@@ -778,7 +789,7 @@ func TestInterceptUVPipInstall(t *testing.T) {
 		return nil, nil
 	})()
 
-	Intercept(uvMgr(), []string{"pip", "install", "requests==2.32.0"})
+	Intercept(uvMgr(), []string{"pip", "install", "--target", "./site", "--", "requests==2.32.0"})
 
 	if !securityCalled {
 		t.Error("expected uv pip install to scan the requested package")
@@ -2209,14 +2220,6 @@ func TestCargoUpdateTargetsIncludesRepeatedPackageFlags(t *testing.T) {
 func TestExtractPackagesSkipsPythonManagerValueFlags(t *testing.T) {
 	mgr := &manager.Manager{Name: "poetry", Ecosystem: "PyPI", InstallCmds: []string{"add"}}
 	result := extractPackages(mgr, []string{"--group", "dev", "--source", "internal", "requests"})
-	unexpectedResult := len(result) != 1 || result[0] != "requests"
-	if unexpectedResult {
-		t.Errorf("expected only requests, got %v", result)
-	}
-}
-
-func TestExtractPackagesSkipsEditablePath(t *testing.T) {
-	result := extractPackages(pipMgr(), []string{"-e", ".", "requests"})
 	unexpectedResult := len(result) != 1 || result[0] != "requests"
 	if unexpectedResult {
 		t.Errorf("expected only requests, got %v", result)

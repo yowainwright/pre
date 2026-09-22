@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -15,7 +13,6 @@ import (
 	"github.com/yowainwright/pre/internal/obs"
 	"github.com/yowainwright/pre/internal/proxy"
 	"github.com/yowainwright/pre/internal/security"
-	"github.com/yowainwright/pre/internal/skills"
 )
 
 var version = "dev"
@@ -49,7 +46,6 @@ func printUsage(stderr io.Writer) {
 	fmt.Fprintln(stderr, "       pre manage | m | installed | install | update | downgrade | uninstall")
 	fmt.Fprintln(stderr, "       pre obs [--json] [--events [query]]")
 	fmt.Fprintln(stderr, "       pre setup | teardown | status | config [set <key> <value>]")
-	fmt.Fprintln(stderr, "       pre skills <add|show> [--global]")
 }
 
 func dispatchCommand(args []string, cfg *config.Config, stdout, stderr io.Writer) int {
@@ -62,8 +58,6 @@ func dispatchCommand(args []string, cfg *config.Config, stdout, stderr io.Writer
 		return handleObs(args[1:], stdout, stderr)
 	case "self":
 		return handleSelf(args[1:], stdout, stderr)
-	case "skills":
-		return handleSkills(args[1:], stdout, stderr)
 	case "screenshots":
 		return handleScreenshots(args[1:], stdout, stderr)
 	default:
@@ -134,66 +128,6 @@ func interceptManager(args []string, stderr io.Writer) int {
 	}
 	proxy.Intercept(mgr, args[1:])
 	return 0
-}
-
-func handleSkills(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: pre skills <add|show> [--global]")
-		return 1
-	}
-	switch args[0] {
-	case "show":
-		fmt.Fprint(stdout, skills.Pre)
-		return 0
-	case "add":
-		return handleSkillsAdd(args[1:], stdout, stderr)
-	default:
-		fmt.Fprintln(stderr, "usage: pre skills <add|show> [--global]")
-		return 1
-	}
-}
-
-func handleSkillsAdd(args []string, stdout, stderr io.Writer) int {
-	skillDir, err := resolveSkillDir(args)
-	if err != nil {
-		fmt.Fprintf(stderr, "pre skills: %v\n", err)
-		return 1
-	}
-	skillPath, err := writeSkill(skillDir)
-	if err != nil {
-		fmt.Fprintf(stderr, "pre skills: %v\n", err)
-		return 1
-	}
-	fmt.Fprintf(stdout, "pre skill installed: %s\n", skillPath)
-	return 0
-}
-
-func resolveSkillDir(args []string) (string, error) {
-	isGlobal := slices.Contains(args, "--global")
-	baseDir := "."
-	if isGlobal {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("cannot resolve home directory: %w", err)
-		}
-		baseDir = home
-	}
-	absBase, err := filepath.Abs(baseDir)
-	if err != nil {
-		return "", fmt.Errorf("cannot resolve directory: %w", err)
-	}
-	return filepath.Join(absBase, ".claude", "skills", "pre"), nil
-}
-
-func writeSkill(skillDir string) (string, error) {
-	if err := os.MkdirAll(skillDir, 0o700); err != nil {
-		return "", err
-	}
-	skillPath := filepath.Join(skillDir, "SKILL.md")
-	if err := os.WriteFile(skillPath, []byte(skills.Pre), 0o600); err != nil {
-		return "", err
-	}
-	return skillPath, nil
 }
 
 func handlePackages(args []string, stdout, stderr io.Writer) int {

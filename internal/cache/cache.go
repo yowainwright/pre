@@ -256,7 +256,7 @@ func migrate(c Cache) Cache {
 
 func migrateCache(c Cache) (Cache, bool) {
 	if len(c) == 0 {
-		return c, false
+		return make(Cache), c == nil
 	}
 	migration := cacheMigration{entries: make(Cache, len(c))}
 	for key, entry := range c {

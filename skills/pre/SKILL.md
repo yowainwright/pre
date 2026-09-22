@@ -83,14 +83,6 @@ sessions; use the flag form instead:
 pre manage --package <pkg> --manager <mgr> --upgrade [version]
 ```
 
-## Agent Setup
-
-```sh
-pre skills add           # install this skill to ./.claude/skills/pre/SKILL.md
-pre skills add --global  # install to ~/.claude/skills/pre/SKILL.md
-pre skills show          # print to stdout for other agent configs
-```
-
 ## Config
 
 `pre config` shows config; `pre config set <key> <value>` updates it.

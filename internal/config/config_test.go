@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -100,14 +101,27 @@ func TestLoadCustomManagers(t *testing.T) {
 }
 
 func TestLoadBadJSON(t *testing.T) {
-	dir := t.TempDir()
-	defer withConfigDir(dir)()
-	p := filepath.Join(dir, "pre")
-	os.MkdirAll(p, 0755)
-	os.WriteFile(filepath.Join(p, "config.json"), []byte("not json"), 0644)
-	cfg := Load()
-	if cfg.API.Endpoint != DefaultEndpoint {
-		t.Error("expected defaults on bad JSON")
+	inputs := []string{
+		"not json",
+		`{"api":{"endpoint":"https://custom.example.com"},"cache":{"ttl":"1h"},"managers":[{"name":"npm","ecosystem":"npm","installCmds":[1]}]}`,
+		`{"api":{"endpoint":42},"cache":{"ttl":"1h"},"managers":[{"name":"yarn","ecosystem":"npm","installCmds":["add"]}]}`,
+	}
+	for _, input := range inputs {
+		t.Run(input, func(t *testing.T) {
+			dir := t.TempDir()
+			defer withConfigDir(dir)()
+			p := filepath.Join(dir, "pre")
+			if err := os.MkdirAll(p, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(p, "config.json"), []byte(input), 0644); err != nil {
+				t.Fatal(err)
+			}
+			cfg := Load()
+			if !reflect.DeepEqual(cfg, defaults()) {
+				t.Fatalf("expected defaults on invalid config, got %#v", cfg)
+			}
+		})
 	}
 }
 
