@@ -315,7 +315,7 @@ func resolveScanVersion(mgr *manager.Manager, name, version string, allowMissing
 }
 
 func resolveRequestedVersion(mgr *manager.Manager, name, version string) (string, string, bool, bool, error) {
-	label := name + "@" + version
+	label := name + "@" + strings.TrimPrefix(version, "@")
 	poetryLatest := mgr.Name == "poetry" && version == "@latest"
 	resolveVersion := poetryLatest || shouldResolveVersion(mgr.Ecosystem, version)
 	if resolveVersion {

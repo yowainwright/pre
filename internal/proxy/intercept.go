@@ -68,10 +68,10 @@ func (run proxyRun) interceptInstall(packageArgs []string) {
 		ExecFn(run.mgr.Name, run.args)
 		return
 	}
-	run.interceptPackages(packages, fromProject)
+	run.interceptPackages(packageArgs, packages, fromProject)
 }
 
-func (run proxyRun) interceptPackages(packages []string, fromProject bool) {
+func (run proxyRun) interceptPackages(packageArgs, packages []string, fromProject bool) {
 	if !run.allowPackageCount(len(packages)) {
 		return
 	}
@@ -79,11 +79,11 @@ func (run proxyRun) interceptPackages(packages []string, fromProject bool) {
 	if !run.approveResults(results) {
 		return
 	}
-	args := run.resolvedInstallArgs(packages, results)
+	args := run.resolvedInstallArgs(packageArgs, packages, results)
 	ExecFn(run.mgr.Name, args)
 }
 
-func (run proxyRun) resolvedInstallArgs(packages []string, results []scanResult) []string {
+func (run proxyRun) resolvedInstallArgs(packageArgs, packages []string, results []scanResult) []string {
 	if run.mgr.Name != "poetry" {
 		return run.args
 	}
@@ -98,29 +98,17 @@ func (run proxyRun) resolvedInstallArgs(packages []string, results []scanResult)
 		return run.args
 	}
 	args := slices.Clone(run.args)
-	packageArgs, _ := installPackageArgs(run.mgr, args)
-	pinPoetryPackages(run.mgr, packageArgs, versions)
-	return args
-}
-
-func pinPoetryPackages(mgr *manager.Manager, args []string, versions map[string]string) {
-	afterTerminator := false
-	for index := 0; index < len(args); index++ {
-		arg := args[index]
-		if arg == "--" {
-			afterTerminator = true
-			continue
-		}
-		skip, consumeNext := packageOption(mgr, arg, afterTerminator)
-		if consumeNext {
-			index++
-		}
+	offset := len(args) - len(packageArgs)
+	_ = walkPackageArgs(run.mgr, packageArgs, func(index int, option bool) error {
+		arg := packageArgs[index]
 		version := versions[arg]
-		pin := !skip && version != ""
+		pin := !option && version != ""
 		if pin {
-			args[index] = strings.Replace(arg, "@latest", "=="+version, 1)
+			args[offset+index] = strings.Replace(arg, "@latest", "=="+version, 1)
 		}
-	}
+		return nil
+	})
+	return args
 }
 
 func (run proxyRun) allowInstall(packageArgs []string) bool {
