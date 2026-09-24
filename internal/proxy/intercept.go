@@ -68,10 +68,10 @@ func (run proxyRun) interceptInstall(packageArgs []string) {
 		ExecFn(run.mgr.Name, run.args)
 		return
 	}
-	run.interceptPackages(packages, fromProject)
+	run.interceptPackages(packageArgs, packages, fromProject)
 }
 
-func (run proxyRun) interceptPackages(packages []string, fromProject bool) {
+func (run proxyRun) interceptPackages(packageArgs, packages []string, fromProject bool) {
 	if !run.allowPackageCount(len(packages)) {
 		return
 	}
@@ -79,7 +79,36 @@ func (run proxyRun) interceptPackages(packages []string, fromProject bool) {
 	if !run.approveResults(results) {
 		return
 	}
-	ExecFn(run.mgr.Name, run.args)
+	args := run.resolvedInstallArgs(packageArgs, packages, results)
+	ExecFn(run.mgr.Name, args)
+}
+
+func (run proxyRun) resolvedInstallArgs(packageArgs, packages []string, results []scanResult) []string {
+	if run.mgr.Name != "poetry" {
+		return run.args
+	}
+	versions := make(map[string]string)
+	for index, spec := range packages {
+		_, requested := manager.ParseSpec(run.mgr.Ecosystem, spec)
+		if requested == "@latest" {
+			versions[spec] = results[index].version
+		}
+	}
+	if len(versions) == 0 {
+		return run.args
+	}
+	args := slices.Clone(run.args)
+	offset := len(args) - len(packageArgs)
+	_ = walkPackageArgs(run.mgr, packageArgs, func(index int, option bool) error {
+		arg := packageArgs[index]
+		version := versions[arg]
+		pin := !option && version != ""
+		if pin {
+			args[offset+index] = strings.Replace(arg, "@latest", "=="+version, 1)
+		}
+		return nil
+	})
+	return args
 }
 
 func (run proxyRun) allowInstall(packageArgs []string) bool {

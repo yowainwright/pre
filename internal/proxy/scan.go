@@ -315,8 +315,10 @@ func resolveScanVersion(mgr *manager.Manager, name, version string, allowMissing
 }
 
 func resolveRequestedVersion(mgr *manager.Manager, name, version string) (string, string, bool, bool, error) {
-	label := name + "@" + version
-	if shouldResolveVersion(mgr.Ecosystem, version) {
+	label := name + "@" + strings.TrimPrefix(version, "@")
+	poetryLatest := mgr.Name == "poetry" && version == "@latest"
+	resolveVersion := poetryLatest || shouldResolveVersion(mgr.Ecosystem, version)
+	if resolveVersion {
 		target := name
 		useRequestedTag := mgr.Ecosystem == "npm" && strings.ToLower(version) != "latest"
 		if useRequestedTag {

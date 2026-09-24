@@ -607,15 +607,7 @@ func TestInterceptNPMExternalSourceBlocks(t *testing.T) {
 	}
 	for _, spec := range specs {
 		t.Run(spec, func(t *testing.T) {
-			execCalled := false
-			defer withExecFn(func(string, []string) { execCalled = true })()
-
-			expectProcessExit(t, 1, func() {
-				Intercept(npmMgr(), []string{"install", spec})
-			})
-			if execCalled {
-				t.Error("expected external npm source to block install")
-			}
+			assertInstallBlocked(t, []string{"npm", "install", spec})
 		})
 	}
 }
@@ -638,7 +630,31 @@ func TestInterceptNPMManifestExternalSourceBlocks(t *testing.T) {
 	}
 }
 
+func TestInterceptPythonUnsupportedSourcesBlock(t *testing.T) {
+	tests := [][]string{
+		{"pip", "install", "requests==2.32.0", "local.whl"},
+		{"pip", "install", "-t", "./site", "requests==2.32.0", "local.whl"},
+		{"pip3", "install", "local.tar.gz"},
+		{"pip", "install", "--", "./local"},
+		{"pip", "install", "--", "-t", "./site", "requests==2.32.0"},
+		{"pip", "install", "https://example.com/private.whl"},
+		{"pip", "install", "git+https://example.com/private.git"},
+		{"pip", "install", "-e", "."},
+		{"pip", "install", "-e."},
+		{"pip", "install", "--editable", "."},
+		{"uv", "pip", "install", "local.whl"},
+		{"uv", "add", "--editable=."},
+		{"poetry", "add", "./local"},
+	}
+	for _, args := range tests {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			assertInstallBlocked(t, args)
+		})
+	}
+}
+
 func TestInterceptUnknownVersionUpdatesBlock(t *testing.T) {
+	const wantError = true
 	tests := [][]string{
 		{"brew", "upgrade"},
 		{"npm", "update", "react"},
@@ -651,19 +667,18 @@ func TestInterceptUnknownVersionUpdatesBlock(t *testing.T) {
 	}
 	for _, args := range tests {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			assertUnknownVersionUpdateBlocked(t, args)
+			assertInstallTargetPolicy(t, args, wantError)
+			assertInstallBlocked(t, args)
 		})
 	}
 }
 
-func assertUnknownVersionUpdateBlocked(t *testing.T, args []string) {
+func assertInstallBlocked(t *testing.T, args []string) {
 	t.Helper()
 	t.Setenv(envDisable, "0")
-	const wantError = true
-	assertInstallTargetPolicy(t, args, wantError)
 	defer withExecFn(func(string, []string) { t.Fatal("unexpected install") })()
 	defer withLoadCache(func() cache.Cache {
-		t.Fatal("expected update rejection before scanning")
+		t.Fatal("expected install rejection before scanning")
 		return nil
 	})()
 	expectProcessExit(t, 1, func() {
@@ -766,22 +781,42 @@ func assertPublicRegistryInstall(t *testing.T, mgr *manager.Manager, args []stri
 	}
 }
 
-func TestInterceptUVPipInstall(t *testing.T) {
-	securityCalled := false
-	defer withStdinInput("y\n")()
-	defer withExecFn(noopExec)()
-	defer withLoadCache(emptyCache)()
-	defer withUpdateCache(noopUpdate)()
-	defer withSecurityCheck(func(ecosystem, name, version string) ([]security.Vulnerability, error) {
-		expectedPackage := ecosystem == "PyPI" && name == "requests"
-		securityCalled = expectedPackage && version == "2.32.0"
-		return nil, nil
-	})()
-
-	Intercept(uvMgr(), []string{"pip", "install", "requests==2.32.0"})
-
-	if !securityCalled {
-		t.Error("expected uv pip install to scan the requested package")
+func TestInterceptPythonInstallPreservesOptions(t *testing.T) {
+	t.Setenv(envDisable, "0")
+	tests := [][]string{
+		{"pip", "install", "-t", "./site", "requests==2.32.0"},
+		{"pip3", "install", "-t./site", "requests==2.32.0"},
+		{"pip", "install", "--target=./site", "requests==2.32.0"},
+		{"uv", "pip", "install", "--target", "./site", "--", "requests==2.32.0"},
+		{"uv", "pip", "install", "-t", "./site", "requests==2.32.0"},
+		{"uv", "pip", "install", "-p", "./python", "requests==2.32.0"},
+		{"uv", "pip", "install", "--constraints", "constraints.txt", "requests==2.32.0"},
+		{"uv", "pip", "install", "--config-setting", "setting=value", "requests==2.32.0"},
+		{"uv", "add", "--constraints=constraints.txt", "--config-setting=setting=value", "requests==2.32.0"},
+	}
+	for _, args := range tests {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			wantArgs := slices.Clone(args)
+			scanned, executed := false, false
+			defer withStdinInput("y\n")()
+			defer withLoadCache(emptyCache)()
+			defer withUpdateCache(noopUpdate)()
+			defer withExecFn(func(name string, got []string) {
+				executed = name == wantArgs[0] && slices.Equal(got, wantArgs[1:])
+			})()
+			defer withSecurityBatchCheck(func(queries []security.Query) ([][]security.Vulnerability, error) {
+				want := []security.Query{{Ecosystem: "PyPI", Name: "requests", Version: "2.32.0"}}
+				scanned = slices.Equal(queries, want)
+				return make([][]security.Vulnerability, len(queries)), nil
+			})()
+			Intercept(manager.Get(args[0]), args[1:])
+			if !scanned {
+				t.Error("expected only requests==2.32.0 to be scanned")
+			}
+			if !executed {
+				t.Error("expected approved install with unchanged arguments")
+			}
+		})
 	}
 }
 
@@ -1412,22 +1447,91 @@ func assertBatchMissScan(t *testing.T, execCalled bool, queries []security.Query
 	}
 }
 
-func TestInterceptInstallVersionResolutionFailure(t *testing.T) {
-	execCalled := false
-	defer withExecFn(func(name string, args []string) { execCalled = true })()
-	defer withSecurityCheck(func(eco, name, ver string) ([]security.Vulnerability, error) {
-		return nil, nil
-	})()
-	defer withResolveVersion(func(mgr *manager.Manager, pkg string) (string, error) {
-		return "", errors.New("resolution failed")
-	})()
+func TestInterceptPoetryLatestPinsScannedVersion(t *testing.T) {
+	t.Setenv(envDisable, "0")
+	args := []string{
+		"--project", "requests@latest", "add", "--group", "requests@latest",
+		"requests[socks]@latest", "requests==2.31.0", "--", "requests@latest", "requests@latest",
+	}
+	wantArgs := []string{
+		"--project", "requests@latest", "add", "--group", "requests@latest",
+		"requests[socks]==2.32.0", "requests==2.31.0", "--", "requests==2.32.0", "requests==2.32.0",
+	}
+	scanned := false
 	defer withLoadCache(emptyCache)()
 	defer withUpdateCache(noopUpdate)()
-	expectProcessExit(t, 1, func() {
-		Intercept(npmMgr(), []string{"install", "react"})
-	})
-	if execCalled {
-		t.Error("expected version resolution failure to block the install")
+	defer withResolveVersion(func(mgr *manager.Manager, name string) (string, error) {
+		wrongTarget := mgr.Name != "poetry" || name != "requests"
+		if wrongTarget {
+			t.Errorf("unexpected resolution target: %s %q", mgr.Name, name)
+		}
+		return "2.32.0", nil
+	})()
+	defer withSecurityBatchCheck(func(queries []security.Query) ([][]security.Vulnerability, error) {
+		want := []security.Query{
+			{Ecosystem: "PyPI", Name: "requests", Version: "2.32.0"},
+			{Ecosystem: "PyPI", Name: "requests", Version: "2.31.0"},
+			{Ecosystem: "PyPI", Name: "requests", Version: "2.32.0"},
+		}
+		scanned = slices.Equal(queries, want)
+		return make([][]security.Vulnerability, len(queries)), nil
+	})()
+	tests := []struct {
+		answer string
+		want   []string
+	}{{"y", wantArgs}, {"n", nil}}
+	for _, test := range tests {
+		t.Run(test.answer, func(t *testing.T) {
+			scanned = false
+			originalArgs := slices.Clone(args)
+			var executed []string
+			defer withStdinInput(test.answer + "\n")()
+			defer withExecFn(func(name string, got []string) {
+				if name != "poetry" {
+					t.Fatalf("unexpected manager: %s", name)
+				}
+				executed = slices.Clone(got)
+			})()
+			if test.answer == "n" {
+				expectProcessExit(t, 1, func() { Intercept(poetryMgr(), args) })
+			} else {
+				Intercept(poetryMgr(), args)
+			}
+			unexpectedExecution := !scanned || !slices.Equal(executed, test.want)
+			if unexpectedExecution {
+				t.Errorf("scanned=%v executed=%v, want %v", scanned, executed, test.want)
+			}
+			if !slices.Equal(args, originalArgs) {
+				t.Errorf("caller arguments changed: %v", args)
+			}
+		})
+	}
+}
+
+func TestInterceptInstallVersionResolutionFailure(t *testing.T) {
+	tests := [][]string{{"npm", "install", "react"}, {"poetry", "add", "django@latest"}}
+	for _, args := range tests {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			t.Setenv(envDisable, "0")
+			defer withExecFn(func(string, []string) { t.Fatal("unexpected install") })()
+			defer withSecurityBatchCheck(func([]security.Query) ([][]security.Vulnerability, error) {
+				t.Fatal("unexpected scan after resolution failure")
+				return nil, nil
+			})()
+			defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+				return "", errors.New("resolution failed")
+			})()
+			defer withLoadCache(emptyCache)()
+			output := captureStdout(t, func() {
+				expectProcessExit(t, 1, func() { Intercept(manager.Get(args[0]), args[1:]) })
+			})
+			if !strings.Contains(output, args[2]) {
+				t.Errorf("missing package label %q in %q", args[2], output)
+			}
+			if !strings.Contains(output, "resolution failed") {
+				t.Errorf("missing resolution error in %q", output)
+			}
+		})
 	}
 }
 
@@ -2209,14 +2313,6 @@ func TestCargoUpdateTargetsIncludesRepeatedPackageFlags(t *testing.T) {
 func TestExtractPackagesSkipsPythonManagerValueFlags(t *testing.T) {
 	mgr := &manager.Manager{Name: "poetry", Ecosystem: "PyPI", InstallCmds: []string{"add"}}
 	result := extractPackages(mgr, []string{"--group", "dev", "--source", "internal", "requests"})
-	unexpectedResult := len(result) != 1 || result[0] != "requests"
-	if unexpectedResult {
-		t.Errorf("expected only requests, got %v", result)
-	}
-}
-
-func TestExtractPackagesSkipsEditablePath(t *testing.T) {
-	result := extractPackages(pipMgr(), []string{"-e", ".", "requests"})
 	unexpectedResult := len(result) != 1 || result[0] != "requests"
 	if unexpectedResult {
 		t.Errorf("expected only requests, got %v", result)

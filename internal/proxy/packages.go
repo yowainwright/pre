@@ -704,6 +704,9 @@ func cargoUpdateTargets(mgr *manager.Manager, args []string) []string {
 }
 
 func installPackages(mgr *manager.Manager, args []string) ([]string, error) {
+	if err := pythonInstallError(mgr, args); err != nil {
+		return nil, err
+	}
 	packages := extractPackages(mgr, args)
 	packages = withoutGoRemovals(mgr, packages)
 	for _, path := range requirementFilePaths(mgr, args) {
@@ -714,6 +717,26 @@ func installPackages(mgr *manager.Manager, args []string) ([]string, error) {
 		packages = append(packages, fromFile...)
 	}
 	return uniquePackages(packages), nil
+}
+
+func pythonInstallError(mgr *manager.Manager, args []string) error {
+	notPython := mgr == nil || mgr.Ecosystem != "PyPI"
+	if notPython {
+		return nil
+	}
+	return walkPackageArgs(mgr, args, func(index int, option bool) error {
+		arg := args[index]
+		shortEditable := strings.HasPrefix(arg, "-e")
+		longEditable := arg == "--editable" || strings.HasPrefix(arg, "--editable=")
+		editableFlag := shortEditable || longEditable
+		editable := option && editableFlag
+		unsupportedTarget := !option && !isPackageArg(mgr, arg)
+		unsupportedSource := editable || unsupportedTarget
+		if unsupportedSource {
+			return errors.New("unsupported python dependency source cannot be scanned")
+		}
+		return nil
+	})
 }
 
 func withoutGoRemovals(mgr *manager.Manager, packages []string) []string {
@@ -792,30 +815,33 @@ func uniquePackages(packages []string) []string {
 
 func extractPackages(mgr *manager.Manager, args []string) []string {
 	result := make([]string, 0, len(args))
-	afterTerminator := false
-	for index := 0; index < len(args); index++ {
+	_ = walkPackageArgs(mgr, args, func(index int, option bool) error {
 		arg := args[index]
-		if arg == "--" {
-			afterTerminator = true
-			continue
+		packageArg := !option && isPackageArg(mgr, arg)
+		if packageArg {
+			result = append(result, arg)
 		}
-		skip, consumeNext := packageOption(mgr, arg, afterTerminator)
-		if consumeNext {
-			index++
-		}
-		if skip {
-			continue
-		}
-		result = appendPackageArg(result, mgr, arg)
-	}
+		return nil
+	})
 	return result
 }
 
-func appendPackageArg(result []string, mgr *manager.Manager, arg string) []string {
-	if !isPackageArg(mgr, arg) {
-		return result
+func walkPackageArgs(mgr *manager.Manager, args []string, visit func(int, bool) error) error {
+	afterTerminator := false
+	for index := 0; index < len(args); index++ {
+		if args[index] == "--" {
+			afterTerminator = true
+			continue
+		}
+		option, consumeNext := packageOption(mgr, args[index], afterTerminator)
+		if err := visit(index, option); err != nil {
+			return err
+		}
+		if consumeNext {
+			index++
+		}
 	}
-	return append(result, arg)
+	return nil
 }
 
 func packageOption(mgr *manager.Manager, arg string, afterTerminator bool) (bool, bool) {
@@ -870,9 +896,12 @@ func pythonFlagConsumesValue(managerName, flag string) bool {
 	flags := []string{
 		"-r", "--requirement", "--requirements", "-c", "--constraint", "-i", "--index-url", "--index", "--default-index",
 		"--extra-index-url", "-f", "--find-links", "--trusted-host", "--python", "--platform", "--python-version",
-		"--implementation", "--abi", "--target", "--root", "--prefix", "--src", "--upgrade-strategy",
+		"--implementation", "--abi", "-t", "--target", "--root", "--prefix", "--src", "--upgrade-strategy",
 		"--config-settings", "-C", "--global-option", "--build-option", "--only-binary", "--no-binary", "--report", "-e", "--editable",
 		"--project", "-P",
+	}
+	if managerName == "uv" {
+		flags = append(flags, "-p", "--constraints", "--config-setting")
 	}
 	if slices.Contains(flags, flag) {
 		return true

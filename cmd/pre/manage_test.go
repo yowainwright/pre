@@ -1309,12 +1309,24 @@ func TestBuildPoetryArgsUpdateAll(t *testing.T) {
 	}
 }
 
-func TestBuildPoetryArgsVersionedUpdate(t *testing.T) {
-	mgr := mustManager(t, "poetry")
-	got2, err2 := buildPoetryArgs(packageActionReq{Action: actionUpdate, Manager: mgr, Package: "django", Version: "4.2.0"}, "django")
-	unexpectedVersionedUpdate := err2 != nil || !reflect.DeepEqual(got2, []string{"add", "django@4.2.0"})
-	if unexpectedVersionedUpdate {
-		t.Errorf("expected versioned update, got err=%v got=%v", err2, got2)
+func TestBuildPoetryArgsExactVersions(t *testing.T) {
+	for _, action := range []packageAction{actionInstall, actionUpdate, actionDowngrade} {
+		t.Run(string(action), func(t *testing.T) {
+			mgr := mustManager(t, "poetry")
+			req := packageActionReq{Action: action, Manager: mgr, Package: "django", Version: "4.2.0"}
+			args, err := buildPackageManagerArgs(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(args, []string{"add", "django==4.2.0"}) {
+				t.Fatalf("expected exact Poetry pin, got %v", args)
+			}
+			name, version := manager.ParseSpec(mgr.Ecosystem, args[1])
+			wrongTarget := name != req.Package || version != req.Version
+			if wrongTarget {
+				t.Fatalf("expected scanner target %s@%s, got %s@%s", req.Package, req.Version, name, version)
+			}
+		})
 	}
 }
 
@@ -1997,7 +2009,7 @@ func pythonPackageArgCases(t *testing.T) []packageArgsCase {
 		{name: "uv uninstall", req: packageActionReq{Action: actionUninstall, Manager: mustManager(t, "uv"), Package: "urllib3"}, want: []string{"pip", "uninstall", "urllib3"}},
 		{name: "uv update all error", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "uv")}, wantErr: "uv updates require a package name"},
 		{name: "poetry update all", req: packageActionReq{Action: actionUpdate, Manager: mustManager(t, "poetry")}, want: []string{"update"}},
-		{name: "poetry downgrade", req: packageActionReq{Action: actionDowngrade, Manager: mustManager(t, "poetry"), Package: "django", Version: "4.2.0"}, want: []string{"add", "django@4.2.0"}},
+		{name: "poetry downgrade", req: packageActionReq{Action: actionDowngrade, Manager: mustManager(t, "poetry"), Package: "django", Version: "4.2.0"}, want: []string{"add", "django==4.2.0"}},
 	}
 }
 
@@ -2059,7 +2071,7 @@ func poetryInstallUpdateArgCases(t *testing.T) []packageArgsCase {
 		{
 			name: "poetry update with version",
 			req:  packageActionReq{Action: actionUpdate, Manager: mustManager(t, "poetry"), Package: "django", Version: "4.2.0"},
-			want: []string{"add", "django@4.2.0"},
+			want: []string{"add", "django==4.2.0"},
 		},
 	}
 }

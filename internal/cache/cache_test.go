@@ -286,6 +286,25 @@ func TestLoadEmpty(t *testing.T) {
 	}
 }
 
+func TestNullCacheLoadsAndUpdates(t *testing.T) {
+	dir := t.TempDir()
+	defer withCacheDir(dir)()
+	writeCacheFixture(t, dir, []byte("null"))
+	c := Load()
+	key := Key("npm", "react", "18.0.0")
+	Set(c, key)
+	repaired := readCacheFixture(t, dir)
+	invalidRepair := repaired == nil || len(repaired) != 0
+	if invalidRepair {
+		t.Fatalf("expected persisted empty object, got %#v", repaired)
+	}
+	writeCacheFixture(t, dir, []byte("null"))
+	Update(func(current Cache) { Set(current, key) })
+	if !Hit(Load(), key) {
+		t.Fatal("expected update to persist an entry from a null cache")
+	}
+}
+
 func TestSaveAndLoad(t *testing.T) {
 	defer withCacheDir(t.TempDir())()
 
@@ -620,7 +639,7 @@ func cacheWithOrderedEntries(names []string) Cache {
 func TestLoadPrunesExpiredEntries(t *testing.T) {
 	dir := t.TempDir()
 	defer withCacheDir(dir)()
-	writeExpiredCacheFixture(t, dir)
+	writeCacheFixture(t, dir, expiredCacheFixture())
 
 	c := Load()
 	assertOnlyFreshCacheEntry(t, c)
@@ -629,7 +648,7 @@ func TestLoadPrunesExpiredEntries(t *testing.T) {
 func TestLoadPersistsPrunedEntries(t *testing.T) {
 	dir := t.TempDir()
 	defer withCacheDir(dir)()
-	writeExpiredCacheFixture(t, dir)
+	writeCacheFixture(t, dir, expiredCacheFixture())
 
 	Load()
 	c := readCacheFixture(t, dir)
@@ -650,12 +669,11 @@ func readCacheFixture(t *testing.T, dir string) Cache {
 	return c
 }
 
-func writeExpiredCacheFixture(t *testing.T, dir string) {
+func writeCacheFixture(t *testing.T, dir string, data []byte) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(dir, "pre"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	data := expiredCacheFixture()
 	path := filepath.Join(dir, "pre", "versions.json")
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		t.Fatal(err)

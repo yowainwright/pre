@@ -58,10 +58,12 @@ func loadConfigFile(path string, cfg *Config) {
 		}
 		return
 	}
-	if err := json.Unmarshal(data, cfg); err != nil {
+	loaded := defaults()
+	if err := json.Unmarshal(data, loaded); err != nil {
 		recordConfigEvent("pre.config.load_failed", err, len(data))
 		return
 	}
+	*cfg = *loaded
 	obs.Record("pre.config.loaded", map[string]any{"config_bytes": len(data)})
 }
 

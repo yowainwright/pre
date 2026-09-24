@@ -465,44 +465,6 @@ Example output:
   - 2026-09-07T12:00:01Z pre.scan.approved
 ```
 
-### `pre skills add`
-
-Install the agent skill in `.claude/skills/pre`. Add `--global` to install under your home directory instead.
-
-```sh
-pre skills add
-```
-
-New `.claude/skills/pre/SKILL.md` (excerpt):
-
-```diff
-+---
-+name: pre
-+description: >
-+  Use when installing, configuring, or troubleshooting pre, the security
-+  proxy that scans packages against the OSV database before package
-+  managers install them.
-+---
-```
-
-### `pre skills show`
-
-Print the bundled agent skill.
-
-```sh
-pre skills show
-```
-
-Output excerpt:
-
-```text
-# pre
-
-Run `pre setup` once to install shell hooks in ~/.zshrc or ~/.bashrc.
-Run `pre status` for read-only install state, managers, and cache info.
-Run `pre teardown` to remove shell hooks.
-```
-
 ### `pre scan system`
 
 Scan cached packages, not a full inventory of installed software. Runs silently; view results with [pre status](#pre-status).
@@ -560,6 +522,11 @@ pre: removed binary /usr/local/bin/pre
 
 `pre` is a vulnerability guardrail, not a sandbox or full supply-chain policy. Keep lockfiles, review dependency changes, and run ecosystem-native audit tools in CI.
 
+## Agent skill
+
+The [pre skill](skills/pre/SKILL.md) provides agent instructions for installing,
+configuring, and using pre. Install it with your agent's skill tooling.
+
 ## Repository layout
 
 ```text
@@ -567,8 +534,8 @@ cmd/pre/           CLI dispatch, lifecycle, package management, and screenshots
 internal/manager/  Package-manager definitions, manifests, lockfiles, and versions
 internal/proxy/    Command interception, scanning, shell hooks, and rendering
 internal/security/ OSV client and severity scoring
-internal/skills/   Embedded pre skill
 scripts/           Setup and release automation
+skills/pre/        Agent skill
 tests/e2e/          Go and Docker package-manager tests
 tests/integration/  Live-service tests
 tests/scripts/      Shell tests
