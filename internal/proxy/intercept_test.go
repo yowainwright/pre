@@ -816,18 +816,16 @@ func TestInterceptPythonInstallPreservesOptions(t *testing.T) {
 func pythonInstallOptionCases() [][]string {
 	return [][]string{
 		{"pip", "install", "-t", "./site", "requests==2.32.0"},
-		{"pip3", "install", "-t./site", "requests==2.32.0"},
 		{"pip", "install", "--target=./site", "--log=./pip.log", "--cache-dir=./cache", "requests==2.32.0"},
 		{"pip", "install", "--log", "./pip.log", "requests==2.32.0"},
-		{"pip3", "install", "--cache-dir", "./cache", "requests==2.32.0"},
+		{"pip3", "install", "-t./site", "--cache-dir", "./cache", "requests==2.32.0"},
 		{"pip", "install", "requests==2.32.0", "--proxy", "https://proxy.example.com", "--cert", "./ca.pem", "--client-cert", "./client.pem"},
 		{"uv", "pip", "install", "--target", "./site", "--", "requests==2.32.0"},
-		{"uv", "pip", "install", "--cache-dir", "./cache", "requests==2.32.0"},
+		{"uv", "pip", "install", "-t", "./site", "--cache-dir", "./cache", "requests==2.32.0"},
 		{
 			"uv", "add", "--directory", "./project", "--config-file", "./uv.toml", "--cache-dir", "./cache",
 			"--color", "never", "--allow-insecure-host", "localhost", "--keyring-provider", "subprocess", "requests==2.32.0",
 		},
-		{"uv", "pip", "install", "-t", "./site", "requests==2.32.0"},
 		{"uv", "pip", "install", "-p", "./python", "requests==2.32.0"},
 		{"uv", "pip", "install", "--constraints", "constraints.txt", "requests==2.32.0"},
 		{"uv", "pip", "install", "--config-setting", "setting=value", "requests==2.32.0"},
