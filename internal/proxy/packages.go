@@ -898,10 +898,12 @@ func pythonFlagConsumesValue(managerName, flag string) bool {
 		"--extra-index-url", "-f", "--find-links", "--trusted-host", "--python", "--platform", "--python-version",
 		"--implementation", "--abi", "-t", "--target", "--root", "--prefix", "--src", "--upgrade-strategy",
 		"--config-settings", "-C", "--global-option", "--build-option", "--only-binary", "--no-binary", "--report", "-e", "--editable",
-		"--project", "-P",
+		"--project", "-P", "--cache-dir", "--keyring-provider",
+		"--log", "--proxy", "--cert", "--client-cert", "--retries", "--timeout", "--exists-action",
+		"--use-feature", "--use-deprecated", "--resume-retries", "--progress-bar", "--root-user-action",
 	}
 	if managerName == "uv" {
-		flags = append(flags, "-p", "--constraints", "--config-setting")
+		flags = append(flags, "-p", "--constraints", "--config-setting", "--color", "--directory", "--config-file", "--allow-insecure-host")
 	}
 	if slices.Contains(flags, flag) {
 		return true
