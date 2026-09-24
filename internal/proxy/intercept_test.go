@@ -633,16 +633,16 @@ func TestInterceptNPMManifestExternalSourceBlocks(t *testing.T) {
 func TestInterceptPythonUnsupportedSourcesBlock(t *testing.T) {
 	tests := [][]string{
 		{"pip", "install", "requests==2.32.0", "local.whl"},
-		{"pip", "install", "-t", "./site", "requests==2.32.0", "local.whl"},
+		{"pip", "install", "-t", "./site", "--log", "./pip.log", "requests==2.32.0", "local.whl"},
 		{"pip3", "install", "local.tar.gz"},
 		{"pip", "install", "--", "./local"},
-		{"pip", "install", "--", "-t", "./site", "requests==2.32.0"},
+		{"pip", "install", "--", "--log", "./pip.log", "requests==2.32.0"},
 		{"pip", "install", "https://example.com/private.whl"},
 		{"pip", "install", "git+https://example.com/private.git"},
 		{"pip", "install", "-e", "."},
 		{"pip", "install", "-e."},
-		{"pip", "install", "--editable", "."},
-		{"uv", "pip", "install", "local.whl"},
+		{"pip", "install", "--cache-dir=./cache", "--editable", "."},
+		{"uv", "pip", "install", "--cache-dir", "./cache", "requests==2.32.0", "local.whl"},
 		{"uv", "add", "--editable=."},
 		{"poetry", "add", "./local"},
 	}
@@ -783,24 +783,17 @@ func assertPublicRegistryInstall(t *testing.T, mgr *manager.Manager, args []stri
 
 func TestInterceptPythonInstallPreservesOptions(t *testing.T) {
 	t.Setenv(envDisable, "0")
-	tests := [][]string{
-		{"pip", "install", "-t", "./site", "requests==2.32.0"},
-		{"pip3", "install", "-t./site", "requests==2.32.0"},
-		{"pip", "install", "--target=./site", "requests==2.32.0"},
-		{"uv", "pip", "install", "--target", "./site", "--", "requests==2.32.0"},
-		{"uv", "pip", "install", "-t", "./site", "requests==2.32.0"},
-		{"uv", "pip", "install", "-p", "./python", "requests==2.32.0"},
-		{"uv", "pip", "install", "--constraints", "constraints.txt", "requests==2.32.0"},
-		{"uv", "pip", "install", "--config-setting", "setting=value", "requests==2.32.0"},
-		{"uv", "add", "--constraints=constraints.txt", "--config-setting=setting=value", "requests==2.32.0"},
-	}
-	for _, args := range tests {
+	for _, args := range pythonInstallOptionCases() {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			wantArgs := slices.Clone(args)
 			scanned, executed := false, false
 			defer withStdinInput("y\n")()
 			defer withLoadCache(emptyCache)()
 			defer withUpdateCache(noopUpdate)()
+			defer withResolveVersion(func(*manager.Manager, string) (string, error) {
+				t.Fatal("unexpected version resolution for an option value")
+				return "", nil
+			})()
 			defer withExecFn(func(name string, got []string) {
 				executed = name == wantArgs[0] && slices.Equal(got, wantArgs[1:])
 			})()
@@ -817,6 +810,26 @@ func TestInterceptPythonInstallPreservesOptions(t *testing.T) {
 				t.Error("expected approved install with unchanged arguments")
 			}
 		})
+	}
+}
+
+func pythonInstallOptionCases() [][]string {
+	return [][]string{
+		{"pip", "install", "-t", "./site", "requests==2.32.0"},
+		{"pip", "install", "--target=./site", "--log=./pip.log", "--cache-dir=./cache", "requests==2.32.0"},
+		{"pip", "install", "--log", "./pip.log", "requests==2.32.0"},
+		{"pip3", "install", "-t./site", "--cache-dir", "./cache", "requests==2.32.0"},
+		{"pip", "install", "requests==2.32.0", "--proxy", "https://proxy.example.com", "--cert", "./ca.pem", "--client-cert", "./client.pem"},
+		{"uv", "pip", "install", "--target", "./site", "--", "requests==2.32.0"},
+		{"uv", "pip", "install", "-t", "./site", "--cache-dir", "./cache", "requests==2.32.0"},
+		{
+			"uv", "add", "--directory", "./project", "--config-file", "./uv.toml", "--cache-dir", "./cache",
+			"--color", "never", "--allow-insecure-host", "localhost", "--keyring-provider", "subprocess", "requests==2.32.0",
+		},
+		{"uv", "pip", "install", "-p", "./python", "requests==2.32.0"},
+		{"uv", "pip", "install", "--constraints", "constraints.txt", "requests==2.32.0"},
+		{"uv", "pip", "install", "--config-setting", "setting=value", "requests==2.32.0"},
+		{"uv", "add", "--constraints=constraints.txt", "--config-setting=setting=value", "requests==2.32.0"},
 	}
 }
 
