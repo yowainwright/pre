@@ -527,6 +527,26 @@ pre: removed binary /usr/local/bin/pre
 The [pre skill](skills/pre/SKILL.md) provides agent instructions for installing,
 configuring, and using pre. Install it with your agent's skill tooling.
 
+## Runtime architecture
+
+```mermaid
+flowchart LR
+    CLI["cmd/pre<br/>CLI entry point"]
+    PROXY["internal/proxy<br/>interception and orchestration"]
+    CONFIG["internal/config<br/>user settings"]
+    MANAGER["internal/manager<br/>package parsing and resolution"]
+    SECURITY["internal/security<br/>OSV queries and CVSS scoring"]
+    CACHE["internal/cache<br/>trusted scan results"]
+    DISPLAY["internal/display<br/>terminal output"]
+
+    CLI --> PROXY
+    CLI --> CONFIG
+    PROXY --> MANAGER
+    PROXY --> SECURITY
+    PROXY --> CACHE
+    PROXY --> DISPLAY
+```
+
 ## Repository layout
 
 ```text

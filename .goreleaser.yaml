@@ -45,6 +45,31 @@ signs:
     artifacts: checksum
     signature: ${artifact}.bundle
 
+brews:
+  - name: pre
+    directory: Formula
+    repository:
+      owner: yowainwright
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: github-actions[bot]
+      email: github-actions[bot]@users.noreply.github.com
+    homepage: https://github.com/yowainwright/pre
+    description: Security proxy for package managers
+    license: MIT
+    install: bin.install Dir["pre-*"].first => "pre"
+    caveats: |
+      Shell hooks are not installed automatically. To intercept package
+      manager commands, run:
+        pre setup
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/pre --version")
+      ENV["HOME"] = testpath.to_s
+      output = shell_output("#{bin}/pre status")
+      assert_match "shell hooks: not installed", output
+
 changelog:
   sort: asc
   filters:

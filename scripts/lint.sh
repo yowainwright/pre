@@ -4,10 +4,13 @@ set -e
 GOLANGCI_LINT_VERSION="${GOLANGCI_LINT_VERSION:-v2.12.2}"
 LEGIBILITY_BIN="${LEGIBILITY_BIN:-./bin/legibility-golangci-lint}"
 SHELLCHECK_BIN="${SHELLCHECK_BIN:-shellcheck}"
-SHELL_LEGIBILITY_VERSION="0.2.1"
-SHELL_LEGIBILITY_SHA256="137942db1000e72ce8f8e2fbe8c10e334c70dc554ad2ef08aa49f0778f0302c0"
+SHELL_LEGIBILITY_VERSION="0.3.1"
+SHELL_LEGIBILITY_SHA256_DARWIN_ARM64="1aabd1c8ca0d45002eaaae850279c565be5f8c5b2299b0f50f93c8d8290c6e46"
+SHELL_LEGIBILITY_SHA256_DARWIN_AMD64="1fea29d94b6419f56801ff58dd9a8d156e88f21702d325ac59c5a7e0bfc25dd9"
+SHELL_LEGIBILITY_SHA256_LINUX_ARM64="690e9c8e510c3327138e4e4911e1845c16c2722a3a66f64f275572b03e8a651f"
+SHELL_LEGIBILITY_SHA256_LINUX_AMD64="82cb4dee7b70947e719f59afeb89a98c03558e1810cf29e6503f0178f74e36bc"
 SHELL_LEGIBILITY_DIR="./bin/shellcheck-legibility-${SHELL_LEGIBILITY_VERSION}"
-SHELL_LEGIBILITY_BIN="${SHELL_LEGIBILITY_BIN:-${SHELL_LEGIBILITY_DIR}/bin/shellcheck-legibility}"
+SHELL_LEGIBILITY_BIN="${SHELL_LEGIBILITY_BIN:-${SHELL_LEGIBILITY_DIR}/shellcheck-legibility}"
 LINT_BASE_REV="${LINT_BASE_REV:-HEAD}"
 
 strict=0
@@ -75,15 +78,46 @@ ensure_legibility() {
   test -x "$LEGIBILITY_BIN"
 }
 
+shell_legibility_target() {
+  host_os="$(uname -s)"
+  host_machine="$(uname -m)"
+  case "$host_os" in
+    Darwin) target_os="darwin" ;;
+    Linux) target_os="linux" ;;
+    *) return 1 ;;
+  esac
+  case "$host_machine" in
+    x86_64) target_arch="amd64" ;;
+    arm64|aarch64) target_arch="arm64" ;;
+    *) return 1 ;;
+  esac
+  printf '%s-%s\n' "$target_os" "$target_arch"
+}
+
+shell_legibility_sha256() {
+  case "${1:-}" in
+    darwin-arm64) echo "$SHELL_LEGIBILITY_SHA256_DARWIN_ARM64" ;;
+    darwin-amd64) echo "$SHELL_LEGIBILITY_SHA256_DARWIN_AMD64" ;;
+    linux-arm64) echo "$SHELL_LEGIBILITY_SHA256_LINUX_ARM64" ;;
+    linux-amd64) echo "$SHELL_LEGIBILITY_SHA256_LINUX_AMD64" ;;
+    *) return 1 ;;
+  esac
+}
+
 install_shell_legibility() {
+  target="$(shell_legibility_target)" || {
+    printf 'unsupported platform for shellcheck-legibility\n' >&2
+    return 1
+  }
+  expected_sha="$(shell_legibility_sha256 "$target")" || return "$?"
   archive="${SHELL_LEGIBILITY_DIR}.tar.gz"
   release_url="https://github.com/yowainwright/shellcheck_legibility/releases/download/v${SHELL_LEGIBILITY_VERSION}"
-  mkdir -p ./bin || return "$?"
+  mkdir -p "$SHELL_LEGIBILITY_DIR" || return "$?"
   curl --fail --location --silent --show-error --retry 3 \
     --proto '=https' --proto-redir '=https' \
-    --output "$archive" "${release_url}/shellcheck-legibility-${SHELL_LEGIBILITY_VERSION}.tar.gz" || return "$?"
-  printf '%s  %s\n' "$SHELL_LEGIBILITY_SHA256" "$archive" | shasum -a 256 -c - || return "$?"
-  tar -xzf "$archive" -C ./bin
+    --output "$archive" "${release_url}/shellcheck-legibility-${target}.tar.gz" || return "$?"
+  printf '%s  %s\n' "$expected_sha" "$archive" | shasum -a 256 -c - || return "$?"
+  tar -xzf "$archive" -C "$SHELL_LEGIBILITY_DIR"
 }
 
 ensure_shell_legibility() {
