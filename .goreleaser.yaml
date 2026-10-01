@@ -48,6 +48,7 @@ signs:
 brews:
   - name: pre
     directory: Formula
+    skip_upload: true
     repository:
       owner: yowainwright
       name: homebrew-tap
