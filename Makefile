@@ -9,7 +9,10 @@ E2E_TEST ?= npm
 LDFLAGS := -ldflags="-s -w -X main.version=$(VERSION)"
 BUILD := CGO_ENABLED=0 go build -trimpath $(LDFLAGS)
 BINARY := $(DIST)/pre
+HOST_OS := $(shell uname -s)
 SNAPSHOT_PLATFORMS := darwin-amd64 darwin-arm64 linux-amd64 linux-arm64
+FORMULA_PATH := $(DIST)/homebrew/Formula/pre.rb
+FORMULA_PLATFORM_COUNT := 4
 E2E_ROOT := tests/e2e
 E2E_DOCKERFILE := $(E2E_ROOT)/Dockerfile
 E2E_RUNNER := $(E2E_ROOT)/package_manager_test.sh
@@ -25,7 +28,8 @@ E2E_TEST_SCRIPT := $(E2E_ROOT)/$(E2E_TEST)_test.sh
 .PHONY: screenshots secrets security setup snapshot tag
 .PHONY: test test-e2e test-e2e-build test-e2e-docker test-e2e-list
 .PHONY: test-integration test-race test-scripts
-.PHONY: verify-release-binary verify-e2e verify-e2e-test verify-snapshot vuln
+.PHONY: verify-release-binary verify-e2e verify-e2e-test verify-formula-install
+.PHONY: verify-snapshot vuln
 
 build:
 	$(BUILD) -o $(BINARY) ./cmd/pre
@@ -59,6 +63,16 @@ verify-snapshot:
 verify-release-binary: verify-snapshot
 	sh tests/scripts/release_artifact_test.sh "$(DIST)"
 
+verify-formula-install: verify-snapshot
+	test -s $(FORMULA_PATH)
+	ruby -c $(FORMULA_PATH)
+	grep -Eq 'version "[^"]+"' $(FORMULA_PATH)
+	grep -Eq '^[0-9a-f]{64}  install.sh$$' $(DIST)/checksums.txt
+	test "$$(grep -Ec 'sha256 "[0-9a-f]{64}"' $(FORMULA_PATH))" -eq $(FORMULA_PLATFORM_COUNT)
+	grep -Fq 'bin.install Dir["pre-*"].first => "pre"' $(FORMULA_PATH)
+	grep -Fq 'pre setup' $(FORMULA_PATH)
+	sh tests/scripts/homebrew_formula_test.sh $(DIST)
+
 release-preview:
 	$(MAKE) lint-agent-all
 	$(MAKE) test-race
@@ -69,6 +83,9 @@ release-preview:
 	$(MAKE) release-check
 	$(MAKE) snapshot
 	$(MAKE) verify-release-binary
+ifeq ($(HOST_OS),Darwin)
+	$(MAKE) verify-formula-install
+endif
 
 clean:
 	rm -rf $(DIST)

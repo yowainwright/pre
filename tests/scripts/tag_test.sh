@@ -136,20 +136,22 @@ test_svu() {
   check "svu_prerelease delegates" "patch --prerelease alpha" "$(svu_prerelease patch alpha)"
 }
 
+mock_svu_prerelease() {
+  case "${1-}/${2-}" in
+  patch/alpha) echo "v1.0.1-alpha" ;;
+  patch/beta) echo "v1.0.1-beta" ;;
+  patch/rc) echo "v1.0.1-rc" ;;
+  minor/alpha) echo "v1.1.0-alpha" ;;
+  minor/beta) echo "v1.1.0-beta" ;;
+  minor/rc) echo "v1.1.0-rc" ;;
+  major/alpha) echo "v2.0.0-alpha" ;;
+  major/beta) echo "v2.0.0-beta" ;;
+  major/rc) echo "v2.0.0-rc" ;;
+  esac
+}
+
 test_prompt_prerelease() {
-  svu_prerelease() {
-    case "${1-}/${2-}" in
-    patch/alpha) echo "v1.0.1-alpha" ;;
-    patch/beta) echo "v1.0.1-beta" ;;
-    patch/rc) echo "v1.0.1-rc" ;;
-    minor/alpha) echo "v1.1.0-alpha" ;;
-    minor/beta) echo "v1.1.0-beta" ;;
-    minor/rc) echo "v1.1.0-rc" ;;
-    major/alpha) echo "v2.0.0-alpha" ;;
-    major/beta) echo "v2.0.0-beta" ;;
-    major/rc) echo "v2.0.0-rc" ;;
-    esac
-  }
+  svu_prerelease() { mock_svu_prerelease "$@"; }
 
   read_line() { REPLY="1"; }
   check "prompt_prerelease none" "v1.0.1" "$(prompt_prerelease patch v1.0.1)"

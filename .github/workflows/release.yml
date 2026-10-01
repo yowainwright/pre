@@ -96,6 +96,10 @@ jobs:
       - name: Test release binary
         run: make verify-release-binary
 
+      - name: Install generated Homebrew formula
+        if: runner.os == 'macOS'
+        run: make verify-formula-install
+
   release:
     needs: [preflight, release-smoke]
     runs-on: ubuntu-latest

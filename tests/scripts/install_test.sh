@@ -98,7 +98,8 @@ EOF
 test_compute_checksum() {
   tmp="$(mktemp)"
   printf "hello" >"$tmp"
-  expected_sum="$(shasum -a 256 "$tmp" | awk '{print $1}')"
+  checksum_output="$(shasum -a 256 "$tmp")"
+  expected_sum="${checksum_output%% *}"
   check "compute_checksum" "$expected_sum" "$(compute_checksum "$tmp")"
   rm -f "$tmp"
 }
@@ -106,7 +107,8 @@ test_compute_checksum() {
 test_verify_checksum() {
   tmp="$(mktemp)"
   printf "hello" >"$tmp"
-  good_sum="$(shasum -a 256 "$tmp" | awk '{print $1}')"
+  checksum_output="$(shasum -a 256 "$tmp")"
+  good_sum="${checksum_output%% *}"
   bad_sum="$(printf '%064d' 0)"
   check "verify_checksum passes" "0" "$(verify_checksum_status "$tmp" "$good_sum")"
   check "verify_checksum fails" "1" "$(verify_checksum_status "$tmp" "$bad_sum")"
