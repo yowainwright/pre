@@ -1,6 +1,6 @@
 VERSION ?= dev
 GOVULNCHECK_VERSION ?= v1.2.0
-GOSEC_VERSION ?= v2.25.0
+GOSEC_VERSION ?= v2.29.0
 GOSEC_FLAGS ?= -quiet -exclude=G304,G703
 GOSEC := go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
 DIST ?= dist
