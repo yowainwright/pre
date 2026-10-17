@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/yowainwright/pre/internal/helpers"
 )
 
 type cargoWorkspace struct {
@@ -199,20 +201,9 @@ func (w cargoWorkspace) memberManifestPaths() ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		paths = appendCargoMemberPaths(paths, seen, matches)
+		paths = helpers.AppendUniqueStrings(paths, seen, matches)
 	}
 	return paths, nil
-}
-
-func appendCargoMemberPaths(paths []string, seen map[string]bool, matches []string) []string {
-	for _, path := range matches {
-		if seen[path] {
-			continue
-		}
-		seen[path] = true
-		paths = append(paths, path)
-	}
-	return paths
 }
 
 func cargoWorkspaceExcludes(root string, patterns []string) (map[string]bool, error) {
@@ -325,7 +316,7 @@ func (p cargoProject) directPackages() ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		packages = appendUniquePackageSpecs(packages, seen, manifestPackages)
+		packages = helpers.AppendUniqueStrings(packages, seen, manifestPackages)
 	}
 	return packages, nil
 }
@@ -356,17 +347,6 @@ func (p cargoProject) appendInheritedPackages(packages []string, manifest cargoM
 		}
 	}
 	return packages, nil
-}
-
-func appendUniquePackageSpecs(packages []string, seen map[string]bool, specs []string) []string {
-	for _, spec := range specs {
-		if seen[spec] {
-			continue
-		}
-		seen[spec] = true
-		packages = append(packages, spec)
-	}
-	return packages
 }
 
 func packageSpecSet(packages []string) map[string]bool {

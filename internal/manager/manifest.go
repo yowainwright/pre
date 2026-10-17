@@ -942,18 +942,16 @@ func npmDependencySpec(name, spec string) string {
 func IsSupportedNPMRegistrySpec(spec string) bool {
 	normalized := strings.ToLower(spec)
 	for _, prefix := range []string{
-		"file:", "git+", "git://", "git@", "ssh://", "github:", "gitlab:", "bitbucket:",
+		"file:", "git+", "git@", "github:", "gitlab:", "bitbucket:",
 		"workspace:", "catalog:", "link:", "portal:", "patch:", "exec:", "npm:",
-		"http://", "https://",
 	} {
 		if strings.HasPrefix(normalized, prefix) {
 			return false
 		}
 	}
-	isPath := strings.HasPrefix(normalized, "./") || strings.HasPrefix(normalized, "../") || strings.HasPrefix(normalized, "/")
-	isRepositoryShorthand := strings.Contains(spec, "/")
+	hasSlash := strings.Contains(spec, "/")
 	isTarball := strings.HasSuffix(normalized, ".tgz") || strings.HasSuffix(normalized, ".tar.gz")
-	unsupported := isPath || isRepositoryShorthand || isTarball
+	unsupported := hasSlash || isTarball
 	return !unsupported
 }
 
