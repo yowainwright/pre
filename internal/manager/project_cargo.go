@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/yowainwright/pre/internal/helpers"
 )
 
 type cargoWorkspace struct {
@@ -14,7 +16,7 @@ type cargoWorkspace struct {
 
 type cargoProject struct {
 	manifestPath string
-	state        cargoManifestState
+	manifests    []cargoManifestFile
 	workspace    cargoWorkspace
 }
 
@@ -65,27 +67,34 @@ func readCargoProject(manifestPath string) (cargoProject, error) {
 	if err != nil {
 		return cargoProject{}, err
 	}
-	workspace, err := discoverCargoWorkspace(manifestPath)
+	workspace, err := discoverCargoWorkspace(manifestPath, state)
 	if err != nil {
 		return cargoProject{}, err
 	}
-	project := cargoProject{manifestPath: manifestPath, state: state, workspace: workspace}
+	manifests, err := readCargoManifests(manifestPath, state, workspace)
+	if err != nil {
+		return cargoProject{}, err
+	}
+	project := cargoProject{manifestPath: manifestPath, manifests: manifests, workspace: workspace}
 	return project, nil
 }
 
-func discoverCargoWorkspace(manifestPath string) (cargoWorkspace, error) {
+func discoverCargoWorkspace(manifestPath string, state cargoManifestState) (cargoWorkspace, error) {
 	candidate := filepath.Clean(manifestPath)
+	if state.hasWorkspace {
+		return cargoWorkspace{manifestPath: candidate, state: state}, nil
+	}
 	for {
-		workspace, found, err := cargoWorkspaceAt(candidate)
-		searchComplete := err != nil || found
-		if searchComplete {
-			return workspace, err
-		}
 		parent, ok := parentCargoManifestPath(candidate)
 		if !ok {
 			return cargoWorkspace{}, nil
 		}
 		candidate = parent
+		workspace, found, err := cargoWorkspaceAt(candidate)
+		searchComplete := err != nil || found
+		if searchComplete {
+			return workspace, err
+		}
 	}
 }
 
@@ -136,15 +145,15 @@ func findCargoManifest(startPath, candidate string) (string, error) {
 	return "", fmt.Errorf("manifest Cargo.toml not found from %s: %w", startPath, os.ErrNotExist)
 }
 
-func (p cargoProject) manifests() ([]cargoManifestFile, error) {
+func readCargoManifests(path string, state cargoManifestState, workspace cargoWorkspace) ([]cargoManifestFile, error) {
 	seen := make(map[string]bool)
 	var manifests []cargoManifestFile
-	manifests, err := appendCargoManifest(manifests, seen, p.manifestPath, p.state)
-	projectComplete := err != nil || p.workspace.manifestPath == ""
+	manifests, err := appendCargoManifest(manifests, seen, path, state)
+	projectComplete := err != nil || workspace.manifestPath == ""
 	if projectComplete {
 		return manifests, err
 	}
-	return p.workspace.appendManifests(manifests, seen)
+	return workspace.appendManifests(manifests, seen)
 }
 
 func (w cargoWorkspace) appendManifests(manifests []cargoManifestFile, seen map[string]bool) ([]cargoManifestFile, error) {
@@ -166,6 +175,9 @@ func (w cargoWorkspace) appendManifests(manifests []cargoManifestFile, seen map[
 }
 
 func readAndAppendCargoManifest(files []cargoManifestFile, seen map[string]bool, path string) ([]cargoManifestFile, error) {
+	if seen[path] {
+		return files, nil
+	}
 	state, err := readCargoManifestState(path)
 	if err != nil {
 		return nil, err
@@ -199,20 +211,9 @@ func (w cargoWorkspace) memberManifestPaths() ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		paths = appendCargoMemberPaths(paths, seen, matches)
+		paths = helpers.AppendUniqueStrings(paths, seen, matches)
 	}
 	return paths, nil
-}
-
-func appendCargoMemberPaths(paths []string, seen map[string]bool, matches []string) []string {
-	for _, path := range matches {
-		if seen[path] {
-			continue
-		}
-		seen[path] = true
-		paths = append(paths, path)
-	}
-	return paths
 }
 
 func cargoWorkspaceExcludes(root string, patterns []string) (map[string]bool, error) {
@@ -275,11 +276,7 @@ func cargoMemberManifestPath(memberPath string) (string, error) {
 }
 
 func (p cargoProject) validateSources() error {
-	manifests, err := p.manifests()
-	if err != nil {
-		return err
-	}
-	for _, manifest := range manifests {
+	for _, manifest := range p.manifests {
 		if err := validateCargoManifestFile(manifest); err != nil {
 			return err
 		}
@@ -314,18 +311,14 @@ func (p cargoProject) lockPath() string {
 }
 
 func (p cargoProject) directPackages() ([]string, error) {
-	manifests, err := p.manifests()
-	if err != nil {
-		return nil, err
-	}
 	var packages []string
 	seen := make(map[string]bool)
-	for _, manifest := range manifests {
+	for _, manifest := range p.manifests {
 		manifestPackages, err := p.manifestPackages(manifest)
 		if err != nil {
 			return nil, err
 		}
-		packages = appendUniquePackageSpecs(packages, seen, manifestPackages)
+		packages = helpers.AppendUniqueStrings(packages, seen, manifestPackages)
 	}
 	return packages, nil
 }
@@ -356,17 +349,6 @@ func (p cargoProject) appendInheritedPackages(packages []string, manifest cargoM
 		}
 	}
 	return packages, nil
-}
-
-func appendUniquePackageSpecs(packages []string, seen map[string]bool, specs []string) []string {
-	for _, spec := range specs {
-		if seen[spec] {
-			continue
-		}
-		seen[spec] = true
-		packages = append(packages, spec)
-	}
-	return packages
 }
 
 func packageSpecSet(packages []string) map[string]bool {

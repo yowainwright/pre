@@ -24,3 +24,9 @@ linters:
           max-function-lines: 20
           max-function-params: 5
           max-naked-return-lines: 5
+  exclusions:
+    rules:
+      - path: ^internal/helpers/
+        text: 'LEG046 no-generic-package-names:'
+        linters:
+          - legibility

@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"cmp"
 	"strconv"
 	"strings"
 )
@@ -107,7 +108,7 @@ func compareCargoPrereleaseParts(leftParts, rightParts []string) int {
 			return comparison
 		}
 	}
-	return compareInt(len(leftParts), len(rightParts))
+	return cmp.Compare(len(leftParts), len(rightParts))
 }
 
 func compareCargoPrereleasePart(left, right string) int {
@@ -115,7 +116,7 @@ func compareCargoPrereleasePart(left, right string) int {
 	rightNumber, rightErr := strconv.Atoi(right)
 	switch {
 	case leftErr == nil && rightErr == nil:
-		return compareInt(leftNumber, rightNumber)
+		return cmp.Compare(leftNumber, rightNumber)
 	case leftErr == nil:
 		return -1
 	case rightErr == nil:
@@ -127,16 +128,6 @@ func compareCargoPrereleasePart(left, right string) int {
 	default:
 		return 0
 	}
-}
-
-func compareInt(left, right int) int {
-	if left < right {
-		return -1
-	}
-	if left > right {
-		return 1
-	}
-	return 0
 }
 
 func cargoRequirementMatches(requirement string, version cargoSemver) bool {
@@ -305,16 +296,8 @@ func cargoWildcardMatches(comparator string, version cargoSemver) bool {
 		return false
 	}
 	lowerComparison := compareCargoSemver(version, partial.version)
-	upper := cargoWildcardUpperBound(partial)
+	upper := cargoTildeUpperBound(partial)
 	upperComparison := compareCargoSemver(version, upper)
 	inRange := lowerComparison >= 0 && upperComparison < 0
 	return inRange
-}
-
-func cargoWildcardUpperBound(partial cargoPartialVersion) cargoSemver {
-	version := partial.version
-	if partial.components == 1 {
-		return cargoSemver{major: version.major + 1}
-	}
-	return cargoSemver{major: version.major, minor: version.minor + 1}
 }

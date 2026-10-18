@@ -73,7 +73,7 @@ func writeObsResponse(options obsOptions, stdout, stderr io.Writer, response obs
 		return writeObsJSON(stdout, stderr, response)
 	}
 	if options.eventsOnly {
-		writeObsEvents(stdout, response.Events)
+		writeObsEventLines(stdout, response.Events)
 		return 0
 	}
 	writeObsText(stdout, response)
@@ -164,10 +164,6 @@ func writeObsText(stdout io.Writer, response obsReadResponse) {
 	fmt.Fprintf(stdout, "  goroutines: %d\n", response.Runtime.Goroutines)
 	fmt.Fprintf(stdout, "events:\n")
 	writeObsEventLines(stdout, response.Events)
-}
-
-func writeObsEvents(stdout io.Writer, events []obs.Event) {
-	writeObsEventLines(stdout, events)
 }
 
 func writeObsEventLines(stdout io.Writer, events []obs.Event) {

@@ -1020,7 +1020,7 @@ func (ui *manageUI) runAction(req packageActionReq, term manageTerminal, stdout,
 	term.suspend()
 	fmt.Fprint(stdout, ansiShowCursor+ansiReset+ansiClear)
 	fmt.Fprintf(stdout, "running: pre %s %s\n\n", req.Manager.Name, strings.Join(args, " "))
-	err = executePackageActionWithInput(req, term.commandInput(), stdout, stderr)
+	err = runPreManagerCommandWithInput(req.Manager, args, term.commandInput(), stdout, stderr)
 	ui.setActionResult(req, err, stderr)
 	manageActionPauseFn()
 	term.resume()

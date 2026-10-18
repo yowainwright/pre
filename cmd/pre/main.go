@@ -137,14 +137,8 @@ func handlePackages(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "manage", "m", "tui":
 		return handleManage(args[1:], stdout, stderr)
-	case "install":
-		return handlePackageAction(actionInstall, args[1:], stdout, stderr)
-	case "update", "upgrade":
-		return handlePackageAction(actionUpdate, args[1:], stdout, stderr)
-	case "downgrade":
-		return handlePackageAction(actionDowngrade, args[1:], stdout, stderr)
-	case "uninstall", "remove":
-		return handlePackageAction(actionUninstall, args[1:], stdout, stderr)
+	case "install", "update", "upgrade", "downgrade", "uninstall", "remove":
+		return handleManageAction(args, stdout, stderr)
 	default:
 		fmt.Fprintln(stderr, "usage: pre packages [manage|install|update|downgrade|uninstall]")
 		return 1
