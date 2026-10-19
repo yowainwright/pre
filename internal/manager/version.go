@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -20,9 +22,13 @@ var (
 	versionHTTP = &http.Client{Timeout: 10 * time.Second}
 	crateNameRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
 	runCmd      = func(name string, args ...string) ([]byte, error) {
+		path, err := Executable(name)
+		if err != nil {
+			return nil, err
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return exec.CommandContext(ctx, name, args...).Output() // #nosec G204 -- executable names are package manager tools.
+		return exec.CommandContext(ctx, path, args...).Output() // #nosec G204 -- executable names are package manager tools.
 	}
 )
 
@@ -43,6 +49,18 @@ type brewCaskInfo struct {
 type brewInfo struct {
 	Formulae []brewFormulaInfo `json:"formulae"`
 	Casks    []brewCaskInfo    `json:"casks"`
+}
+
+func Executable(name string) (string, error) {
+	if os.Getenv("PRE_EXEC_MANAGER") != name {
+		return name, nil
+	}
+	path := os.Getenv("PRE_EXEC_PATH")
+	invalidPath := path == "" || filepath.Base(path) != name
+	if invalidPath {
+		return "", fmt.Errorf("%s: invalid alias executable path", name)
+	}
+	return path, nil
 }
 
 func ResolveVersion(mgr *Manager, pkg string) (string, error) {

@@ -493,20 +493,28 @@ func confirm(prompt string) bool {
 func execReal(name string, args []string) {
 	start := time.Now()
 	recordManagerExecStarted(name, args)
-	c := exec.Command(name, args...) // #nosec G204 -- proxy intentionally execs the requested package manager.
+	code := runManagerCommand(name, args)
+	recordManagerExec(name, args, start, code)
+	if code != 0 {
+		processExit(code)
+	}
+}
+
+func runManagerCommand(name string, args []string) int {
+	path, err := manager.Executable(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pre: %v\n", err)
+		return 1
+	}
+	c := exec.Command(path, args...) // #nosec G204 -- proxy intentionally execs the requested package manager.
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	if err := c.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			code := exitErr.ExitCode()
-			recordManagerExec(name, args, start, code)
-			processExit(code)
-			return
+			return exitErr.ExitCode()
 		}
-		recordManagerExec(name, args, start, 1)
-		processExit(1)
-		return
+		return 1
 	}
-	recordManagerExec(name, args, start, 0)
+	return 0
 }

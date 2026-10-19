@@ -2414,6 +2414,37 @@ func TestExecRealSuccess(t *testing.T) {
 	requireNoObsLeak(t, "hello")
 }
 
+func TestExecRealAliasExecutable(t *testing.T) {
+	withObsDir(t)
+	binDir, targetDir := shellAliasFixture(t)
+	t.Setenv("PATH", binDir)
+	t.Setenv("PRE_EXEC_MANAGER", "brew")
+	aliasPath := filepath.Join(targetDir, "brew")
+	t.Setenv("PRE_EXEC_PATH", aliasPath)
+	output := captureStdout(t, func() {
+		execReal("brew", []string{"--cask", "install", "example-package"})
+	})
+	if output != "alias:--cask install example-package\n" {
+		t.Fatalf("unexpected alias execution output: %q", output)
+	}
+	completed := requireObsEvent(t, "pre.manager.exec.completed")
+	if completed["manager"] != "brew" {
+		t.Fatalf("expected manager brew, got %#v", completed)
+	}
+	requireNoObsLeak(t, aliasPath)
+}
+
+func TestExecRealMissingAliasDoesNotFallback(t *testing.T) {
+	withObsDir(t)
+	binDir, _ := shellAliasFixture(t)
+	t.Setenv("PATH", binDir)
+	t.Setenv("PRE_EXEC_MANAGER", "brew")
+	t.Setenv("PRE_EXEC_PATH", filepath.Join(t.TempDir(), "brew"))
+	expectProcessExit(t, 1, func() {
+		execReal("brew", []string{"install", "example-package"})
+	})
+}
+
 func TestExecRealExitError(t *testing.T) {
 	withObsDir(t)
 
