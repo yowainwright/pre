@@ -28,17 +28,27 @@ pre:go -C app get example.com/mod
 const shellAliasSetup = `
 if [ -n "${BASH_VERSION:-}" ]; then shopt -s expand_aliases; fi
 alias "brew='$1/brew' --cask"
+alias pip='python3 -m pip'
+alias npm='command npm'
 `
 
 const shellAliasCommands = `
 brew install example-package
 brew --version
 PRE_DISABLE=1 brew install example-package
+PRE_DISABLE=1 pip --version
+PRE_DISABLE=1 npm --version
+PRE_DISABLE=true pip install example-package
+PRE_DISABLE=on npm install example-package
 `
 
 const shellAliasOutput = `pre:brew --cask install example-package
 alias:--cask --version
 alias:--cask install example-package
+python3:-m pip --version
+npm:--version
+python3:-m pip install example-package
+npm:install example-package
 `
 
 func TestBuildShellHookContents(t *testing.T) {
@@ -162,6 +172,8 @@ func shellAliasFixture(t *testing.T) (string, string) {
 	}
 	writeShellFixture(t, filepath.Join(binDir, "pre"), "#!/bin/sh\nprintf 'pre:%s\\n' \"$*\"\n")
 	writeShellFixture(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nprintf 'default:%s\\n' \"$*\"\n")
+	writeShellFixture(t, filepath.Join(binDir, "python3"), "#!/bin/sh\nprintf 'python3:%s\\n' \"$*\"\n")
+	writeShellFixture(t, filepath.Join(binDir, "npm"), "#!/bin/sh\nprintf 'npm:%s\\n' \"$*\"\n")
 	writeShellFixture(t, filepath.Join(targetDir, "brew"), "#!/bin/sh\nprintf 'alias:%s\\n' \"$*\"\n")
 	return binDir, targetDir
 }

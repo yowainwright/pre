@@ -82,6 +82,12 @@ function _pre_run_alias() {
   local _pre_alias_manager="$1"
   local _pre_alias_executable="$2"
   shift 2
+  case "${PRE_DISABLE:-}" in
+    1|true|TRUE|True|yes|YES|Yes|on|ON|On)
+      "$_pre_alias_executable" "$@"
+      return
+      ;;
+  esac
   local _pre_alias_target="${_pre_alias_executable##*/}"
   case "$_pre_alias_target" in
     %s) ;;
