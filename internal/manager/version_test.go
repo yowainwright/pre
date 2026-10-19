@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -515,6 +517,59 @@ func TestRunCmdDefault(t *testing.T) {
 	if len(out) == 0 {
 		t.Error("expected non-empty output from echo")
 	}
+}
+
+func TestBrewVersionAliasExecutable(t *testing.T) {
+	defaultPath := writeBrewVersionFixture(t, "1.0.0")
+	aliasPath := writeBrewVersionFixture(t, "2.0.0")
+	t.Setenv("PATH", filepath.Dir(defaultPath))
+	tests := []struct{ name, manager, path, want string }{
+		{"default", "", "", "1.0.0"},
+		{"alias", "brew", aliasPath, "2.0.0"},
+		{"other manager", "npm", aliasPath, "1.0.0"},
+		{"empty alias path", "brew", "", ""},
+		{"different executable", "brew", defaultPath + "-other", ""},
+		{"missing executable", "brew", filepath.Join(t.TempDir(), "brew"), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checkBrewAliasVersion(t, tt.manager, tt.path, tt.want)
+		})
+	}
+}
+
+func checkBrewAliasVersion(t *testing.T, managerName, path, want string) {
+	t.Helper()
+	t.Setenv("PRE_EXEC_MANAGER", managerName)
+	t.Setenv("PRE_EXEC_PATH", path)
+	version, err := brewVersion("example-package")
+	if want == "" {
+		if err == nil {
+			t.Fatalf("expected alias target error, got version %q", version)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != want {
+		t.Fatalf("expected version %q, got %q", want, version)
+	}
+}
+
+func writeBrewVersionFixture(t *testing.T, version string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "bin with spaces")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "brew")
+	data := fmt.Sprintf(`{"formulae":[{"versions":{"stable":%q}}]}`, version)
+	content := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' '%s'\n", data)
+	if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestResolveVersionUnknownEcosystem(t *testing.T) {
