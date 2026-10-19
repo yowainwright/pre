@@ -16,9 +16,9 @@ const (
 	shellHookEnd   = "# end pre security proxy"
 )
 
-const cargoShellHookText = "function " + "cargo() {\n" + `  case "${PRE_DISABLE:-}" in
+const cargoShellHookText = "function %s() {\n" + `  case "${PRE_DISABLE:-}" in
     1|true|TRUE|True|yes|YES|Yes|on|ON|On)
-      command cargo "$@"
+      command %s "$@"
       return
       ;;
   esac
@@ -49,10 +49,10 @@ const cargoShellHookText = "function " + "cargo() {\n" + `  case "${PRE_DISABLE:
   done
   case "$_pre_cargo_command" in
     add|install|update|fetch)
-      command pre cargo "$@"
+      %scommand pre cargo "$@"
       ;;
     *)
-      command cargo "$@"
+      command %s "$@"
       ;;
   esac
 }
@@ -66,11 +66,50 @@ const managerShellHookText = `function %s() {
       ;;
   esac
 %s  if %s; then
-    command pre %s "$@"
+    %scommand pre %s "$@"
   else
     command %s "$@"
   fi
 }
+`
+
+const aliasShellHookText = `function _pre_alias_error() {
+  printf 'pre: cannot safely intercept the %%s alias; use pre %%s directly or resolve the alias conflict\n' "$1" "$1" >&2
+  return 1
+}
+
+function _pre_run_alias() {
+  local _pre_alias_manager="$1"
+  local _pre_alias_executable="$2"
+  shift 2
+  local _pre_alias_target="${_pre_alias_executable##*/}"
+  case "$_pre_alias_target" in
+    %s) ;;
+    *) _pre_alias_error "$_pre_alias_manager"; return ;;
+  esac
+  if [[ "$_pre_alias_executable" == "$_pre_alias_target" && "$_pre_alias_target" != "$_pre_alias_manager" ]] &&
+     builtin alias "$_pre_alias_target" >/dev/null 2>&1; then
+    _pre_alias_error "$_pre_alias_manager"
+    return
+  fi
+  "_pre_alias_$_pre_alias_target" "$@"
+}
+
+function _pre_wrap_alias() {
+  local _pre_alias_definition
+  _pre_alias_definition="$(builtin alias "$1" 2>/dev/null)" || return 0
+  # Decode the builtin's quoted value without executing the alias body.
+  eval "local _pre_alias_value=${_pre_alias_definition#*=}"
+  case "$_pre_alias_value" in
+    '_pre_run_alias '*|'_pre_alias_error '*) return 0 ;;
+    *[\;\&\|\<\>\$\(\)\{\}\#]*|*$'\x60'*|*$'\n'*|*$'\r'*)
+      builtin alias "$1=_pre_alias_error '$1'"
+      return
+      ;;
+  esac
+  builtin alias "$1=_pre_run_alias '$1' $_pre_alias_value"
+}
+
 `
 
 const shellCommandParserText = `  local _pre_arg
@@ -141,13 +180,12 @@ func installRCHooks(rcFile string, content []byte, action string) error {
 func buildShellHook() string {
 	var sb strings.Builder
 	sb.WriteString("\n" + shellHookStart + "\n")
+	sb.WriteString(aliasShellHook())
 
 	for _, m := range manager.All() {
-		if m.Name == "cargo" {
-			sb.WriteString(cargoShellHookText)
-			continue
-		}
 		sb.WriteString(managerShellHook(m))
+		sb.WriteString(aliasManagerShellHook(m))
+		fmt.Fprintf(&sb, "_pre_wrap_alias '%s'\n", m.Name)
 	}
 
 	sb.WriteString(shellHookEnd + "\n")
@@ -155,9 +193,33 @@ func buildShellHook() string {
 }
 
 func managerShellHook(m manager.Manager) string {
+	return formatShellHook(m, m.Name, m.Name, "")
+}
+
+func aliasManagerShellHook(m manager.Manager) string {
+	name := "_pre_alias_" + m.Name
+	executable := `"$_pre_alias_executable"`
+	environment := `PRE_EXEC_MANAGER="` + m.Name + `" PRE_EXEC_PATH="$_pre_alias_executable" `
+	return formatShellHook(m, name, executable, environment)
+}
+
+func formatShellHook(m manager.Manager, name, executable, environment string) string {
+	if m.Name == "cargo" {
+		return fmt.Sprintf(cargoShellHookText, name, executable, environment, executable)
+	}
 	parser := shellCommandParser(m)
 	condition := shellInstallCondition(m)
-	return fmt.Sprintf(managerShellHookText, m.Name, m.Name, parser, condition, m.Name, m.Name)
+	return fmt.Sprintf(managerShellHookText, name, executable, parser, condition, environment, m.Name, executable)
+}
+
+func aliasShellHook() string {
+	managers := manager.All()
+	names := make([]string, len(managers))
+	for index, m := range managers {
+		names[index] = m.Name
+	}
+	targets := strings.Join(names, "|")
+	return fmt.Sprintf(aliasShellHookText, targets)
 }
 
 func shellCommandParser(m manager.Manager) string {

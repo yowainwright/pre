@@ -25,6 +25,22 @@ pre:pnpm --dir app add react
 pre:go -C app get example.com/mod
 `
 
+const shellAliasSetup = `
+if [ -n "${BASH_VERSION:-}" ]; then shopt -s expand_aliases; fi
+alias "brew='$1/brew' --cask"
+`
+
+const shellAliasCommands = `
+brew install example-package
+brew --version
+PRE_DISABLE=1 brew install example-package
+`
+
+const shellAliasOutput = `pre:brew --cask install example-package
+alias:--cask --version
+alias:--cask install example-package
+`
+
 func TestBuildShellHookContents(t *testing.T) {
 	hook := buildShellHook()
 	if !strings.Contains(hook, "# pre security proxy") {
@@ -106,6 +122,48 @@ func TestCargoShellHookRoutesGlobalOptions(t *testing.T) {
 	if string(output) != want {
 		t.Fatalf("unexpected Cargo hook output: %q", output)
 	}
+}
+
+func TestShellHookRoutesExistingAliases(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh"} {
+		t.Run(shell, func(t *testing.T) {
+			checkShellAliasRouting(t, shell)
+		})
+	}
+}
+
+func checkShellAliasRouting(t *testing.T, shell string) {
+	t.Helper()
+	shellPath, err := exec.LookPath(shell)
+	if err != nil {
+		t.Skipf("%s unavailable: %v", shell, err)
+	}
+	binDir, targetDir := shellAliasFixture(t)
+	t.Setenv("PATH", binDir)
+	t.Setenv("PRE_DISABLE", "")
+	t.Setenv("BASH_ENV", "")
+	hook := buildShellHook()
+	// Parse the fixed commands after alias setup, as an interactive shell does.
+	script := shellAliasSetup + hook + hook + "eval \"$2\"\n"
+	cmd := exec.Command(shellPath, "-f", "-c", script, "pre-alias-test", targetDir, shellAliasCommands)
+	output, err := cmd.CombinedOutput()
+	unexpectedResult := err != nil || string(output) != shellAliasOutput
+	if unexpectedResult {
+		t.Fatalf("expected %q, got %q (error: %v)", shellAliasOutput, output, err)
+	}
+}
+
+func shellAliasFixture(t *testing.T) (string, string) {
+	t.Helper()
+	binDir := t.TempDir()
+	targetDir := filepath.Join(t.TempDir(), "alternate bin")
+	if err := os.Mkdir(targetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeShellFixture(t, filepath.Join(binDir, "pre"), "#!/bin/sh\nprintf 'pre:%s\\n' \"$*\"\n")
+	writeShellFixture(t, filepath.Join(binDir, "brew"), "#!/bin/sh\nprintf 'default:%s\\n' \"$*\"\n")
+	writeShellFixture(t, filepath.Join(targetDir, "brew"), "#!/bin/sh\nprintf 'alias:%s\\n' \"$*\"\n")
+	return binDir, targetDir
 }
 
 func writeShellFixture(t *testing.T, path, content string) {
