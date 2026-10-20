@@ -54,9 +54,8 @@ function _pre_add_bash_prompt_hook() {
     _pre_add_bash_prompt_array
     return
   fi
-  case "${PROMPT_COMMAND:-}" in
-    _pre_refresh_hooks | _pre_refresh_hooks";"*) return ;;
-  esac
+  local _pre_pattern=$'(^|[;\n])[[:space:]]*_pre_refresh_hooks[[:space:]]*([;\n]|$)'
+  [[ "${PROMPT_COMMAND:-}" =~ $_pre_pattern ]] && return
   PROMPT_COMMAND="_pre_refresh_hooks${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
 }
 

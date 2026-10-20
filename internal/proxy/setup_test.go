@@ -80,6 +80,10 @@ PRE_TEST_LOADS=0
 `
 
 const shellRefreshCommands = `
+case "$1" in
+  prepended) PROMPT_COMMAND="_pre_test_prompt; _pre_refresh_hooks" ;;
+  multiline) PROMPT_COMMAND=$'_pre_test_prompt\n  _pre_refresh_hooks  ' ;;
+esac
 false
 _pre_refresh_hooks
 printf 'initial:%s\n' "$?"
@@ -285,6 +289,8 @@ func TestShellHookReloadsAfterUpdate(t *testing.T) {
 	cases := []struct{ shell, prompt, want string }{
 		{"bash", "string", shellRefreshOutput},
 		{"bash", "array", shellRefreshOutput},
+		{"bash", "prepended", shellRefreshOutput},
+		{"bash", "multiline", shellRefreshOutput},
 		{"zsh", "array", zshOutput},
 	}
 	for _, tc := range cases {
