@@ -51,8 +51,96 @@ python3:-m pip install example-package
 npm:install example-package
 `
 
+const shellRefreshPre = `#!/bin/sh
+case "$1" in
+  --version)
+    printf 'version\n' >> "$PRE_TEST_LOG"
+    printf '%s\n' "$PRE_TEST_VERSION"
+    ;;
+  shell-hook)
+    [ "${PRE_TEST_FAIL:-0}" = 0 ] || exit 1
+    printf 'PRE_TEST_LOADS=$((PRE_TEST_LOADS + 1))\n'
+    /bin/cat "$PRE_TEST_HOOK"
+    ;;
+esac
+`
+
+const shellRefreshSetup = `
+function _pre_test_prompt() { printf 'prompt:%s\n' "$?"; }
+function _pre_test_after_prompt() { printf 'after-prompt:%s\n' "$?"; }
+if [ -n "${ZSH_VERSION:-}" ]; then
+  precmd_functions=(_pre_test_prompt)
+elif [ "$1" = array ]; then
+  PROMPT_COMMAND=(_pre_test_prompt)
+else
+  PROMPT_COMMAND=_pre_test_prompt
+fi
+export PRE_TEST_VERSION=old
+PRE_TEST_LOADS=0
+`
+
+const shellRefreshCommands = `
+case "$1" in
+  prepended) PROMPT_COMMAND="_pre_test_prompt; _pre_refresh_hooks" ;;
+  multiline) PROMPT_COMMAND=$'_pre_test_prompt\n  _pre_refresh_hooks  ' ;;
+esac
+false
+_pre_refresh_hooks
+printf 'initial:%s\n' "$?"
+export PRE_TEST_VERSION=new
+false
+_pre_refresh_hooks
+printf 'updated:%s:%s\n' "$?" "$_pre_hook_version"
+_pre_refresh_hooks
+printf 'loads:%s\n' "$PRE_TEST_LOADS"
+export PRE_TEST_VERSION=broken PRE_TEST_FAIL=1
+false
+_pre_refresh_hooks
+printf 'failed:%s:%s\n' "$?" "$_pre_hook_version"
+unset PRE_TEST_FAIL
+export PRE_TEST_VERSION=new
+: > "$PRE_TEST_LOG"
+if [ -n "${ZSH_VERSION:-}" ]; then
+  precmd_functions+=(_pre_test_after_prompt)
+  for _pre_prompt in "${precmd_functions[@]}"; do
+    (exit 7)
+    "$_pre_prompt" || break
+  done
+elif [ "$1" = array ]; then
+  for _pre_prompt in "${PROMPT_COMMAND[@]}"; do
+    (exit 7)
+    eval "$_pre_prompt"
+  done
+else
+  (exit 7)
+  eval "$PROMPT_COMMAND"
+fi
+true
+`
+
+const shellRefreshOutput = `initial:1
+updated:1:new
+loads:1
+failed:1:new
+prompt:7
+`
+
+const shellRefreshCachedPath = `
+export PRE_TEST_VERSION=new
+if [ -n "${ZSH_VERSION:-}" ]; then
+  hash pre="$1"
+else
+  hash -p "$1" pre
+fi
+command pre --version
+false
+_pre_refresh_hooks
+printf 'status:%s\n' "$?"
+command pre --version
+`
+
 func TestBuildShellHookContents(t *testing.T) {
-	hook := buildShellHook()
+	hook := ShellHook("old")
 	if !strings.Contains(hook, "# pre security proxy") {
 		t.Error("expected hook to contain '# pre security proxy'")
 	}
@@ -67,7 +155,7 @@ func TestBuildShellHookContents(t *testing.T) {
 }
 
 func TestBuildShellHookIncludesDisableBypass(t *testing.T) {
-	hook := buildShellHook()
+	hook := ShellHook("old")
 	if !strings.Contains(hook, "PRE_DISABLE") {
 		t.Error("expected hook to include PRE_DISABLE bypass")
 	}
@@ -77,7 +165,7 @@ func TestBuildShellHookIncludesDisableBypass(t *testing.T) {
 }
 
 func TestBuildShellHookIncludesNestedUVInstall(t *testing.T) {
-	hook := buildShellHook()
+	hook := ShellHook("old")
 	condition := `[[ "$_pre_command" == "pip" && "$_pre_subcommand" == "install" ]]`
 	if !strings.Contains(hook, condition) {
 		t.Errorf("expected uv pip install condition, got:\n%s", hook)
@@ -85,7 +173,7 @@ func TestBuildShellHookIncludesNestedUVInstall(t *testing.T) {
 }
 
 func TestBuildShellHookParsesCargoGlobalOptions(t *testing.T) {
-	hook := buildShellHook()
+	hook := ShellHook("old")
 	markers := []string{"_pre_cargo_command", "+*", "--color|--config|--explain|--manifest-path|--target-dir|-C|-Z", "add|install|update|fetch"}
 	for _, marker := range markers {
 		if !strings.Contains(hook, marker) {
@@ -95,7 +183,7 @@ func TestBuildShellHookParsesCargoGlobalOptions(t *testing.T) {
 }
 
 func TestBuildShellHookParsesManagerGlobalOptions(t *testing.T) {
-	hook := buildShellHook()
+	hook := ShellHook("old")
 	markers := []string{"_pre_command", "--prefix", "--dir", "-C"}
 	for _, marker := range markers {
 		hasMarker := strings.Contains(hook, marker)
@@ -107,10 +195,21 @@ func TestBuildShellHookParsesManagerGlobalOptions(t *testing.T) {
 
 func TestBuildShellHookHasValidBashSyntax(t *testing.T) {
 	cmd := exec.Command("bash", "-n")
-	cmd.Stdin = strings.NewReader(buildShellHook())
+	cmd.Stdin = strings.NewReader(ShellHook("old"))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("invalid Bash hook: %v\n%s", err, output)
+	}
+}
+
+func TestShellHookQuotesVersion(t *testing.T) {
+	version := "dev'$(printf unsafe)"
+	script := ShellHook(version) + "printf '%s\\n' \"$_pre_hook_version\"\n"
+	cmd := exec.Command("bash", "-c", script)
+	output, err := cmd.CombinedOutput()
+	unexpectedOutput := err != nil || string(output) != version+"\n"
+	if unexpectedOutput {
+		t.Fatalf("version was not preserved literally: %q, %v", output, err)
 	}
 }
 
@@ -122,7 +221,7 @@ func TestCargoShellHookRoutesGlobalOptions(t *testing.T) {
 	writeShellFixture(t, cargoPath, "#!/bin/sh\nprintf 'cargo:%s\\n' \"$*\"\n")
 	t.Setenv("PATH", binDir)
 
-	hook := buildShellHook()
+	hook := ShellHook("old")
 	cmd := exec.Command("/bin/bash", "-c", hook+globalOptionCommands)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -152,7 +251,7 @@ func checkShellAliasRouting(t *testing.T, shell string) {
 	t.Setenv("PATH", binDir)
 	t.Setenv("PRE_DISABLE", "")
 	t.Setenv("BASH_ENV", "")
-	hook := buildShellHook()
+	hook := ShellHook("old")
 	// Parse the fixed commands after alias setup, as an interactive shell does.
 	script := shellAliasSetup + hook + hook + "eval \"$2\"\n"
 	cmd := exec.Command(shellPath, "-f", "-c", script, "pre-alias-test", targetDir, shellAliasCommands)
@@ -182,6 +281,80 @@ func writeShellFixture(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write shell fixture: %v", err)
+	}
+}
+
+func TestShellHookReloadsAfterUpdate(t *testing.T) {
+	zshOutput := shellRefreshOutput + "after-prompt:7\n"
+	cases := []struct{ shell, prompt, want string }{
+		{"bash", "string", shellRefreshOutput},
+		{"bash", "array", shellRefreshOutput},
+		{"bash", "prepended", shellRefreshOutput},
+		{"bash", "multiline", shellRefreshOutput},
+		{"zsh", "array", zshOutput},
+	}
+	for _, tc := range cases {
+		t.Run(tc.shell+"/"+tc.prompt, func(t *testing.T) {
+			checkShellHookRefresh(t, tc.shell, tc.prompt, tc.want)
+		})
+	}
+}
+
+func checkShellHookRefresh(t *testing.T, shell, prompt, want string) {
+	t.Helper()
+	shellPath, logPath := shellRefreshFixture(t, shell)
+	hook := ShellHook("old")
+	script := shellRefreshSetup + hook + hook + shellRefreshCommands
+	cmd := exec.Command(shellPath, "-f", "-c", script, "pre-hook-test", prompt)
+	output, err := cmd.CombinedOutput()
+	unexpectedOutput := err != nil || string(output) != want
+	if unexpectedOutput {
+		t.Fatalf("refresh hooks: %v\nwant %q\ngot %q", err, want, output)
+	}
+	calls, err := os.ReadFile(logPath)
+	unexpectedChecks := err != nil || string(calls) != "version\n"
+	if unexpectedChecks {
+		t.Fatalf("expected one refresh check per prompt, got %q: %v", calls, err)
+	}
+}
+
+func shellRefreshFixture(t *testing.T, shell string) (string, string) {
+	t.Helper()
+	shellPath, err := exec.LookPath(shell)
+	if err != nil {
+		t.Skipf("%s unavailable: %v", shell, err)
+	}
+	binDir := t.TempDir()
+	hookPath := filepath.Join(binDir, "hook.sh")
+	logPath := filepath.Join(binDir, "calls")
+	writeShellFixture(t, filepath.Join(binDir, "pre"), shellRefreshPre)
+	writeShellFixture(t, hookPath, ShellHook("new"))
+	t.Setenv("PATH", binDir)
+	t.Setenv("BASH_ENV", "")
+	t.Setenv("PRE_TEST_HOOK", hookPath)
+	t.Setenv("PRE_TEST_LOG", logPath)
+	return shellPath, logPath
+}
+
+func TestShellHookRefreshClearsCommandCache(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh"} {
+		t.Run(shell, func(t *testing.T) {
+			checkShellHookCachedPath(t, shell)
+		})
+	}
+}
+
+func checkShellHookCachedPath(t *testing.T, shell string) {
+	t.Helper()
+	shellPath, _ := shellRefreshFixture(t, shell)
+	oldPath := filepath.Join(t.TempDir(), "pre")
+	writeShellFixture(t, oldPath, "#!/bin/sh\nprintf 'old\\n'\n")
+	script := ShellHook("old") + shellRefreshCachedPath
+	cmd := exec.Command(shellPath, "-f", "-c", script, "pre-cache-test", oldPath)
+	output, err := cmd.CombinedOutput()
+	unexpectedOutput := err != nil || string(output) != "old\nstatus:1\nnew\n"
+	if unexpectedOutput {
+		t.Fatalf("cached executable was not refreshed: %q, %v", output, err)
 	}
 }
 
@@ -217,18 +390,18 @@ func TestDetectRCFileRequiresHome(t *testing.T) {
 }
 
 func TestSetupFresh(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
+	rcPath := setupTestRCPath(t)
+	Setup("test")
 
-	Setup()
-
-	content, err := os.ReadFile(filepath.Join(dir, ".zshrc"))
+	content, err := os.ReadFile(rcPath)
 	if err != nil {
 		t.Fatalf("expected .zshrc to be created: %v", err)
 	}
 	if !strings.Contains(string(content), "# pre security proxy") {
 		t.Error("expected hook to be written to .zshrc")
+	}
+	if !strings.Contains(string(content), "_pre_hook_version='test'\n") {
+		t.Error("expected setup to record the installed hook version")
 	}
 }
 
@@ -242,7 +415,7 @@ func TestSetupPreservesExistingRCFileMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	Setup()
+	Setup("test")
 
 	info, err := os.Stat(rcPath)
 	if err != nil {
@@ -362,7 +535,7 @@ func TestSetupRefreshesExistingHooks(t *testing.T) {
 	initial := "export FOO=bar\n# pre security proxy\nfunction npm() {}\n"
 	os.WriteFile(rcPath, []byte(initial), 0644)
 
-	Setup()
+	Setup("test")
 
 	content, _ := os.ReadFile(rcPath)
 	if !strings.Contains(string(content), "export FOO=bar") {
@@ -380,7 +553,7 @@ func TestSetupRefreshesExistingHooks(t *testing.T) {
 
 func TestTeardownRemovesHooks(t *testing.T) {
 	rcPath := setupTestRCPath(t)
-	os.WriteFile(rcPath, []byte("export FOO=bar\n"+buildShellHook()+"export BAR=baz\n"), 0644)
+	os.WriteFile(rcPath, []byte("export FOO=bar\n"+ShellHook("old")+"export BAR=baz\n"), 0644)
 
 	Teardown()
 
@@ -420,7 +593,7 @@ func TestShellHookStatus(t *testing.T) {
 	t.Setenv("SHELL", "/bin/zsh")
 
 	rcPath := filepath.Join(dir, ".zshrc")
-	os.WriteFile(rcPath, []byte(buildShellHook()), 0644)
+	os.WriteFile(rcPath, []byte(ShellHook("old")), 0644)
 
 	path, installed := ShellHookStatus()
 	if path != rcPath {
@@ -485,7 +658,7 @@ func TestSetupWriteError(t *testing.T) {
 		}
 	}()
 
-	Setup()
+	Setup("test")
 }
 
 func TestSetupPreservesUnreadableRCFile(t *testing.T) {
@@ -501,7 +674,7 @@ func TestSetupPreservesUnreadableRCFile(t *testing.T) {
 	processExit = func(code int) { exitCode = code }
 	defer func() { processExit = origExit }()
 
-	Setup()
+	Setup("test")
 	if exitCode != 1 {
 		t.Fatalf("expected setup to fail, got exit code %d", exitCode)
 	}
@@ -550,7 +723,7 @@ func TestRemoveLegacyShellHookBlockNoTrailing(t *testing.T) {
 }
 
 func TestManagerAllInHook(t *testing.T) {
-	hook := buildShellHook()
+	hook := ShellHook("old")
 	for _, mgr := range manager.All() {
 		if !strings.Contains(hook, "function "+mgr.Name+"()") {
 			t.Errorf("expected hook for manager %s", mgr.Name)

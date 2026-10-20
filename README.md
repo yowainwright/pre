@@ -37,11 +37,15 @@ Every release includes SHA-256 checksums and a Cosign signature. The curl instal
 
 ## Setup
 
+<!-- Shell hook setup and automatic refresh from internal/proxy/setup.go. -->
+
 ```sh
 pre setup
 ```
 
 Adds shell hooks to `~/.zshrc` or `~/.bashrc`. Supported install commands in interactive Zsh and Bash sessions then go through `pre` automatically. Scripts and CI can call `pre <manager> ...` directly.
+
+After a Homebrew or self-update changes the `pre` version, open terminals reload hooks at the next prompt and clear stale command paths. Existing installations need to run `pre setup` and activate the refreshed hooks once; later updates need no manual reload.
 
 Example output (Zsh):
 
