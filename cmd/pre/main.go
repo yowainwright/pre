@@ -45,12 +45,12 @@ func printUsage(stderr io.Writer) {
 	fmt.Fprintln(stderr, "usage: pre <manager> <command> [args]")
 	fmt.Fprintln(stderr, "       pre manage | m | installed | install | update | downgrade | uninstall")
 	fmt.Fprintln(stderr, "       pre obs [--json] [--events [query]]")
-	fmt.Fprintln(stderr, "       pre setup | teardown | status | config [set <key> <value>]")
+	fmt.Fprintln(stderr, "       pre setup | teardown | shell-hook | status | config [set <key> <value>]")
 }
 
 func dispatchCommand(args []string, cfg *config.Config, stdout, stderr io.Writer) int {
 	switch args[0] {
-	case "setup", "teardown", "scan", "status", "--version", "-v":
+	case "setup", "teardown", "shell-hook", "scan", "status", "--version", "-v":
 		return handleSystemCommand(args, stdout, stderr)
 	case "config":
 		return handleConfig(args[1:], cfg, stdout, stderr)
@@ -68,7 +68,9 @@ func dispatchCommand(args []string, cfg *config.Config, stdout, stderr io.Writer
 func handleSystemCommand(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "setup":
-		proxy.Setup()
+		proxy.Setup(version)
+	case "shell-hook":
+		return handleShellHook(args[1:], stdout, stderr)
 	case "teardown":
 		if err := proxy.Teardown(); err != nil {
 			return 1
@@ -80,6 +82,15 @@ func handleSystemCommand(args []string, stdout, stderr io.Writer) int {
 	case "--version", "-v":
 		fmt.Fprintln(stdout, version)
 	}
+	return 0
+}
+
+func handleShellHook(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 0 {
+		fmt.Fprintln(stderr, "usage: pre shell-hook")
+		return 1
+	}
+	fmt.Fprint(stdout, proxy.ShellHook(version))
 	return 0
 }
 

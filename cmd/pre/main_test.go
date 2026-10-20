@@ -65,6 +65,30 @@ func TestRunUnknownManager(t *testing.T) {
 	}
 }
 
+func TestRunShellHook(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	var out, errOut bytes.Buffer
+	code := run([]string{"shell-hook"}, &out, &errOut)
+	unexpectedOutput := code != 0 || out.String() != proxy.ShellHook(version)
+	if unexpectedOutput {
+		t.Fatalf("shell-hook: exit %d, stderr %q", code, errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".zshrc")); !os.IsNotExist(err) {
+		t.Fatalf("shell-hook wrote a profile: %v", err)
+	}
+}
+
+func TestRunShellHookRejectsArguments(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"shell-hook", "unexpected"}, &out, &errOut)
+	unexpectedStreams := out.Len() != 0 || !strings.Contains(errOut.String(), "usage: pre shell-hook")
+	unexpectedOutput := code != 1 || unexpectedStreams
+	if unexpectedOutput {
+		t.Fatalf("shell-hook: exit %d, stdout %q, stderr %q", code, out.String(), errOut.String())
+	}
+}
+
 func TestMainSubprocess(t *testing.T) {
 	if os.Getenv("TEST_MAIN_SUBPROCESS") != "1" {
 		return

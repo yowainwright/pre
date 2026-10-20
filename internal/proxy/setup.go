@@ -16,6 +16,61 @@ const (
 	shellHookEnd   = "# end pre security proxy"
 )
 
+const refreshShellHookText = `
+function _pre_refresh_hooks() {
+  local _pre_exit_status=$?
+  local _pre_next_version
+  _pre_next_version="$(
+    hash -r
+    command pre --version 2>/dev/null
+  )" || return "$_pre_exit_status"
+  if [[ "$_pre_next_version" == "$_pre_hook_version" ]]; then
+    return "$_pre_exit_status"
+  fi
+  local _pre_hook
+  hash -r
+  _pre_hook="$(command pre shell-hook 2>/dev/null)" || return "$_pre_exit_status"
+  eval "$_pre_hook"
+  return "$_pre_exit_status"
+}
+
+function _pre_register_prompt_hook() {
+  if [[ -n "${ZSH_VERSION:-}" ]]; then
+    autoload -Uz add-zsh-hook
+    add-zsh-hook precmd _pre_zsh_prompt_hook
+  else
+    _pre_add_bash_prompt_hook
+  fi
+}
+
+function _pre_zsh_prompt_hook() {
+  _pre_refresh_hooks || return 0
+}
+
+function _pre_add_bash_prompt_hook() {
+  local _pre_declaration
+  _pre_declaration="$(declare -p PROMPT_COMMAND 2>/dev/null)" || _pre_declaration=""
+  if [[ "$_pre_declaration" == "declare -"*a*" PROMPT_COMMAND="* ]]; then
+    _pre_add_bash_prompt_array
+    return
+  fi
+  case "${PROMPT_COMMAND:-}" in
+    _pre_refresh_hooks | _pre_refresh_hooks";"*) return ;;
+  esac
+  PROMPT_COMMAND="_pre_refresh_hooks${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+}
+
+function _pre_add_bash_prompt_array() {
+  local _pre_prompt
+  for _pre_prompt in "${PROMPT_COMMAND[@]}"; do
+    [[ "$_pre_prompt" == _pre_refresh_hooks ]] && return
+  done
+  PROMPT_COMMAND=(_pre_refresh_hooks "${PROMPT_COMMAND[@]}")
+}
+
+_pre_register_prompt_hook
+`
+
 const cargoShellHookText = "function %s() {\n" + `  case "${PRE_DISABLE:-}" in
     1|true|TRUE|True|yes|YES|Yes|on|ON|On)
       command %s "$@"
@@ -141,10 +196,10 @@ const shellCommandParserText = `  local _pre_arg
   done
 `
 
-func Setup() {
+func Setup(version string) {
 	rcFile, err := detectRCFile()
 	if err == nil {
-		err = setupRCFile(rcFile)
+		err = setupRCFile(rcFile, version)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pre setup: %v\n", err)
@@ -152,29 +207,29 @@ func Setup() {
 	}
 }
 
-func setupRCFile(rcFile string) error {
+func setupRCFile(rcFile, version string) error {
 	content, err := os.ReadFile(rcFile)
 	readFailed := err != nil && !errors.Is(err, os.ErrNotExist)
 	if readFailed {
 		return err
 	}
 	if strings.Contains(string(content), shellHookStart) {
-		return refreshRCHooks(rcFile, string(content))
+		return refreshRCHooks(rcFile, string(content), version)
 	}
-	return installRCHooks(rcFile, content, "added hooks to")
+	return installRCHooks(rcFile, content, "added hooks to", version)
 }
 
-func refreshRCHooks(rcFile, content string) error {
+func refreshRCHooks(rcFile, content, version string) error {
 	cleaned, removed := removeShellHookBlock(content)
 	if !removed {
 		fmt.Println("pre: already set up in", rcFile)
 		return nil
 	}
-	return installRCHooks(rcFile, []byte(cleaned), "refreshed hooks in")
+	return installRCHooks(rcFile, []byte(cleaned), "refreshed hooks in", version)
 }
 
-func installRCHooks(rcFile string, content []byte, action string) error {
-	appended := append(content, []byte(buildShellHook())...)
+func installRCHooks(rcFile string, content []byte, action, version string) error {
+	appended := append(content, []byte(ShellHook(version))...)
 	if err := writeRCFile(rcFile, appended); err != nil {
 		return err
 	}
@@ -183,9 +238,11 @@ func installRCHooks(rcFile string, content []byte, action string) error {
 	return nil
 }
 
-func buildShellHook() string {
+func ShellHook(version string) string {
 	var sb strings.Builder
 	sb.WriteString("\n" + shellHookStart + "\n")
+	quotedVersion := strings.ReplaceAll(version, "'", "'\\''")
+	fmt.Fprintf(&sb, "_pre_hook_version='%s'\n", quotedVersion)
 	sb.WriteString(aliasShellHook())
 
 	for _, m := range manager.All() {
@@ -194,6 +251,7 @@ func buildShellHook() string {
 		fmt.Fprintf(&sb, "_pre_wrap_alias '%s'\n", m.Name)
 	}
 
+	sb.WriteString(refreshShellHookText)
 	sb.WriteString(shellHookEnd + "\n")
 	return sb.String()
 }
