@@ -45,7 +45,9 @@ pre setup
 
 Adds shell hooks to `~/.zshrc` or `~/.bashrc`. Supported install commands in interactive Zsh and Bash sessions then go through `pre` automatically. Scripts and CI can call `pre <manager> ...` directly.
 
-After a Homebrew or self-update changes the `pre` version, open terminals reload hooks at the next prompt and clear stale command paths. Existing installations need to run `pre setup` and activate the refreshed hooks once; later updates need no manual reload.
+After an upgrade, normal `pre` commands automatically migrate existing managed hooks in your shell profile. Reopen legacy terminals once to load them. Terminals already using automatic refresh reload hooks at the next prompt and clear stale command paths.
+
+For Homebrew installations, a successful `brew update` through these hooks also requests `brew upgrade pre` in the background.
 
 Example output (Zsh):
 
