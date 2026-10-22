@@ -25,7 +25,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if err := refreshShellHooks(args); err != nil {
 		fmt.Fprintf(stderr, "pre: refresh shell hooks: %v\n", err)
-		return 1
 	}
 	return dispatchCommand(args, cfg, stdout, stderr)
 }

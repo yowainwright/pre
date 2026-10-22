@@ -136,7 +136,7 @@ const brewUpdateShellHookText = `  case "${1:-}" in
       esac
       if [[ "$_pre_brew_status" == 0 ]]; then
         (
-          HOMEBREW_NO_ASK=1 NONINTERACTIVE=1 command pre self update </dev/null &
+          HOMEBREW_NO_ASK=1 NONINTERACTIVE=1 command %s upgrade pre </dev/null &
         ) >/dev/null 2>&1
       fi
       return "$_pre_brew_status"
@@ -325,7 +325,7 @@ func formatShellHook(m manager.Manager, name, executable, environment string) st
 	}
 	parser := shellCommandParser(m)
 	if m.Name == "brew" {
-		parser += fmt.Sprintf(brewUpdateShellHookText, executable)
+		parser += fmt.Sprintf(brewUpdateShellHookText, executable, executable)
 	}
 	condition := shellInstallCondition(m)
 	return fmt.Sprintf(managerShellHookText, name, executable, parser, condition, environment, m.Name, executable)

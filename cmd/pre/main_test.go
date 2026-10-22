@@ -78,7 +78,7 @@ func TestRunPreservesHooksForReadOnlyAndDevCommands(t *testing.T) {
 	}
 }
 
-func TestRunReportsHookMigrationFailure(t *testing.T) {
+func TestRunContinuesAfterHookMigrationFailure(t *testing.T) {
 	defer withVersion("test")()
 	dir := setupShellTest(t)
 	if err := os.Mkdir(filepath.Join(dir, ".zshrc"), 0o755); err != nil {
@@ -86,9 +86,9 @@ func TestRunReportsHookMigrationFailure(t *testing.T) {
 	}
 	var out, errOut bytes.Buffer
 	code := run([]string{"--version"}, &out, &errOut)
-	unexpectedExit := code != 1 || out.Len() != 0
+	unexpectedExit := code != 0 || out.String() != version+"\n"
 	if unexpectedExit {
-		t.Fatalf("expected migration failure, got exit %d, stdout %q", code, out.String())
+		t.Fatalf("migration blocked version command: exit %d, stdout %q", code, out.String())
 	}
 	if !strings.Contains(errOut.String(), "pre: refresh shell hooks:") {
 		t.Fatalf("missing migration error: %s", errOut.String())

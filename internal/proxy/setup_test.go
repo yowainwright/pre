@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -144,14 +145,24 @@ command pre --version
 `
 
 const brewBackgroundUpdateFixture = `#!/bin/sh
-if read -r input; then exit 99; fi
-printf '%s:%s:%s\n' "$*" "$HOMEBREW_NO_ASK" "$NONINTERACTIVE" > "$PRE_UPDATE_LOG.tmp"
-/bin/mv "$PRE_UPDATE_LOG.tmp" "$PRE_UPDATE_LOG"
-while [ ! -e "$PRE_UPDATE_LOG.release" ]; do
-  [ -d "${PRE_UPDATE_LOG%/*}" ] || exit 0
-  /bin/sleep 0.01
-done
-printf 'done\n' > "$PRE_UPDATE_LOG.done"
+brew_fixture() {
+  case "${1:-}" in
+    upgrade) ;;
+    *)
+      printf 'brew:%s\n' "$*"
+      exit "${PRE_BREW_UPDATE_STATUS:-0}"
+      ;;
+  esac
+  if read -r _input; then exit 99; fi
+  printf '%s:%s:%s\n' "$*" "$HOMEBREW_NO_ASK" "$NONINTERACTIVE" >"$PRE_UPDATE_LOG.tmp"
+  /bin/mv "$PRE_UPDATE_LOG.tmp" "$PRE_UPDATE_LOG"
+  until [ -e "$PRE_UPDATE_LOG.release" ]; do
+    [ -d "${PRE_UPDATE_LOG%/*}" ] || exit 0
+    /bin/sleep 0.01
+  done
+  printf 'done\n' >"$PRE_UPDATE_LOG.done"
+}
+brew_fixture "$@"
 `
 
 func TestBuildShellHookContents(t *testing.T) {
@@ -321,7 +332,8 @@ func checkBrewUpdateSkipped(t *testing.T, command, status, disable string) {
 	cmd.Args[len(cmd.Args)-1] = ShellHook("old") + "brew " + command + "\n"
 	t.Setenv("PRE_BREW_UPDATE_STATUS", status)
 	t.Setenv("PRE_DISABLE", disable)
-	err := cmd.Run()
+	releaseBrewUpdate(t, logPath)
+	err := runShellAndWaitForChildren(t, cmd)
 	if cmd.ProcessState == nil {
 		t.Fatalf("brew update failed to start: %v", err)
 	}
@@ -329,7 +341,6 @@ func checkBrewUpdateSkipped(t *testing.T, command, status, disable string) {
 	if got != status {
 		t.Fatalf("brew exit status changed: got %s, want %s", got, status)
 	}
-	time.Sleep(100 * time.Millisecond)
 	if _, err := os.Stat(logPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("unexpected automatic update: %v", err)
 	}
@@ -344,12 +355,10 @@ func checkBrewBackgroundUpdate(t *testing.T, shell string) {
 		t.Fatalf("brew update did not return independently: %v, %q", err, output)
 	}
 	got := awaitBrewUpdateFile(t, logPath)
-	if got != "self update:1:1\n" {
+	if got != "upgrade pre:1:1\n" {
 		t.Fatalf("unexpected background updater: %q", got)
 	}
-	if err := os.WriteFile(logPath+".release", nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	releaseBrewUpdate(t, logPath)
 	awaitBrewUpdateFile(t, logPath+".done")
 }
 
@@ -361,9 +370,8 @@ func brewBackgroundUpdateCommand(t *testing.T, shell string) (*exec.Cmd, string)
 	}
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "update.log")
-	brewFixture := "#!/bin/sh\nprintf 'brew:%s\\n' \"$*\"\nexit \"${PRE_BREW_UPDATE_STATUS:-0}\"\n"
-	writeShellFixture(t, filepath.Join(dir, "brew"), brewFixture)
-	writeShellFixture(t, filepath.Join(dir, "pre"), brewBackgroundUpdateFixture)
+	writeShellFixture(t, filepath.Join(dir, "brew"), brewBackgroundUpdateFixture)
+	writeShellFixture(t, filepath.Join(dir, "pre"), "#!/bin/sh\nprintf 'pre:%s\\n' \"$*\" > \"$PRE_UPDATE_LOG\"\n")
 	t.Setenv("PATH", dir)
 	t.Setenv("BASH_ENV", "")
 	t.Setenv("PRE_DISABLE", "")
@@ -374,10 +382,36 @@ func brewBackgroundUpdateCommand(t *testing.T, shell string) (*exec.Cmd, string)
 	return cmd, logPath
 }
 
+func runShellAndWaitForChildren(t *testing.T, cmd *exec.Cmd) error {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	cmd.ExtraFiles = []*os.File{writer}
+	runErr := cmd.Run()
+	_ = writer.Close()
+	if err := reader.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(io.Discard, reader); err != nil {
+		t.Fatalf("wait for shell children: %v", err)
+	}
+	return runErr
+}
+
 func writeShellFixture(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write shell fixture: %v", err)
+	}
+}
+
+func releaseBrewUpdate(t *testing.T, logPath string) {
+	t.Helper()
+	if err := os.WriteFile(logPath+".release", nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
