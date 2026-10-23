@@ -88,6 +88,90 @@ func TestBrewVersionEmptyFormulae(t *testing.T) {
 	}
 }
 
+func TestBrewUpgradePackages(t *testing.T) {
+	const wantError = false
+	body := `{"formulae":[{"name":"openssl@3","current_version":"3.5.9_1"},{"name":"pinned","pinned":true}],"casks":[{"name":"firefox","current_version":"143.0"}]}`
+	want := []string{"openssl@3@@3.5.9_1", "firefox@@143.0"}
+	assertBrewUpgradePackages(t, body, want, wantError)
+}
+
+func TestBrewUpgradePackagesEmpty(t *testing.T) {
+	const wantError = false
+	assertBrewUpgradePackages(t, `{"formulae":[],"casks":[]}`, nil, wantError)
+}
+
+func TestBrewUpgradePackagesRejectIncompleteTargets(t *testing.T) {
+	const wantError = true
+	bodies := []string{
+		`invalid`, `null`, `{}`, `{"formulae":[]}`, `{"formulae":[],"casks":null}`,
+		`{"formulae":[{}],"casks":[]}`,
+		`{"formulae":[{"name":"wget"}],"casks":[]}`,
+		`{"formulae":[{"current_version":"1.0"}],"casks":[]}`,
+		`{"formulae":[{"name":"wget","current_version":"HEAD-123"}],"casks":[]}`,
+		`{"formulae":[],"casks":[{"name":"firefox","current_version":"latest"}]}`,
+	}
+	for _, body := range bodies {
+		t.Run(body, func(t *testing.T) { assertBrewUpgradePackages(t, body, nil, wantError) })
+	}
+}
+
+func assertBrewUpgradePackages(t *testing.T, body string, want []string, wantError bool) {
+	t.Helper()
+	original := runCmd
+	runCmd = func(name string, args ...string) ([]byte, error) {
+		if name != "brew" {
+			t.Fatalf("unexpected executable: %s", name)
+		}
+		if !slices.Equal(args, []string{"outdated", "--json=v2"}) {
+			t.Fatalf("unexpected discovery arguments: %v", args)
+		}
+		return []byte(body), nil
+	}
+	t.Cleanup(func() { runCmd = original })
+	got, err := BrewUpgradePackages(nil)
+	if (err != nil) != wantError {
+		t.Fatalf("unexpected discovery error: %v", err)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("upgrade packages = %v, want %v", got, want)
+	}
+}
+
+func TestBrewUpgradePackagesCommandFailure(t *testing.T) {
+	original := runCmd
+	want := errors.New("brew unavailable")
+	runCmd = func(string, ...string) ([]byte, error) { return nil, want }
+	t.Cleanup(func() { runCmd = original })
+	_, err := BrewUpgradePackages(nil)
+	if !errors.Is(err, want) {
+		t.Fatalf("discovery error = %v, want %v", err, want)
+	}
+}
+
+func TestBrewUpgradePackagesPreservesSelection(t *testing.T) {
+	original := runCmd
+	selection := []string{"--cask", "--greedy", "--greedy-latest", "--greedy-auto-updates", "--fetch-HEAD"}
+	want := append([]string{"outdated", "--json=v2"}, selection...)
+	runCmd = func(_ string, args ...string) ([]byte, error) {
+		if !slices.Equal(args, want) {
+			t.Fatalf("discovery arguments = %v, want %v", args, want)
+		}
+		return []byte(`{"formulae":[],"casks":[]}`), nil
+	}
+	t.Cleanup(func() { runCmd = original })
+	args := append(selection, "--verbose", "--no-ask", "--dry-run")
+	if _, err := BrewUpgradePackages(args); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBrewUpgradeOptionsRejectUnknownSelection(t *testing.T) {
+	_, err := brewUpgradeOptions([]string{"--unknown-selection"})
+	if err == nil {
+		t.Fatal("expected unsupported selection to block discovery")
+	}
+}
+
 func TestNpmVersionSuccess(t *testing.T) {
 	orig := runCmd
 	runCmd = func(name string, args ...string) ([]byte, error) {

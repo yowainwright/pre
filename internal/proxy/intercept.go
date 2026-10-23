@@ -133,6 +133,11 @@ func (run proxyRun) blockInstall(reason string, err error) bool {
 }
 
 func (run proxyRun) resolvePackages(packageArgs []string) ([]string, bool, bool) {
+	if run.isBulkBrewUpgrade() {
+		packages, err := manager.BrewUpgradePackages(run.brewUpgradeOptions())
+		ok := !run.blockInstall("brew_upgrade_resolution", err)
+		return packages, true, ok
+	}
 	fromProject := len(requirementFilePaths(run.mgr, packageArgs)) > 0
 	packages, err := installPackages(run.mgr, packageArgs)
 	if run.blockInstall("package_resolution", err) {
@@ -143,13 +148,36 @@ func (run proxyRun) resolvePackages(packageArgs []string) ([]string, bool, bool)
 		return nil, fromProject, false
 	}
 	if len(packages) == 0 {
-		fromProject = true
-		packages, err = installFallbackPackages(run.mgr, run.args)
-	}
-	if run.blockInstall("project_resolution", err) {
-		return nil, fromProject, false
+		return run.resolveProjectPackages()
 	}
 	return packages, fromProject, true
+}
+
+func (run proxyRun) resolveProjectPackages() ([]string, bool, bool) {
+	packages, err := installFallbackPackages(run.mgr, run.args)
+	ok := !run.blockInstall("project_resolution", err)
+	return packages, true, ok
+}
+
+func (run proxyRun) isBulkBrewUpgrade() bool {
+	if run.mgr.Name != "brew" {
+		return false
+	}
+	index := managerCommandIndex(run.mgr, run.args)
+	if index < 0 {
+		return false
+	}
+	if run.args[index] != "upgrade" {
+		return false
+	}
+	packages := extractPackages(run.mgr, run.args[index+1:])
+	return len(packages) == 0
+}
+
+func (run proxyRun) brewUpgradeOptions() []string {
+	index := managerCommandIndex(run.mgr, run.args)
+	options := slices.Clone(run.args[:index])
+	return append(options, run.args[index+1:]...)
 }
 
 func (run proxyRun) allowPackageCount(count int) bool {
@@ -176,12 +204,19 @@ func (run proxyRun) scanPackages(packages []string, fromProject bool) []scanResu
 	run.record("pre.scan.started", map[string]any{
 		"package_count": len(packages), "uncached_count": uncachedCount, "from_project": fromProject,
 	})
-	results := scanBatchWithPolicy(run.mgr, packages, c, !fromProject)
+	results := run.scanPackageTargets(packages, c, fromProject)
 	counts := countScanResults(results)
 	attrs := scanResultAttrs(results, counts)
 	attrs["duration_ms"] = durationMillis(run.start)
 	run.record("pre.scan.completed", attrs)
 	return results
+}
+
+func (run proxyRun) scanPackageTargets(packages []string, c cache.Cache, fromProject bool) []scanResult {
+	if run.isBulkBrewUpgrade() {
+		return scanBrewUpgradePackages(packages)
+	}
+	return scanBatchWithPolicy(run.mgr, packages, c, !fromProject)
 }
 
 func (run proxyRun) approveResults(results []scanResult) bool {
@@ -288,8 +323,6 @@ func unknownInstallTargetError(mgr *manager.Manager, args, packageArgs []string)
 
 func commandInstallsUnknownVersions(mgr *manager.Manager, command string, commandArgs, packageArgs []string) bool {
 	switch mgr.Name {
-	case "brew":
-		return brewInstallsUnknownVersions(mgr, command, packageArgs)
 	case "npm", "pnpm", "bun":
 		return command == "update"
 	case "go":
@@ -301,13 +334,6 @@ func commandInstallsUnknownVersions(mgr *manager.Manager, command string, comman
 	default:
 		return false
 	}
-}
-
-func brewInstallsUnknownVersions(mgr *manager.Manager, command string, packageArgs []string) bool {
-	if command != "upgrade" {
-		return false
-	}
-	return len(extractPackages(mgr, packageArgs)) == 0
 }
 
 func goInstallsUnknownVersions(command string, packageArgs []string) bool {
@@ -507,6 +533,7 @@ func runManagerCommand(name string, args []string) int {
 		return 1
 	}
 	c := exec.Command(path, args...) // #nosec G204 -- proxy intentionally execs the requested package manager.
+	c.Env = managerCommandEnvironment(name, args)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
@@ -517,4 +544,21 @@ func runManagerCommand(name string, args []string) int {
 		return 1
 	}
 	return 0
+}
+
+func managerCommandEnvironment(name string, args []string) []string {
+	if name != "brew" {
+		return nil
+	}
+	if disableEnabled() {
+		return nil
+	}
+	index := managerCommandIndex(manager.Get(name), args)
+	if index < 0 {
+		return nil
+	}
+	if args[index] != "upgrade" {
+		return nil
+	}
+	return append(os.Environ(), "HOMEBREW_NO_AUTO_UPDATE=1")
 }

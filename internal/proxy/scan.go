@@ -130,6 +130,21 @@ func scanBatchWithPolicy(mgr *manager.Manager, packages []string, c cache.Cache,
 	return results
 }
 
+func scanBrewUpgradePackages(packages []string) []scanResult {
+	results := make([]scanResult, len(packages))
+	pending := make([]batchScanWork, 0, len(packages))
+	for index, spec := range packages {
+		name, version := manager.ParseSpec("Homebrew", spec)
+		label := name + "@" + version
+		results[index] = scanResult{name: name, version: version, label: label, updated: true}
+		query := security.Query{Ecosystem: "Homebrew", Name: name, Version: version}
+		work := batchScanWork{index: index, query: query}
+		pending = append(pending, work)
+	}
+	applyBatchScanResults(results, pending)
+	return results
+}
+
 func prepareBatchScan(mgr *manager.Manager, spec string, c cache.Cache, allowMissing bool) (scanResult, security.Query, bool) {
 	name, requestedVersion := manager.ParseSpec(mgr.Ecosystem, spec)
 	result := prepareScan(mgr, name, requestedVersion, c, allowMissing)
