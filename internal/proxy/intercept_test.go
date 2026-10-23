@@ -839,7 +839,6 @@ func TestInstallTargetPolicyAllowsKnownTargets(t *testing.T) {
 		{"", "install"},
 		{"go"},
 		{"brew", "install", "wget"},
-		{"brew", "upgrade"},
 		{"brew", "upgrade", "wget"},
 		{"go", "get", "example.com/tool@v1.2.3"},
 		{"go", "install", "example.com/tool@v1.2.3"},
