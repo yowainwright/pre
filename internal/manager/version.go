@@ -39,7 +39,9 @@ var (
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return exec.CommandContext(ctx, path, args...).Output() // #nosec G204 -- executable names are package manager tools.
+		command := exec.CommandContext(ctx, path, args...) // #nosec G204 -- executable names are package manager tools.
+		command.Env = versionCommandEnvironment(name, args)
+		return command.Output()
 	}
 )
 
@@ -61,6 +63,20 @@ type brewInfo struct {
 	Formulae []brewFormulaInfo `json:"formulae"`
 	Casks    []brewCaskInfo    `json:"casks"`
 }
+
+const brewUpgradeFormulaScript = `require "formula"
+require "formulary"
+require "json"
+names = JSON.parse(ARGV.fetch(0))
+installed = Formula.installed.to_h { |formula| [formula.full_name, formula] }
+targets = names.map do |name|
+  formula = installed.fetch(name)
+  latest = formula.latest_formula
+  target = latest.latest_version_installed? ? formula : latest
+  { name: target.full_name, current_version: target.pkg_version.to_s }
+end
+puts JSON.generate(formulae: targets, casks: [])
+`
 
 func Executable(name string) (string, error) {
 	if os.Getenv("PRE_EXEC_MANAGER") != name {
@@ -106,6 +122,19 @@ func BrewUpgradePackages(args []string) ([]string, error) {
 		return nil, fmt.Errorf("parse brew outdated: %w", err)
 	}
 	return brewUpgradeSpecs(info)
+}
+
+func versionCommandEnvironment(name string, args []string) []string {
+	if name != "brew" {
+		return nil
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	if args[0] != "ruby" {
+		return nil
+	}
+	return append(os.Environ(), "HOMEBREW_DEV_CMD_RUN=1")
 }
 
 func crateVersion(spec string) (string, error) {
@@ -211,8 +240,65 @@ func brewUpgradeSpecs(info brewUpgradeInfo) ([]string, error) {
 	if missingLists {
 		return nil, errors.New("brew outdated: missing formulae or casks")
 	}
+	formulae, err := resolveBrewUpgradeFormulae(info.Formulae)
+	if err != nil {
+		return nil, err
+	}
+	return brewUpgradePackageSpecs(append(formulae, info.Casks...))
+}
+
+func resolveBrewUpgradeFormulae(formulae []brewUpgradePackage) ([]brewUpgradePackage, error) {
+	names, err := brewUpgradeFormulaNames(formulae)
+	if err != nil {
+		return nil, err
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(names)
+	if err != nil {
+		return nil, fmt.Errorf("encode brew upgrade formulae: %w", err)
+	}
+	out, err := runCmd("brew", "ruby", "-e", brewUpgradeFormulaScript, "--", string(encoded))
+	if err != nil {
+		return nil, fmt.Errorf("resolve brew upgrade formulae: %w", err)
+	}
+	return decodeBrewUpgradeFormulae(out, len(names))
+}
+
+func brewUpgradeFormulaNames(formulae []brewUpgradePackage) ([]string, error) {
+	var names []string
+	for _, pkg := range formulae {
+		if pkg.Pinned {
+			continue
+		}
+		if err := validateBrewUpgradePackage(pkg); err != nil {
+			return nil, err
+		}
+		names = append(names, pkg.Name)
+	}
+	return names, nil
+}
+
+func decodeBrewUpgradeFormulae(out []byte, count int) ([]brewUpgradePackage, error) {
+	var info brewUpgradeInfo
+	if err := json.Unmarshal(out, &info); err != nil {
+		return nil, fmt.Errorf("parse brew upgrade formulae: %w", err)
+	}
+	if len(info.Formulae) != count {
+		return nil, errors.New("brew upgrade formula resolution returned incomplete targets")
+	}
+	for _, pkg := range info.Formulae {
+		if pkg.Pinned {
+			return nil, errors.New("brew upgrade formula resolution unexpectedly returned a pinned target")
+		}
+	}
+	return info.Formulae, nil
+}
+
+func brewUpgradePackageSpecs(packages []brewUpgradePackage) ([]string, error) {
 	var specs []string
-	for _, pkg := range append(info.Formulae, info.Casks...) {
+	for _, pkg := range packages {
 		if pkg.Pinned {
 			continue
 		}
@@ -233,6 +319,12 @@ func validateBrewUpgradePackage(pkg brewUpgradePackage) error {
 	unresolved := strings.EqualFold(pkg.Version, "latest") || strings.HasPrefix(pkg.Version, "HEAD")
 	if unresolved {
 		return fmt.Errorf("brew upgrade target version for %q is unresolved: %s", pkg.Name, pkg.Version)
+	}
+	spec := pkg.Name + brewLockVersionSeparator + pkg.Version
+	name, version := ParseSpec("Homebrew", spec)
+	mismatch := name != pkg.Name || version != pkg.Version
+	if mismatch {
+		return fmt.Errorf("brew upgrade target identity for %q cannot be represented safely", pkg.Name)
 	}
 	return nil
 }
