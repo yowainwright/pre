@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -122,10 +123,7 @@ func assertBrewUpgradePackages(t *testing.T, body string, want []string, wantErr
 		if name != "brew" {
 			t.Fatalf("unexpected executable: %s", name)
 		}
-		if !slices.Equal(args, []string{"outdated", "--json=v2"}) {
-			t.Fatalf("unexpected discovery arguments: %v", args)
-		}
-		return []byte(body), nil
+		return brewUpgradeFixtureResponse(t, body, args)
 	}
 	t.Cleanup(func() { runCmd = original })
 	got, err := BrewUpgradePackages(nil)
@@ -135,6 +133,114 @@ func assertBrewUpgradePackages(t *testing.T, body string, want []string, wantErr
 	if !slices.Equal(got, want) {
 		t.Fatalf("upgrade packages = %v, want %v", got, want)
 	}
+}
+
+func brewUpgradeFixtureResponse(t *testing.T, body string, args []string) ([]byte, error) {
+	t.Helper()
+	if slices.Equal(args, []string{"outdated", "--json=v2"}) {
+		return []byte(body), nil
+	}
+	if len(args) != 5 {
+		t.Fatalf("unexpected resolution arguments: %v", args)
+	}
+	if !slices.Equal(args[:2], []string{"ruby", "-e"}) {
+		t.Fatalf("expected native Homebrew formula resolution: %v", args)
+	}
+	var info brewUpgradeInfo
+	if err := json.Unmarshal([]byte(body), &info); err != nil {
+		t.Fatal(err)
+	}
+	info.Formulae = slices.DeleteFunc(info.Formulae, func(pkg brewUpgradePackage) bool { return pkg.Pinned })
+	return json.Marshal(info)
+}
+
+func TestBrewUpgradePackagesResolvesAlias(t *testing.T) {
+	output := `{"formulae":[{"name":"replacement@3","current_version":"3.0.0_1"}],"casks":[]}`
+	stubBrewUpgradeResolver(t, output, nil)
+	got, err := BrewUpgradePackages(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"replacement@3@@3.0.0_1"}) {
+		t.Fatalf("expected resolved alias target, got %v", got)
+	}
+}
+
+func TestBrewUpgradeFormulaResolutionFailsClosed(t *testing.T) {
+	outputs := []string{
+		`invalid`, `{}`, `{"formulae":[]}`,
+		`{"formulae":[{"name":"replacement"}]}`,
+		`{"formulae":[{"current_version":"3.0.0"}]}`,
+		`{"formulae":[{"name":"replacement","current_version":"HEAD-123"}]}`,
+		`{"formulae":[{"name":"replacement","current_version":"latest"}]}`,
+		`{"formulae":[{"name":"replacement","current_version":"3.0.0","pinned":true}]}`,
+		`{"formulae":[{},{}]}`,
+	}
+	for _, output := range outputs {
+		t.Run(output, func(t *testing.T) {
+			stubBrewUpgradeResolver(t, output, nil)
+			if _, err := BrewUpgradePackages(nil); err == nil {
+				t.Fatal("expected incomplete formula resolution to block upgrade")
+			}
+		})
+	}
+}
+
+func TestBrewUpgradeFormulaResolverCommandFailure(t *testing.T) {
+	want := errors.New("resolver unavailable")
+	stubBrewUpgradeResolver(t, "", want)
+	_, err := BrewUpgradePackages(nil)
+	if !errors.Is(err, want) {
+		t.Fatalf("resolution error = %v, want %v", err, want)
+	}
+}
+
+func TestBrewUpgradeFormulaAmbiguousVersionsBlock(t *testing.T) {
+	for _, version := range []string{"3.0@@1", "@3.0.0"} {
+		t.Run(version, func(t *testing.T) {
+			output := fmt.Sprintf(`{"formulae":[{"name":"replacement","current_version":%q}]}`, version)
+			stubBrewUpgradeResolver(t, output, nil)
+			if _, err := BrewUpgradePackages(nil); err == nil {
+				t.Fatal("expected ambiguous formula identity to block upgrade")
+			}
+		})
+	}
+}
+
+func TestBrewRubyEnvironmentIsScoped(t *testing.T) {
+	t.Setenv("HOMEBREW_DEV_CMD_RUN", "0")
+	t.Setenv("HOMEBREW_DEVELOPER", "0")
+	env := versionCommandEnvironment("brew", []string{"ruby"})
+	if !slices.Contains(env, "HOMEBREW_DEV_CMD_RUN=1") {
+		t.Fatal("expected child-only suppression of persistent developer configuration")
+	}
+	if !slices.Contains(env, "HOMEBREW_DEVELOPER=0") {
+		t.Fatal("expected developer mode to remain unchanged")
+	}
+	if os.Getenv("HOMEBREW_DEV_CMD_RUN") != "0" {
+		t.Fatal("child environment override leaked into the parent")
+	}
+}
+
+func TestVersionCommandEnvironmentPreservesOtherCommands(t *testing.T) {
+	commands := [][]string{{"brew"}, {"brew", "outdated"}, {"npm", "ruby"}}
+	for _, command := range commands {
+		if env := versionCommandEnvironment(command[0], command[1:]); env != nil {
+			t.Fatalf("unexpected environment override for %v", command)
+		}
+	}
+}
+
+func stubBrewUpgradeResolver(t *testing.T, output string, resolverError error) {
+	t.Helper()
+	original := runCmd
+	runCmd = func(_ string, args ...string) ([]byte, error) {
+		if args[0] == "outdated" {
+			return []byte(`{"formulae":[{"name":"original","current_version":"1.0.0"}],"casks":[]}`), nil
+		}
+		return []byte(output), resolverError
+	}
+	t.Cleanup(func() { runCmd = original })
 }
 
 func TestBrewUpgradePackagesCommandFailure(t *testing.T) {
