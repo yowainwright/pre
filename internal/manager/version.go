@@ -15,6 +15,17 @@ import (
 	"time"
 )
 
+type brewUpgradePackage struct {
+	Name    string `json:"name"`
+	Version string `json:"current_version"`
+	Pinned  bool   `json:"pinned"`
+}
+
+type brewUpgradeInfo struct {
+	Formulae []brewUpgradePackage `json:"formulae"`
+	Casks    []brewUpgradePackage `json:"casks"`
+}
+
 var (
 	goProxyBase = "https://proxy.golang.org"
 	pypiBase    = "https://pypi.org"
@@ -78,6 +89,23 @@ func ResolveVersion(mgr *Manager, pkg string) (string, error) {
 	default:
 		return "", nil
 	}
+}
+
+func BrewUpgradePackages(args []string) ([]string, error) {
+	options, err := brewUpgradeOptions(args)
+	if err != nil {
+		return nil, err
+	}
+	command := append([]string{"outdated", "--json=v2"}, options...)
+	out, err := runCmd("brew", command...)
+	if err != nil {
+		return nil, fmt.Errorf("brew outdated: %w", err)
+	}
+	var info brewUpgradeInfo
+	if err := json.Unmarshal(out, &info); err != nil {
+		return nil, fmt.Errorf("parse brew outdated: %w", err)
+	}
+	return brewUpgradeSpecs(info)
 }
 
 func crateVersion(spec string) (string, error) {
@@ -160,6 +188,53 @@ func brewPackageVersion(info brewInfo) string {
 		return info.Casks[0].Version
 	}
 	return ""
+}
+
+func brewUpgradeOptions(args []string) ([]string, error) {
+	var options []string
+	for _, arg := range args {
+		switch arg {
+		case "--formula", "--formulae", "--cask", "--casks", "-g", "--greedy", "--greedy-latest", "--greedy-auto-updates", "--fetch-HEAD":
+			options = append(options, arg)
+		case "-d", "--debug", "-v", "--verbose", "-q", "--quiet", "-f", "--force", "-n", "--dry-run", "--display-times":
+		case "--no-ask", "--yes", "-y", "--ask", "--force-bottle", "--keep-tmp", "--overwrite":
+		case "--skip-cask-deps", "--no-quit", "--binaries", "--no-binaries", "--require-sha", "--":
+		default:
+			return nil, fmt.Errorf("brew upgrade option %q cannot be scanned", arg)
+		}
+	}
+	return options, nil
+}
+
+func brewUpgradeSpecs(info brewUpgradeInfo) ([]string, error) {
+	missingLists := info.Formulae == nil || info.Casks == nil
+	if missingLists {
+		return nil, errors.New("brew outdated: missing formulae or casks")
+	}
+	var specs []string
+	for _, pkg := range append(info.Formulae, info.Casks...) {
+		if pkg.Pinned {
+			continue
+		}
+		if err := validateBrewUpgradePackage(pkg); err != nil {
+			return nil, err
+		}
+		spec := pkg.Name + brewLockVersionSeparator + pkg.Version
+		specs = append(specs, spec)
+	}
+	return specs, nil
+}
+
+func validateBrewUpgradePackage(pkg brewUpgradePackage) error {
+	incomplete := pkg.Name == "" || pkg.Version == ""
+	if incomplete {
+		return errors.New("brew outdated: missing package name or target version")
+	}
+	unresolved := strings.EqualFold(pkg.Version, "latest") || strings.HasPrefix(pkg.Version, "HEAD")
+	if unresolved {
+		return fmt.Errorf("brew upgrade target version for %q is unresolved: %s", pkg.Name, pkg.Version)
+	}
+	return nil
 }
 
 func npmVersion(pkg string) (string, error) {

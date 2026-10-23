@@ -17,6 +17,14 @@ import (
 	"github.com/yowainwright/pre/internal/security"
 )
 
+const brewUpgradeCandidatesJSON = `{
+  "formulae": [
+    {"name":"wget","current_version":"1.25.0","pinned":false},
+    {"name":"openssl@3","current_version":"3.5.9","pinned":false}
+  ],
+  "casks": [{"name":"firefox","current_version":"143.0","pinned":false}]
+}`
+
 func noopExec(name string, args []string) {}
 
 func npmMgr() *manager.Manager {
@@ -656,7 +664,6 @@ func TestInterceptPythonUnsupportedSourcesBlock(t *testing.T) {
 func TestInterceptUnknownVersionUpdatesBlock(t *testing.T) {
 	const wantError = true
 	tests := [][]string{
-		{"brew", "upgrade"},
 		{"npm", "update", "react"},
 		{"pnpm", "update", "react"},
 		{"bun", "update", "react"},
@@ -670,6 +677,146 @@ func TestInterceptUnknownVersionUpdatesBlock(t *testing.T) {
 			assertInstallTargetPolicy(t, args, wantError)
 			assertInstallBlocked(t, args)
 		})
+	}
+}
+
+func TestInterceptBrewUpgradeScansEveryCandidate(t *testing.T) {
+	setupBrewUpgradeTest(t)
+	var checked []security.Query
+	defer withSecurityBatchCheck(func(queries []security.Query) ([][]security.Vulnerability, error) {
+		checked = append(checked, queries...)
+		return make([][]security.Vulnerability, len(queries)), nil
+	})()
+	executed := false
+	defer withExecFn(func(name string, args []string) {
+		assertBrewUpgradeExecution(t, name, args, checked)
+		executed = true
+	})()
+	Intercept(manager.Get("brew"), []string{"upgrade"})
+	if !executed {
+		t.Fatal("expected brew upgrade after every candidate was scanned")
+	}
+}
+
+func TestInterceptBrewUpgradeEmptySkipsProjectManifest(t *testing.T) {
+	setupBrewUpgradeTest(t)
+	t.Setenv("PRE_TEST_BREW_OUTDATED", `{"formulae":[],"casks":[]}`)
+	defer withReadManifestDir(func(*manager.Manager, string) []string {
+		t.Fatal("brew upgrade must not scan the current project's manifest")
+		return nil
+	})()
+	defer withSecurityBatchCheck(func([]security.Query) ([][]security.Vulnerability, error) {
+		t.Fatal("expected no scan for an empty upgrade")
+		return nil, nil
+	})()
+	executed := false
+	defer withExecFn(func(string, []string) { executed = true })()
+	Intercept(manager.Get("brew"), []string{"upgrade"})
+	if !executed {
+		t.Fatal("expected Homebrew to report no upgrades")
+	}
+}
+
+func TestInterceptBrewUpgradeDiscoveryFailureBlocks(t *testing.T) {
+	setupBrewUpgradeTest(t)
+	t.Setenv("PRE_TEST_BREW_OUTDATED", "invalid JSON")
+	defer withExecFn(func(string, []string) { t.Fatal("unexpected upgrade") })()
+	expectProcessExit(t, 1, func() { Intercept(manager.Get("brew"), []string{"upgrade"}) })
+}
+
+func TestInterceptBrewUpgradePackageLimitBlocks(t *testing.T) {
+	setupBrewUpgradeTest(t)
+	t.Setenv(envMaxPackages, "1")
+	defer withExecFn(func(string, []string) { t.Fatal("unexpected upgrade") })()
+	defer withSecurityBatchCheck(func([]security.Query) ([][]security.Vulnerability, error) {
+		t.Fatal("package limit must be enforced before scanning")
+		return nil, nil
+	})()
+	expectProcessExit(t, 1, func() { Intercept(manager.Get("brew"), []string{"upgrade"}) })
+}
+
+func TestInterceptBrewUpgradeScanFailureBlocks(t *testing.T) {
+	setupBrewUpgradeTest(t)
+	defer withExecFn(func(string, []string) { t.Fatal("unexpected upgrade") })()
+	defer withSecurityBatchCheck(func([]security.Query) ([][]security.Vulnerability, error) {
+		return nil, errors.New("scan unavailable")
+	})()
+	expectProcessExit(t, 1, func() { Intercept(manager.Get("brew"), []string{"upgrade"}) })
+}
+
+func TestInterceptBrewUpgradeDeclinedBlocks(t *testing.T) {
+	setupBrewUpgradeTest(t)
+	defer withStdinInput("n\n")()
+	defer withExecFn(func(string, []string) { t.Fatal("unexpected upgrade") })()
+	defer withSecurityBatchCheck(func(queries []security.Query) ([][]security.Vulnerability, error) {
+		return make([][]security.Vulnerability, len(queries)), nil
+	})()
+	expectProcessExit(t, 1, func() { Intercept(manager.Get("brew"), []string{"upgrade"}) })
+}
+
+func TestBrewUpgradeExecutionKeepsScannedMetadata(t *testing.T) {
+	setupBrewUpgradeTest(t)
+	t.Setenv("HOMEBREW_NO_AUTO_UPDATE", "0")
+	path := os.Getenv("PRE_EXEC_PATH")
+	writeShellFixture(t, path, "#!/bin/sh\nmain() {\n\tprintf '%s\\n' \"$HOMEBREW_NO_AUTO_UPDATE\"\n}\nmain \"$@\"\n")
+	output := captureStdout(t, func() {
+		if code := runManagerCommand("brew", []string{"upgrade"}); code != 0 {
+			t.Fatalf("upgrade exited %d", code)
+		}
+	})
+	if output != "1\n" {
+		t.Fatalf("upgrade did not disable metadata refresh: %q", output)
+	}
+}
+
+func TestManagerCommandEnvironmentPreservesPassthrough(t *testing.T) {
+	t.Setenv(envDisable, "0")
+	commands := [][]string{{"npm", "install"}, {"brew", "update"}, {"brew"}}
+	for _, command := range commands {
+		if env := managerCommandEnvironment(command[0], command[1:]); env != nil {
+			t.Fatalf("unexpected environment override for %v", command)
+		}
+	}
+	t.Setenv(envDisable, "1")
+	if env := managerCommandEnvironment("brew", []string{"upgrade"}); env != nil {
+		t.Fatal("disabled interception must preserve Homebrew's environment")
+	}
+}
+
+func setupBrewUpgradeTest(t *testing.T) {
+	t.Helper()
+	t.Setenv(envDisable, "0")
+	t.Setenv(envQuiet, "1")
+	t.Setenv(envMaxPackages, "")
+	t.Setenv("PRE_OBS", "0")
+	t.Setenv("PRE_TEST_BREW_OUTDATED", brewUpgradeCandidatesJSON)
+	t.Cleanup(withLoadCache(emptyCache))
+	t.Cleanup(withUpdateCache(noopUpdate))
+	t.Cleanup(withStdinInput("y\n"))
+	path := filepath.Join(t.TempDir(), "brew")
+	writeShellFixture(t, path, "#!/bin/sh\nmain() {\n\tprintf '%s\\n' \"$PRE_TEST_BREW_OUTDATED\"\n}\nmain \"$@\"\n")
+	t.Setenv("PRE_EXEC_MANAGER", "brew")
+	t.Setenv("PRE_EXEC_PATH", path)
+	original := processExit
+	processExit = func(code int) { t.Fatalf("brew upgrade exited %d before scanning candidates", code) }
+	t.Cleanup(func() { processExit = original })
+}
+
+func assertBrewUpgradeExecution(t *testing.T, name string, args []string, checked []security.Query) {
+	t.Helper()
+	want := []security.Query{
+		{Ecosystem: "Homebrew", Name: "wget", Version: "1.25.0"},
+		{Ecosystem: "Homebrew", Name: "openssl@3", Version: "3.5.9"},
+		{Ecosystem: "Homebrew", Name: "firefox", Version: "143.0"},
+	}
+	if !slices.Equal(checked, want) {
+		t.Fatalf("upgrade ran without scanning every target: got %v, want %v", checked, want)
+	}
+	if name != "brew" {
+		t.Fatalf("unexpected upgrade executable: %s", name)
+	}
+	if !slices.Equal(args, []string{"upgrade"}) {
+		t.Fatalf("upgrade arguments changed: %v", args)
 	}
 }
 
