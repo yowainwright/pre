@@ -44,6 +44,95 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
+func TestRunMigratesLegacyHooks(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh"} {
+		t.Run(shell, func(t *testing.T) {
+			defer withVersion("test")()
+			legacy := "# pre security proxy\nfunction npm() {}\n# end pre security proxy\n"
+			initial := "export FOO=bar\n\n" + legacy + "\nexport BAR=baz\n"
+			path := writeRunHookProfile(t, shell, initial)
+			assertQuietVersion(t)
+			want := strings.Replace(initial, legacy, strings.TrimPrefix(proxy.ShellHook(version), "\n"), 1)
+			assertRunHookProfile(t, path, want)
+		})
+	}
+}
+
+func TestRunPreservesHooksForReadOnlyAndDevCommands(t *testing.T) {
+	cases := []struct{ version, command string }{
+		{"test", "shell-hook"},
+		{"dev", "--version"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.command, func(t *testing.T) {
+			defer withVersion(tc.version)()
+			initial := proxy.ShellHook("old")
+			path := writeRunHookProfile(t, "zsh", initial)
+			var out, errOut bytes.Buffer
+			code := run([]string{tc.command}, &out, &errOut)
+			if code != 0 {
+				t.Fatalf("command failed: %d, %s", code, errOut.String())
+			}
+			assertRunHookProfile(t, path, initial)
+		})
+	}
+}
+
+func TestRunContinuesAfterHookMigrationFailure(t *testing.T) {
+	defer withVersion("test")()
+	dir := setupShellTest(t)
+	if err := os.Mkdir(filepath.Join(dir, ".zshrc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"--version"}, &out, &errOut)
+	unexpectedExit := code != 0 || out.String() != version+"\n"
+	if unexpectedExit {
+		t.Fatalf("migration blocked version command: exit %d, stdout %q", code, out.String())
+	}
+	if !strings.Contains(errOut.String(), "pre: refresh shell hooks:") {
+		t.Fatalf("missing migration error: %s", errOut.String())
+	}
+}
+
+func writeRunHookProfile(t *testing.T, shell, content string) string {
+	t.Helper()
+	dir := setupShellTest(t)
+	t.Setenv("SHELL", "/bin/"+shell)
+	path := filepath.Join(dir, "."+shell+"rc")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func assertRunHookProfile(t *testing.T, path, want string) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	unexpected := err != nil || string(content) != want
+	if unexpected {
+		t.Fatalf("unexpected hook profile: %v\n%s", err, content)
+	}
+}
+
+func assertQuietVersion(t *testing.T) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code := run([]string{"--version"}, &out, &errOut)
+	failed := code != 0 || errOut.Len() != 0
+	unexpectedVersion := out.String() != version+"\n"
+	unexpected := failed || unexpectedVersion
+	if unexpected {
+		t.Fatalf("version: exit %d, stdout %q, stderr %q", code, out.String(), errOut.String())
+	}
+}
+
+func withVersion(value string) func() {
+	original := version
+	version = value
+	return func() { version = original }
+}
+
 func TestRunSetup(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("SHELL", "/bin/zsh")

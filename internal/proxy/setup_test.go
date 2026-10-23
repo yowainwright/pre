@@ -1,11 +1,16 @@
 package proxy
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yowainwright/pre/internal/manager"
 )
@@ -137,6 +142,27 @@ false
 _pre_refresh_hooks
 printf 'status:%s\n' "$?"
 command pre --version
+`
+
+const brewBackgroundUpdateFixture = `#!/bin/sh
+brew_fixture() {
+  case "${1:-}" in
+    upgrade) ;;
+    *)
+      printf 'brew:%s\n' "$*"
+      exit "${PRE_BREW_UPDATE_STATUS:-0}"
+      ;;
+  esac
+  if read -r _input; then exit 99; fi
+  printf '%s:%s:%s\n' "$*" "$HOMEBREW_NO_ASK" "$NONINTERACTIVE" >"$PRE_UPDATE_LOG.tmp"
+  /bin/mv "$PRE_UPDATE_LOG.tmp" "$PRE_UPDATE_LOG"
+  until [ -e "$PRE_UPDATE_LOG.release" ]; do
+    [ -d "${PRE_UPDATE_LOG%/*}" ] || exit 0
+    /bin/sleep 0.01
+  done
+  printf 'done\n' >"$PRE_UPDATE_LOG.done"
+}
+brew_fixture "$@"
 `
 
 func TestBuildShellHookContents(t *testing.T) {
@@ -277,11 +303,130 @@ func shellAliasFixture(t *testing.T) (string, string) {
 	return binDir, targetDir
 }
 
+func TestShellHookUpdatesPreAfterBrewUpdate(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh"} {
+		t.Run(shell, func(t *testing.T) {
+			checkBrewBackgroundUpdate(t, shell)
+		})
+	}
+}
+
+func TestShellHookSkipsBackgroundUpdate(t *testing.T) {
+	cases := []struct{ command, status, disable string }{
+		{"update", "7", ""},
+		{"update", "0", "1"},
+		{"update --help", "0", ""},
+		{"update -h", "0", ""},
+		{"--prefix update", "0", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.command+tc.status+tc.disable, func(t *testing.T) {
+			checkBrewUpdateSkipped(t, tc.command, tc.status, tc.disable)
+		})
+	}
+}
+
+func checkBrewUpdateSkipped(t *testing.T, command, status, disable string) {
+	t.Helper()
+	cmd, logPath := brewBackgroundUpdateCommand(t, "bash")
+	cmd.Args[len(cmd.Args)-1] = ShellHook("old") + "brew " + command + "\n"
+	t.Setenv("PRE_BREW_UPDATE_STATUS", status)
+	t.Setenv("PRE_DISABLE", disable)
+	releaseBrewUpdate(t, logPath)
+	err := runShellAndWaitForChildren(t, cmd)
+	if cmd.ProcessState == nil {
+		t.Fatalf("brew update failed to start: %v", err)
+	}
+	got := fmt.Sprint(cmd.ProcessState.ExitCode())
+	if got != status {
+		t.Fatalf("brew exit status changed: got %s, want %s", got, status)
+	}
+	if _, err := os.Stat(logPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unexpected automatic update: %v", err)
+	}
+}
+
+func checkBrewBackgroundUpdate(t *testing.T, shell string) {
+	t.Helper()
+	cmd, logPath := brewBackgroundUpdateCommand(t, shell)
+	output, err := cmd.CombinedOutput()
+	unexpected := err != nil || string(output) != "brew:update --verbose\n"
+	if unexpected {
+		t.Fatalf("brew update did not return independently: %v, %q", err, output)
+	}
+	got := awaitBrewUpdateFile(t, logPath)
+	if got != "upgrade pre:1:1\n" {
+		t.Fatalf("unexpected background updater: %q", got)
+	}
+	releaseBrewUpdate(t, logPath)
+	awaitBrewUpdateFile(t, logPath+".done")
+}
+
+func brewBackgroundUpdateCommand(t *testing.T, shell string) (*exec.Cmd, string) {
+	t.Helper()
+	shellPath, err := exec.LookPath(shell)
+	if err != nil {
+		t.Skipf("%s unavailable: %v", shell, err)
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "update.log")
+	writeShellFixture(t, filepath.Join(dir, "brew"), brewBackgroundUpdateFixture)
+	writeShellFixture(t, filepath.Join(dir, "pre"), "#!/bin/sh\nprintf 'pre:%s\\n' \"$*\" > \"$PRE_UPDATE_LOG\"\n")
+	t.Setenv("PATH", dir)
+	t.Setenv("BASH_ENV", "")
+	t.Setenv("PRE_DISABLE", "")
+	t.Setenv("PRE_UPDATE_LOG", logPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	cmd := exec.CommandContext(ctx, shellPath, "-f", "-c", ShellHook("old")+"brew update --verbose\n")
+	return cmd, logPath
+}
+
+func runShellAndWaitForChildren(t *testing.T, cmd *exec.Cmd) error {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	cmd.ExtraFiles = []*os.File{writer}
+	runErr := cmd.Run()
+	_ = writer.Close()
+	if err := reader.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(io.Discard, reader); err != nil {
+		t.Fatalf("wait for shell children: %v", err)
+	}
+	return runErr
+}
+
 func writeShellFixture(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write shell fixture: %v", err)
 	}
+}
+
+func releaseBrewUpdate(t *testing.T, logPath string) {
+	t.Helper()
+	if err := os.WriteFile(logPath+".release", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func awaitBrewUpdateFile(t *testing.T, path string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		content, err := os.ReadFile(path)
+		if err == nil {
+			return string(content)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("background updater did not write %s", path)
+	return ""
 }
 
 func TestShellHookReloadsAfterUpdate(t *testing.T) {
@@ -403,6 +548,85 @@ func TestSetupFresh(t *testing.T) {
 	if !strings.Contains(string(content), "_pre_hook_version='test'\n") {
 		t.Error("expected setup to record the installed hook version")
 	}
+}
+
+func TestRefreshShellHooks(t *testing.T) {
+	prefix, suffix := "export FOO=bar\n\n", "\nexport BAR=baz\n"
+	current := prefix + ShellHook("new") + suffix
+	older := prefix + ShellHook("old") + suffix
+	unmanaged := prefix + suffix
+	legacy := "# pre security proxy\nfunction npm() {}\nexport BAR=baz\n"
+	legacyWant := strings.TrimPrefix(ShellHook("new"), "\n") + "export BAR=baz\n"
+	cases := []struct{ name, initial, want string }{
+		{"legacy", legacy, legacyWant},
+		{"older", older, current},
+		{"current", current, current},
+		{"unmanaged", unmanaged, unmanaged},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			checkHookMigration(t, tc.initial, tc.want)
+		})
+	}
+}
+
+func checkHookMigration(t *testing.T, initial, want string) {
+	t.Helper()
+	path := setupTestRCPath(t)
+	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RefreshShellHooks("new"); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	unexpected := err != nil || string(content) != want
+	if unexpected {
+		t.Fatalf("unexpected migrated profile: %v\n%s", err, content)
+	}
+	assertMigrationMetadata(t, path, before, initial == want)
+}
+
+func assertMigrationMetadata(t *testing.T, path string, before os.FileInfo, unchanged bool) {
+	t.Helper()
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Mode().Perm() != before.Mode().Perm() {
+		t.Fatal("migration changed the profile permissions")
+	}
+	rewritten := unchanged && !os.SameFile(before, after)
+	if rewritten {
+		t.Fatal("migration rewrote an unchanged profile")
+	}
+}
+
+func TestRefreshShellHooksDoesNotCreateProfile(t *testing.T) {
+	path := setupTestRCPath(t)
+	if err := RefreshShellHooks("new"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("migration created a profile: %v", err)
+	}
+}
+
+func TestRefreshShellHooksPreservesUnreadableProfile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read files without read permission")
+	}
+	path := setupTestRCPath(t)
+	original := []byte(ShellHook("old"))
+	writeUnreadableRC(t, path, original)
+	if err := RefreshShellHooks("new"); err == nil {
+		t.Fatal("expected migration to report the unreadable profile")
+	}
+	assertRCUnchanged(t, path, original)
 }
 
 func TestSetupPreservesExistingRCFileMode(t *testing.T) {

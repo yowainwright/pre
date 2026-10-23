@@ -127,6 +127,23 @@ const managerShellHookText = `function %s() {
 }
 `
 
+const brewUpdateShellHookText = `  case "${1:-}" in
+    update | up)
+      command %s "$@"
+      local _pre_brew_status=$?
+      case " $* " in
+        *" --help "* | *" -h "* | *" --version "*) return "$_pre_brew_status" ;;
+      esac
+      if [[ "$_pre_brew_status" == 0 ]]; then
+        (
+          HOMEBREW_NO_ASK=1 NONINTERACTIVE=1 command %s upgrade pre </dev/null &
+        ) >/dev/null 2>&1
+      fi
+      return "$_pre_brew_status"
+      ;;
+  esac
+`
+
 const aliasShellHookText = `function _pre_alias_error() {
   printf 'pre: cannot safely intercept the %%s alias; use pre %%s directly or resolve the alias conflict\n' "$1" "$1" >&2
   return 1
@@ -206,6 +223,42 @@ func Setup(version string) {
 	}
 }
 
+func RefreshShellHooks(version string) error {
+	rcFile, err := detectRCFile()
+	if err != nil {
+		return err
+	}
+	content, err := os.ReadFile(rcFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return migrateRCHooks(rcFile, string(content), version)
+}
+
+func migrateRCHooks(rcFile, content, version string) error {
+	start := strings.Index(content, shellHookStart)
+	if start < 0 {
+		return nil
+	}
+	block := content[start:]
+	hook := strings.TrimPrefix(ShellHook(version), "\n")
+	if strings.HasPrefix(block, hook) {
+		return nil
+	}
+	end := strings.Index(block, shellHookEnd)
+	if end < 0 {
+		end = legacyHookEnd(block)
+	} else {
+		end = skipHookLineEnding(block, end+len(shellHookEnd))
+	}
+	updated := content[:start] + hook
+	updated += block[end:]
+	return writeRCFile(rcFile, []byte(updated))
+}
+
 func setupRCFile(rcFile, version string) error {
 	content, err := os.ReadFile(rcFile)
 	readFailed := err != nil && !errors.Is(err, os.ErrNotExist)
@@ -271,6 +324,9 @@ func formatShellHook(m manager.Manager, name, executable, environment string) st
 		return fmt.Sprintf(cargoShellHookText, name, executable, environment, executable)
 	}
 	parser := shellCommandParser(m)
+	if m.Name == "brew" {
+		parser += fmt.Sprintf(brewUpdateShellHookText, executable, executable)
+	}
 	condition := shellInstallCondition(m)
 	return fmt.Sprintf(managerShellHookText, name, executable, parser, condition, environment, m.Name, executable)
 }

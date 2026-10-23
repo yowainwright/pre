@@ -23,7 +23,28 @@ func run(args []string, stdout, stderr io.Writer) int {
 		printUsage(stderr)
 		return 1
 	}
+	if err := refreshShellHooks(args); err != nil {
+		fmt.Fprintf(stderr, "pre: refresh shell hooks: %v\n", err)
+	}
 	return dispatchCommand(args, cfg, stdout, stderr)
+}
+
+func refreshShellHooks(args []string) error {
+	if version == "dev" {
+		return nil
+	}
+	switch args[0] {
+	case "setup", "teardown", "shell-hook":
+		return nil
+	case "self":
+		if len(args) < 2 {
+			return nil
+		}
+		if args[1] == "uninstall" {
+			return nil
+		}
+	}
+	return proxy.RefreshShellHooks(version)
 }
 
 func configureCommand() *config.Config {
