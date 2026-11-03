@@ -460,6 +460,29 @@ func RemoveShellHooks() (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
+	return removeShellHooksFile(rcFile)
+}
+
+func RemoveAllShellHooks() ([]string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home directory: %w", err)
+	}
+	var removed []string
+	for _, name := range []string{".bashrc", ".zshrc"} {
+		rcFile := filepath.Join(home, name)
+		_, changed, err := removeShellHooksFile(rcFile)
+		if err != nil {
+			return removed, err
+		}
+		if changed {
+			removed = append(removed, rcFile)
+		}
+	}
+	return removed, nil
+}
+
+func removeShellHooksFile(rcFile string) (string, bool, error) {
 	content, err := os.ReadFile(rcFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

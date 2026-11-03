@@ -996,6 +996,49 @@ func TestRunSelfUninstallPurge(t *testing.T) {
 	assertPurgedInstallDirs(t, removedDirs, configPath, cachePath)
 }
 
+func TestRunSelfUninstallPurgeRemovesBothShellHooks(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh"} {
+		t.Run(shell, func(t *testing.T) {
+			checkSelfUninstallBothShells(t, shell)
+		})
+	}
+}
+
+func checkSelfUninstallBothShells(t *testing.T, shell string) {
+	t.Helper()
+	dir := setupShellTest(t)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache-root"))
+	exe := filepath.Join(dir, "pre")
+	defer withExecutablePath(func() (string, error) { return exe, nil })()
+	defer withRemoveFile(func(string) error { return nil })()
+	paths := installBothShellHooks(t, dir)
+	t.Setenv("SHELL", "/bin/"+shell)
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "uninstall", "--purge"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("uninstall failed: %d: %s", code, errOut.String())
+	}
+	for _, path := range paths {
+		assertUninstalledHooks(t, path)
+	}
+}
+
+func installBothShellHooks(t *testing.T, dir string) []string {
+	t.Helper()
+	var paths []string
+	for _, shell := range []string{"bash", "zsh"} {
+		t.Setenv("SHELL", "/bin/"+shell)
+		name := fmt.Sprintf(".%src", shell)
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("export BAR=baz\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		proxy.Setup("test")
+		paths = append(paths, path)
+	}
+	return paths
+}
+
 func assertPurgedInstallDirs(t *testing.T, removedDirs []string, configPath, cachePath string) {
 	t.Helper()
 	joined := strings.Join(removedDirs, "\n")

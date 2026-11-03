@@ -318,15 +318,17 @@ func validateManualSelfUninstall(info installInfo, stderr io.Writer) bool {
 }
 
 func removeSelfHooks(stdout, stderr io.Writer) bool {
-	rcFile, removed, err := proxy.RemoveShellHooks()
+	removed, err := proxy.RemoveAllShellHooks()
 	if err != nil {
 		fmt.Fprintf(stderr, "pre uninstall: %v\n", err)
 		return false
 	}
-	if removed {
+	if len(removed) == 0 {
+		fmt.Fprintln(stdout, "pre: no shell hooks found")
+		return true
+	}
+	for _, rcFile := range removed {
 		fmt.Fprintf(stdout, "pre: removed hooks from %s\n", rcFile)
-	} else {
-		fmt.Fprintf(stdout, "pre: no hooks found in %s\n", rcFile)
 	}
 	return true
 }
