@@ -1,12 +1,12 @@
 # pre≋≈~∿
 
-Security guardrail for package managers. `pre` sits between your shell and `npm`, `pip`, `brew`, and friends. It checks requested versions and existing lockfiles against the [OSV vulnerability database](https://osv.dev) before the package manager runs.
+`pre` checks packages against [OSV](https://osv.dev) before your package manager installs them.
 
 [![CI](https://github.com/yowainwright/pre/actions/workflows/test.yml/badge.svg)](https://github.com/yowainwright/pre/actions/workflows/test.yml)
 [![Release](https://img.shields.io/github/v/release/yowainwright/pre)](https://github.com/yowainwright/pre/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Zero config. One runtime binary.
+Works with brew, npm, pnpm, Bun, Go, Cargo, pip/pip3, uv, and Poetry.
 
 ## Install
 
@@ -18,7 +18,7 @@ Zero config. One runtime binary.
 brew install --formula yowainwright/tap/pre
 ```
 
-The formula installs the release binary for macOS or Linux. If you previously installed the cask, migrate once:
+For macOS and Linux. To switch from the old cask:
 
 ```sh
 brew uninstall --cask yowainwright/tap/pre
@@ -33,7 +33,7 @@ For macOS and Linux; requires `cosign` on `PATH`.
 curl -fsSL https://raw.githubusercontent.com/yowainwright/pre/main/install.sh | sh
 ```
 
-Every release includes SHA-256 checksums and a Cosign signature. The curl installer requires `cosign` and verifies both before writing the binary. A missing bundle, missing `cosign` binary, or failed signature blocks installation.
+The installer verifies SHA-256 checksums and their Cosign signature before installing. Failed verification stops the install.
 
 ## Setup
 
@@ -43,11 +43,13 @@ Every release includes SHA-256 checksums and a Cosign signature. The curl instal
 pre setup
 ```
 
-Adds shell hooks to `~/.zshrc` or `~/.bashrc`. Supported install commands in interactive Zsh and Bash sessions then go through `pre` automatically. Scripts and CI can call `pre <manager> ...` directly.
+Setup writes `shell-hook.sh` beside your config. Your `~/.zshrc` or `~/.bashrc` sources that file. Restart your shell once to load the hooks.
 
-After an upgrade, normal `pre` commands automatically migrate existing managed hooks in your shell profile. Reopen legacy terminals once to load them. Terminals already using automatic refresh reload hooks at the next prompt and clear stale command paths.
+Scripts can call `pre <manager> ...` directly.
 
-For Homebrew installations, a successful `brew update` through these hooks also requests `brew upgrade pre` in the background.
+Existing shell hooks migrate automatically. After upgrades, open terminals reload them at the next prompt.
+
+With hooks enabled, a successful `brew update` also upgrades Pre in the background.
 
 Example output (Zsh):
 
@@ -59,8 +61,6 @@ pre: restart your shell or run: source /home/user/.zshrc
 [Check status](#pre-status) or [remove the hooks](#pre-teardown).
 
 ## Emergency controls
-
-If anything goes wrong, bypass `pre` without editing shell files:
 
 ### Bypass one command
 
@@ -145,9 +145,11 @@ sequenceDiagram
     end
 ```
 
-Supports brew, npm, pnpm, Bun, Go, Cargo, pip/pip3, uv, and Poetry.
+1. Read exact versions from the lockfile, or resolve the requested versions.
+2. Check uncached packages against OSV.
+3. Show the results and ask before installing.
 
-Trusted cached packages proceed silently. Other scans show findings and ask for approval. Scan or version-resolution errors block the command; `PRE_DISABLE=1` bypasses scanning.
+Cached approvals proceed silently. Failed scans or unresolved versions block installation. Use `PRE_DISABLE=1` to bypass scanning.
 
 ### Resolution limits
 
@@ -160,7 +162,7 @@ Trusted cached packages proceed silently. Other scans show findings and ask for 
 
 ### `pre teardown`
 
-Remove the shell hooks added by [setup](#setup).
+Remove the [shell hooks](#setup), then restart your shell.
 
 ```sh
 pre teardown
@@ -175,7 +177,7 @@ pre: restart your shell or run: source /home/user/.zshrc
 
 ### `pre status`
 
-Show install state, managers, cache size, and the last manual system scan.
+Show the install location, config path, managers, cache size, and last manual system scan.
 
 ```sh
 pre status
@@ -190,7 +192,7 @@ system scan: no manual scan yet
 
 ### `pre manage`
 
-Browse installed packages and manage them in a full-screen UI. Alias: `pre m`.
+Browse and manage installed packages. Alias: `pre m`.
 
 ```sh
 pre manage
@@ -205,13 +207,13 @@ pre manage
 | `x` or `esc` | Close a dialog |
 | `q` or `ctrl+c` | Exit |
 
-Set `PRE_MANAGE_THEME=contrast` for a brighter theme or `PRE_MANAGE_THEME=mono` for no color. Installs and downgrades are scanned first.
+Themes: `PRE_MANAGE_THEME=contrast` for brighter colors or `PRE_MANAGE_THEME=mono` for no color. Pre scans installs and downgrades first.
 
 `uv` targets the active environment with `uv pip`; Cargo actions edit project dependencies.
 
 ### `--upgrade`
 
-Upgrade without opening the UI. An optional version selects a specific release.
+Upgrade from the command line. Omit the version to resolve an upgrade.
 
 ```sh
 pre manage --package react --manager npm --upgrade 19.0.0
@@ -231,7 +233,7 @@ Example `package.json` change:
 
 ### `--downgrade`
 
-Install a specific older version without opening the UI.
+Install an older version from the command line.
 
 ```sh
 pre manage --package react --manager npm --downgrade 18.2.0
@@ -251,7 +253,7 @@ Example `package.json` change:
 
 ### `--uninstall`
 
-Remove a package without opening the UI.
+Uninstall from the command line.
 
 ```sh
 pre manage --package react --manager npm --uninstall
@@ -305,7 +307,7 @@ Example `package.json` change:
 
 ### `pre update`
 
-Update a package. Omitting the package requests a manager-wide update, which is blocked when exact versions cannot be resolved before installation.
+Update a package. Omit the package for a manager-wide update. Pre blocks updates it cannot resolve to exact versions.
 
 ```sh
 pre update npm react
@@ -398,7 +400,7 @@ Example `config.json` change (excerpt):
 
 #### Custom managers
 
-Add an entry to the config's `managers` array. A matching name replaces a built-in manager; a new name extends the list.
+Add a manager in `config.json`. Use a built-in name to override it.
 
 Example `config.json` change (excerpt):
 
@@ -417,7 +419,7 @@ Example `config.json` change (excerpt):
 
 ### `pre obs`
 
-Show cache, process, and scan summaries with local events.
+Inspect cache, process, and scan activity.
 
 ```sh
 pre obs
@@ -434,11 +436,11 @@ scans:
   failed: 0
 ```
 
-Logs stay local and rotate automatically. Events omit command arguments, paths, environment variables, and package names by default.
+Logs stay local and rotate automatically. By default, they omit command arguments, paths, environment variables, and package names.
 
 #### `--json`
 
-Return the same response as JSON.
+Get JSON output.
 
 ```sh
 pre obs --json
@@ -458,7 +460,7 @@ Example output (excerpt):
 
 ### `--events`
 
-List events matching a text query. Omit the query to list all events.
+Filter events by text. Omit the query to list all events.
 
 ```sh
 pre obs --events scan
@@ -473,7 +475,7 @@ Example output:
 
 ### `pre scan system`
 
-Scan cached packages, not a full inventory of installed software. Runs silently; view results with [pre status](#pre-status).
+Scan only the packages in Pre's cache. View results with [pre status](#pre-status).
 
 ```sh
 pre scan system
@@ -517,21 +519,18 @@ pre: removed binary /usr/local/bin/pre
 
 ## Security model
 
-- Queries [OSV.dev](https://osv.dev), a free service operated by Google
-- Sends only the package name and version; no code leaves your machine
-- Uses existing lockfiles to check exact transitive versions before installation
-- Blocks the package manager if OSV, version resolution, or project reading fails; `PRE_DISABLE=1` is the explicit bypass
-- Checks package sets before installation when they need approval
-- Records local obs for developer-owned troubleshooting; obs is never uploaded automatically
-- Publishes SHA-256 checksums signed with keyless Cosign for every platform
-- Curl installs require successful Cosign verification of the release checksums
+- Sends package names and versions to [OSV](https://osv.dev).
+- Uses lockfiles to check exact transitive versions before installation.
+- Blocks installs when scanning, version resolution, or project reading fails.
+- Asks before installing packages without a cached approval.
+- Keeps troubleshooting logs local.
+- Signs release checksums with keyless Cosign. The curl installer requires successful verification.
 
-`pre` is a vulnerability guardrail, not a sandbox or full supply-chain policy. Keep lockfiles, review dependency changes, and run ecosystem-native audit tools in CI.
+Pre checks known vulnerabilities. Keep lockfiles, review dependency changes, and audit dependencies in CI.
 
 ## Agent skill
 
-The [pre skill](skills/pre/SKILL.md) provides agent instructions for installing,
-configuring, and using pre. Install it with your agent's skill tooling.
+Agent instructions: [skills/pre/SKILL.md](skills/pre/SKILL.md).
 
 ## Runtime architecture
 
@@ -574,11 +573,11 @@ entry point packaged with each release.
 
 ## Development
 
-Follow [AGENTS.md](AGENTS.md): change one file, show the diff, and wait for human approval before changing another.
+Read [AGENTS.md](AGENTS.md) before making changes.
 
 ### Setup
 
-Install pinned tools, check prerequisites and secrets, and install Git and agent hooks.
+Install the pinned tools and repository hooks:
 
 ```sh
 make setup
@@ -590,21 +589,31 @@ make setup
 make test
 ```
 
+### CLI and shell E2E tests
+
+<!-- CLI and shell E2E coverage from tests/e2e/pre_test.go and Makefile. -->
+
+Requires Bash and Zsh. Tests setup, migration, interception, teardown, and live upgrades with compiled binaries.
+
+```sh
+make test-e2e
+```
+
 ### Lint
 
-Check formatting, vet Go code, and lint Go and shell files.
+Check formatting, Go, and shell code:
 
 ```sh
 make lint
 ```
 
-See the [Makefile](Makefile) for other tests, security checks, and release commands.
+More checks: [Makefile](Makefile).
 
 ### Release validation
 
 <!-- Release flow and commands from Makefile and .github/workflows/release.yml. -->
 
-`make release-preview` runs the local release checks without publishing. To check only the generated artifacts:
+Preview a release locally with `make release-preview`. To check the artifacts:
 
 ```sh
 make release-check
@@ -612,15 +621,17 @@ make snapshot
 make verify-release-binary
 ```
 
-Snapshot verification checks all four platform binaries and the installer against their SHA-256 entries. The smoke test runs the host binary with an isolated configuration and verifies its version and default configuration. CI runs it on macOS and Linux.
+Snapshot checks verify checksums for the installer and all four platform binaries. Smoke tests check the host binary's version and default config on macOS and Linux.
 
-After a stable tagged release is published, the release workflow runs `homebrew-tap/scripts/update-formula pre <version>` and opens a tap PR containing `Formula/pre.rb` and `brews/pre.json`. The tap's CI audits, installs, and tests the formula before merging. The Homebrew update becomes available after that PR merges; prereleases do not update the stable formula.
+Stable releases open a Homebrew tap PR with `Formula/pre.rb` and `brews/pre.json`. Tap CI audits, installs, and tests the formula. The Homebrew update is available after the PR merges. Prereleases leave the stable formula unchanged.
 
-`HOMEBREW_TAP_TOKEN` needs **Contents: read and write** and **Pull requests: read and write** on `yowainwright/homebrew-tap`. If only the Homebrew job fails after publication, rerun the failed job from GitHub Actions rather than creating another tag or republishing the release.
+`HOMEBREW_TAP_TOKEN` needs **Contents: read and write** and **Pull requests: read and write** on `yowainwright/homebrew-tap`.
+
+If only the Homebrew job fails, rerun that job in GitHub Actions.
 
 ## Docker E2E tests
 
-Requires Docker. Each scenario tests clean scanning, CVE detection, and blocked installs with shell hooks active in a container.
+Requires Docker. Each scenario checks clean packages, known CVEs, and blocked installs through the shell hooks.
 
 ### List scenarios
 

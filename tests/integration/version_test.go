@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,13 @@ import (
 const brewIntegrationFormula = `class PreIntegration < Formula
   url "https://example.invalid/pre-integration-2.0.0.tar.gz"
   version "2.0.0"
+  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+end
+`
+
+const brewIntegrationNextFormula = `class PreIntegrationNext < Formula
+  url "https://example.invalid/pre-integration-next-3.0.0.tar.gz"
+  version "3.0.0"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
 end
 `
@@ -70,7 +78,7 @@ func TestNpmVersionResolution(t *testing.T) {
 
 func TestBrewUpgradeDiscoveryOutdated(t *testing.T) {
 	prefix := setupBrewIntegration(t)
-	writeBrewInstalledFixture(t, prefix, "1.0.0")
+	writeBrewInstalledFixture(t, prefix, "pre-integration", "1.0.0")
 	want := []string{"pre-integration@@2.0.0"}
 	assertBrewUpgradeTargets(t, nil, want)
 	flags := []string{"--formula", "--formulae", "--greedy", "--greedy-latest", "--greedy-auto-updates", "--fetch-HEAD", "--verbose"}
@@ -84,11 +92,58 @@ func TestBrewUpgradeDiscoveryOutdated(t *testing.T) {
 
 func TestBrewUpgradeDiscoveryEmpty(t *testing.T) {
 	prefix := setupBrewIntegration(t)
-	writeBrewInstalledFixture(t, prefix, "2.0.0")
+	writeBrewInstalledFixture(t, prefix, "pre-integration", "2.0.0")
 	assertBrewUpgradeTargets(t, nil, nil)
 	for _, flag := range []string{"--formula", "--cask", "--greedy"} {
 		t.Run(flag, func(t *testing.T) { assertBrewUpgradeTargets(t, []string{flag}, nil) })
 	}
+}
+
+func TestBrewUpgradeDiscoveryAliasRetarget(t *testing.T) {
+	setupBrewAliasIntegration(t, "pre-integration-next")
+	want := []string{"pre-integration-next@@3.0.0"}
+	assertBrewUpgradeTargets(t, nil, want)
+	assertBrewUpgradeTargets(t, []string{"--formula"}, want)
+}
+
+func TestBrewUpgradeDiscoveryAliasUnchanged(t *testing.T) {
+	setupBrewAliasIntegration(t, "pre-integration")
+	want := []string{"pre-integration@@2.0.0"}
+	assertBrewUpgradeTargets(t, nil, want)
+}
+
+func TestBrewUpgradeDiscoveryAliasAmbiguousVersionBlocks(t *testing.T) {
+	for _, version := range []string{"3.0@@1", "@3.0.0"} {
+		t.Run(version, func(t *testing.T) {
+			prefix := setupBrewAliasIntegration(t, "pre-integration-next")
+			formula := filepath.Join(prefix, "Library", "Taps", "homebrew", "homebrew-core", "Formula", "pre-integration-next.rb")
+			body := strings.ReplaceAll(brewIntegrationNextFormula, "3.0.0", version)
+			writeBrewTestFile(t, formula, []byte(body), 0600)
+			if _, err := manager.BrewUpgradePackages(nil); err == nil {
+				t.Fatal("expected ambiguous alias target identity to block upgrade")
+			}
+		})
+	}
+}
+
+func TestBrewUpgradeDiscoveryAliasTargetAlreadyInstalled(t *testing.T) {
+	prefix := setupBrewAliasIntegration(t, "pre-integration-next")
+	writeBrewInstalledFixture(t, prefix, "pre-integration-next", "3.0.0")
+	want := []string{"pre-integration@@2.0.0"}
+	assertBrewUpgradeTargets(t, nil, want)
+}
+
+func TestBrewUpgradeDiscoveryPinnedAlias(t *testing.T) {
+	prefix := setupBrewAliasIntegration(t, "pre-integration-next")
+	pinned := filepath.Join(prefix, "var", "homebrew", "pinned")
+	if err := os.MkdirAll(pinned, 0700); err != nil {
+		t.Fatal(err)
+	}
+	keg := filepath.Join(prefix, "Cellar", "pre-integration", "1.0.0")
+	if err := os.Symlink(keg, filepath.Join(pinned, "pre-integration")); err != nil {
+		t.Fatal(err)
+	}
+	assertBrewUpgradeTargets(t, nil, nil)
 }
 
 func assertBrewUpgradeTargets(t *testing.T, args, want []string) {
@@ -100,6 +155,26 @@ func assertBrewUpgradeTargets(t *testing.T, args, want []string) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("upgrade targets = %v, want %v", got, want)
 	}
+}
+
+func setupBrewAliasIntegration(t *testing.T, targetName string) string {
+	t.Helper()
+	prefix := setupBrewIntegration(t)
+	writeBrewInstalledFixture(t, prefix, "pre-integration", "1.0.0")
+	tap := filepath.Join(prefix, "Library", "Taps", "homebrew", "homebrew-core")
+	nextFormula := filepath.Join(tap, "Formula", "pre-integration-next.rb")
+	writeBrewTestFile(t, nextFormula, []byte(brewIntegrationNextFormula), 0600)
+	aliases := filepath.Join(tap, "Aliases")
+	if err := os.MkdirAll(aliases, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(aliases, "pre-alias")
+	target := filepath.Join(tap, "Formula", targetName+".rb")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	writeBrewAliasReceipt(t, prefix, alias)
+	return prefix
 }
 
 func setupBrewIntegration(t *testing.T) string {
@@ -173,17 +248,29 @@ func configureBrewIntegration(t *testing.T, prefix string) {
 	t.Setenv("PRE_EXEC_PATH", filepath.Join(prefix, "bin", "brew"))
 }
 
-func writeBrewInstalledFixture(t *testing.T, prefix, version string) {
+func writeBrewAliasReceipt(t *testing.T, prefix, alias string) {
 	t.Helper()
-	keg := filepath.Join(prefix, "Cellar", "pre-integration", version)
+	source := map[string]string{"tap": "homebrew/core", "spec": "stable", "path": alias}
+	data := map[string]any{"source": source}
+	receipt, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(prefix, "Cellar", "pre-integration", "1.0.0", "INSTALL_RECEIPT.json")
+	writeBrewTestFile(t, path, receipt, 0600)
+}
+
+func writeBrewInstalledFixture(t *testing.T, prefix, name, version string) {
+	t.Helper()
+	keg := filepath.Join(prefix, "Cellar", name, version)
 	receipt := []byte(`{"source":{"tap":"homebrew/core","spec":"stable"}}`)
 	writeBrewTestFile(t, filepath.Join(keg, "INSTALL_RECEIPT.json"), receipt, 0600)
-	writeBrewTestFile(t, filepath.Join(keg, "bin", "pre-integration"), nil, 0600)
+	writeBrewTestFile(t, filepath.Join(keg, "bin", name), nil, 0600)
 	opt := filepath.Join(prefix, "opt")
 	if err := os.MkdirAll(opt, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(keg, filepath.Join(opt, "pre-integration")); err != nil {
+	if err := os.Symlink(keg, filepath.Join(opt, name)); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -52,7 +53,8 @@ func TestRunMigratesLegacyHooks(t *testing.T) {
 			initial := "export FOO=bar\n\n" + legacy + "\nexport BAR=baz\n"
 			path := writeRunHookProfile(t, shell, initial)
 			assertQuietVersion(t)
-			want := strings.Replace(initial, legacy, strings.TrimPrefix(proxy.ShellHook(version), "\n"), 1)
+			source := expectedRunHookSource(t)
+			want := strings.Replace(initial, legacy, source, 1)
 			assertRunHookProfile(t, path, want)
 		})
 	}
@@ -113,6 +115,17 @@ func assertRunHookProfile(t *testing.T, path, want string) {
 	if unexpected {
 		t.Fatalf("unexpected hook profile: %v\n%s", err, content)
 	}
+}
+
+func expectedRunHookSource(t *testing.T) string {
+	t.Helper()
+	configPath, err := preconfig.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hookPath := filepath.Join(filepath.Dir(configPath), "shell-hook.sh")
+	quotedPath := strings.ReplaceAll(hookPath, "'", "'\\''")
+	return fmt.Sprintf("# pre security proxy\nsource '%s'\n# end pre security proxy\n", quotedPath)
 }
 
 func assertQuietVersion(t *testing.T) {
@@ -826,6 +839,7 @@ func setupShellTest(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
 	t.Setenv("SHELL", "/bin/zsh")
 	return dir
 }

@@ -49,8 +49,8 @@ e2e_start() {
   source "$HOME/.bashrc"
   printf '%b\n\n' "\n  ${E2E_LOGO}  ${E2E_DIM}${manager} security test${E2E_RESET}"
   e2e_note "pre setup installs a shell hook for ${manager}"
-  e2e_type_command "grep -A8 'function ${manager}' ~/.bashrc"
-  grep -A8 "function ${manager}" "$HOME/.bashrc"
+  e2e_type_command "declare -f ${manager}"
+  declare -f "$manager"
   e2e_pause
 }
 
