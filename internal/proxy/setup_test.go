@@ -677,11 +677,7 @@ func TestRefreshShellHooksPreservesUnreadableProfile(t *testing.T) {
 }
 
 func TestSetupPreservesExistingRCFileMode(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
-
-	rcPath := filepath.Join(dir, ".zshrc")
+	rcPath := setupTestRCPath(t)
 	if err := os.WriteFile(rcPath, []byte("export FOO=bar\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
