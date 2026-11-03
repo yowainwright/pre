@@ -24,5 +24,10 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Install Zsh
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends zsh
+
       - name: E2E tests
         run: make test-e2e

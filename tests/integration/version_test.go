@@ -3,7 +3,10 @@
 package integration
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,9 +14,17 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yowainwright/pre/internal/manager"
 )
+
+type brewIntegrationOutdated struct {
+	Formulae []struct {
+		Name    string `json:"name"`
+		Version string `json:"current_version"`
+	} `json:"formulae"`
+}
 
 const brewIntegrationFormula = `class PreIntegration < Formula
   url "https://example.invalid/pre-integration-2.0.0.tar.gz"
@@ -97,6 +108,16 @@ func TestBrewUpgradeDiscoveryEmpty(t *testing.T) {
 	for _, flag := range []string{"--formula", "--cask", "--greedy"} {
 		t.Run(flag, func(t *testing.T) { assertBrewUpgradeTargets(t, []string{flag}, nil) })
 	}
+}
+
+func TestBrewUpgradeDiscoveryAPI(t *testing.T) {
+	prefix := setupBrewIntegration(t)
+	t.Setenv("HOMEBREW_NO_INSTALL_FROM_API", "")
+	writeBrewInstalledFixture(t, prefix, "hello", "0.0.0")
+	target := brewAPIUpgradeTarget(t)
+	want := []string{target}
+	assertBrewUpgradeTargets(t, nil, want)
+	assertBrewUpgradeTargets(t, []string{"--formula"}, want)
 }
 
 func TestBrewUpgradeDiscoveryAliasRetarget(t *testing.T) {
@@ -283,4 +304,40 @@ func writeBrewTestFile(t *testing.T, path string, data []byte, mode os.FileMode)
 	if err := os.WriteFile(path, data, mode); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func brewAPIUpgradeTarget(t *testing.T) string {
+	t.Helper()
+	output := brewIntegrationOutput(t, "outdated", "--json=v2", "--formula")
+	var info brewIntegrationOutdated
+	if err := json.Unmarshal(output, &info); err != nil {
+		t.Fatalf("decode Homebrew outdated: %v\n%s", err, output)
+	}
+	if len(info.Formulae) != 1 {
+		t.Fatalf("expected one API-backed formula, got %s", output)
+	}
+	formula := info.Formulae[0]
+	invalidTarget := formula.Name != "hello" || formula.Version == ""
+	if invalidTarget {
+		t.Fatalf("unexpected API-backed formula: %+v", formula)
+	}
+	return fmt.Sprintf("%s@@%s", formula.Name, formula.Version)
+}
+
+func brewIntegrationOutput(t *testing.T, args ...string) []byte {
+	t.Helper()
+	brew, err := manager.Executable("brew")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, brew, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("Homebrew %v: %v\n%s", args, err, stderr.String())
+	}
+	return output
 }

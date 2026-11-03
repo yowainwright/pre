@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/yowainwright/pre/internal/config"
 	"github.com/yowainwright/pre/internal/fileutil"
 	"github.com/yowainwright/pre/internal/manager"
 )
@@ -243,11 +244,20 @@ func migrateRCHooks(rcFile, content, version string) error {
 	if start < 0 {
 		return nil
 	}
-	block := content[start:]
-	hook := strings.TrimPrefix(ShellHook(version), "\n")
-	if strings.HasPrefix(block, hook) {
+	hook, err := installShellHook(version)
+	if err != nil {
+		return err
+	}
+	source := strings.TrimPrefix(hook, "\n")
+	updated := replaceRCHooks(content, source, start)
+	if updated == content {
 		return nil
 	}
+	return writeRCFile(rcFile, []byte(updated))
+}
+
+func replaceRCHooks(content, hook string, start int) string {
+	block := content[start:]
 	end := strings.Index(block, shellHookEnd)
 	if end < 0 {
 		end = legacyHookEnd(block)
@@ -256,7 +266,7 @@ func migrateRCHooks(rcFile, content, version string) error {
 	}
 	updated := content[:start] + hook
 	updated += block[end:]
-	return writeRCFile(rcFile, []byte(updated))
+	return updated
 }
 
 func setupRCFile(rcFile, version string) error {
@@ -281,13 +291,52 @@ func refreshRCHooks(rcFile, content, version string) error {
 }
 
 func installRCHooks(rcFile string, content []byte, action, version string) error {
-	appended := append(content, []byte(ShellHook(version))...)
+	hook, err := installShellHook(version)
+	if err != nil {
+		return err
+	}
+	appended := append(content, []byte(hook)...)
 	if err := writeRCFile(rcFile, appended); err != nil {
 		return err
 	}
 	fmt.Println("pre:", action, rcFile)
 	fmt.Println("pre: restart your shell or run: source", rcFile)
 	return nil
+}
+
+func installShellHook(version string) (string, error) {
+	path, err := shellHookPath()
+	if err != nil {
+		return "", err
+	}
+	if err := writeShellHookFile(path, ShellHook(version)); err != nil {
+		return "", err
+	}
+	quotedPath := strings.ReplaceAll(path, "'", "'\\''")
+	return fmt.Sprintf("\n%s\nsource '%s'\n%s\n", shellHookStart, quotedPath, shellHookEnd), nil
+}
+
+func shellHookPath() (string, error) {
+	configPath, err := config.Path()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(configPath), "shell-hook.sh"), nil
+}
+
+func writeShellHookFile(path, hook string) error {
+	content, err := os.ReadFile(path)
+	readFailed := err != nil && !errors.Is(err, os.ErrNotExist)
+	if readFailed {
+		return fmt.Errorf("read shell hook: %w", err)
+	}
+	if string(content) == hook {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create shell hook directory: %w", err)
+	}
+	return fileutil.AtomicWriteFile(path, []byte(hook), 0o600)
 }
 
 func ShellHook(version string) string {
@@ -411,6 +460,29 @@ func RemoveShellHooks() (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
+	return removeShellHooksFile(rcFile)
+}
+
+func RemoveAllShellHooks() ([]string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home directory: %w", err)
+	}
+	var removed []string
+	for _, name := range []string{".bashrc", ".zshrc"} {
+		rcFile := filepath.Join(home, name)
+		_, changed, err := removeShellHooksFile(rcFile)
+		if err != nil {
+			return removed, err
+		}
+		if changed {
+			removed = append(removed, rcFile)
+		}
+	}
+	return removed, nil
+}
+
+func removeShellHooksFile(rcFile string) (string, bool, error) {
 	content, err := os.ReadFile(rcFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -52,7 +53,8 @@ func TestRunMigratesLegacyHooks(t *testing.T) {
 			initial := "export FOO=bar\n\n" + legacy + "\nexport BAR=baz\n"
 			path := writeRunHookProfile(t, shell, initial)
 			assertQuietVersion(t)
-			want := strings.Replace(initial, legacy, strings.TrimPrefix(proxy.ShellHook(version), "\n"), 1)
+			source := expectedRunHookSource(t)
+			want := strings.Replace(initial, legacy, source, 1)
 			assertRunHookProfile(t, path, want)
 		})
 	}
@@ -113,6 +115,17 @@ func assertRunHookProfile(t *testing.T, path, want string) {
 	if unexpected {
 		t.Fatalf("unexpected hook profile: %v\n%s", err, content)
 	}
+}
+
+func expectedRunHookSource(t *testing.T) string {
+	t.Helper()
+	configPath, err := preconfig.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hookPath := filepath.Join(filepath.Dir(configPath), "shell-hook.sh")
+	quotedPath := strings.ReplaceAll(hookPath, "'", "'\\''")
+	return fmt.Sprintf("# pre security proxy\nsource '%s'\n# end pre security proxy\n", quotedPath)
 }
 
 func assertQuietVersion(t *testing.T) {
@@ -826,6 +839,7 @@ func setupShellTest(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
 	t.Setenv("SHELL", "/bin/zsh")
 	return dir
 }
@@ -980,6 +994,49 @@ func TestRunSelfUninstallPurge(t *testing.T) {
 		t.Errorf("expected exit 0, got %d: %s", code, errOut.String())
 	}
 	assertPurgedInstallDirs(t, removedDirs, configPath, cachePath)
+}
+
+func TestRunSelfUninstallPurgeRemovesBothShellHooks(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh"} {
+		t.Run(shell, func(t *testing.T) {
+			checkSelfUninstallBothShells(t, shell)
+		})
+	}
+}
+
+func checkSelfUninstallBothShells(t *testing.T, shell string) {
+	t.Helper()
+	dir := setupShellTest(t)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache-root"))
+	exe := filepath.Join(dir, "pre")
+	defer withExecutablePath(func() (string, error) { return exe, nil })()
+	defer withRemoveFile(func(string) error { return nil })()
+	paths := installBothShellHooks(t, dir)
+	t.Setenv("SHELL", "/bin/"+shell)
+	var out, errOut bytes.Buffer
+	code := run([]string{"self", "uninstall", "--purge"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("uninstall failed: %d: %s", code, errOut.String())
+	}
+	for _, path := range paths {
+		assertUninstalledHooks(t, path)
+	}
+}
+
+func installBothShellHooks(t *testing.T, dir string) []string {
+	t.Helper()
+	var paths []string
+	for _, shell := range []string{"bash", "zsh"} {
+		t.Setenv("SHELL", "/bin/"+shell)
+		name := fmt.Sprintf(".%src", shell)
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("export BAR=baz\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		proxy.Setup("test")
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 func assertPurgedInstallDirs(t *testing.T, removedDirs []string, configPath, cachePath string) {

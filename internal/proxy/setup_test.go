@@ -262,12 +262,12 @@ func TestCargoShellHookRoutesGlobalOptions(t *testing.T) {
 func TestShellHookRoutesExistingAliases(t *testing.T) {
 	for _, shell := range []string{"bash", "zsh"} {
 		t.Run(shell, func(t *testing.T) {
-			checkShellAliasRouting(t, shell)
+			checkShellAliasRouting(t, shell, ShellHook("old"))
 		})
 	}
 }
 
-func checkShellAliasRouting(t *testing.T, shell string) {
+func checkShellAliasRouting(t *testing.T, shell, hook string) {
 	t.Helper()
 	shellPath, err := exec.LookPath(shell)
 	if err != nil {
@@ -277,7 +277,6 @@ func checkShellAliasRouting(t *testing.T, shell string) {
 	t.Setenv("PATH", binDir)
 	t.Setenv("PRE_DISABLE", "")
 	t.Setenv("BASH_ENV", "")
-	hook := ShellHook("old")
 	// Parse the fixed commands after alias setup, as an interactive shell does.
 	script := shellAliasSetup + hook + hook + "eval \"$2\"\n"
 	cmd := exec.Command(shellPath, "-f", "-c", script, "pre-alias-test", targetDir, shellAliasCommands)
@@ -542,37 +541,55 @@ func TestSetupFresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected .zshrc to be created: %v", err)
 	}
-	if !strings.Contains(string(content), "# pre security proxy") {
-		t.Error("expected hook to be written to .zshrc")
+	if string(content) != setupHookSource(t) {
+		t.Errorf("expected only a source block in .zshrc, got %q", content)
 	}
-	if !strings.Contains(string(content), "_pre_hook_version='test'\n") {
-		t.Error("expected setup to record the installed hook version")
+	assertSetupHookFile(t, "test")
+}
+
+func TestSetupSourcesHookFile(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh"} {
+		t.Run(shell, func(t *testing.T) {
+			rcPath := setupTestRCPath(t)
+			t.Setenv("SHELL", "/bin/"+shell)
+			rcName := fmt.Sprintf(".%src", shell)
+			rcPath = filepath.Join(filepath.Dir(rcPath), rcName)
+			Setup("test")
+			content, err := os.ReadFile(rcPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkShellAliasRouting(t, shell, string(content))
+		})
 	}
 }
 
 func TestRefreshShellHooks(t *testing.T) {
+	path := setupTestRCPath(t)
 	prefix, suffix := "export FOO=bar\n\n", "\nexport BAR=baz\n"
-	current := prefix + ShellHook("new") + suffix
+	source := setupHookSource(t)
+	current := prefix + source + suffix
 	older := prefix + ShellHook("old") + suffix
+	inline := prefix + ShellHook("new") + suffix
 	unmanaged := prefix + suffix
 	legacy := "# pre security proxy\nfunction npm() {}\nexport BAR=baz\n"
-	legacyWant := strings.TrimPrefix(ShellHook("new"), "\n") + "export BAR=baz\n"
+	legacyWant := strings.TrimPrefix(source, "\n") + "export BAR=baz\n"
 	cases := []struct{ name, initial, want string }{
 		{"legacy", legacy, legacyWant},
 		{"older", older, current},
+		{"inline", inline, current},
 		{"current", current, current},
 		{"unmanaged", unmanaged, unmanaged},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			checkHookMigration(t, tc.initial, tc.want)
+			checkHookMigration(t, path, tc.initial, tc.want)
 		})
 	}
 }
 
-func checkHookMigration(t *testing.T, initial, want string) {
+func checkHookMigration(t *testing.T, path, initial, want string) {
 	t.Helper()
-	path := setupTestRCPath(t)
 	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -589,6 +606,36 @@ func checkHookMigration(t *testing.T, initial, want string) {
 		t.Fatalf("unexpected migrated profile: %v\n%s", err, content)
 	}
 	assertMigrationMetadata(t, path, before, initial == want)
+}
+
+func TestRefreshSourcedHookPreservesProfile(t *testing.T) {
+	const unchanged = true
+	path := setupTestRCPath(t)
+	Setup("old")
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RefreshShellHooks("new"); err != nil {
+		t.Fatal(err)
+	}
+	assertMigrationMetadata(t, path, before, unchanged)
+	assertSetupHookFile(t, "new")
+}
+
+func TestRefreshCurrentHookPreservesFile(t *testing.T) {
+	const unchanged = true
+	setupTestRCPath(t)
+	Setup("new")
+	path := setupHookPath(t)
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RefreshShellHooks("new"); err != nil {
+		t.Fatal(err)
+	}
+	assertMigrationMetadata(t, path, before, unchanged)
 }
 
 func assertMigrationMetadata(t *testing.T, path string, before os.FileInfo, unchanged bool) {
@@ -630,11 +677,7 @@ func TestRefreshShellHooksPreservesUnreadableProfile(t *testing.T) {
 }
 
 func TestSetupPreservesExistingRCFileMode(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("SHELL", "/bin/zsh")
-
-	rcPath := filepath.Join(dir, ".zshrc")
+	rcPath := setupTestRCPath(t)
 	if err := os.WriteFile(rcPath, []byte("export FOO=bar\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -768,11 +811,10 @@ func TestSetupRefreshesExistingHooks(t *testing.T) {
 	if !strings.Contains(string(content), "# end pre security proxy") {
 		t.Error("expected setup to refresh hook block")
 	}
-	contentText := string(content)
-	containsUpdate := strings.Contains(contentText, `"$_pre_command" == "update"`)
-	if !containsUpdate {
-		t.Error("expected refreshed hooks to include update commands")
+	if strings.Contains(string(content), "function ") {
+		t.Error("expected existing inline functions to be removed")
 	}
+	assertSetupHookFile(t, "test")
 }
 
 func TestTeardownRemovesHooks(t *testing.T) {
@@ -957,10 +999,46 @@ func TestManagerAllInHook(t *testing.T) {
 
 func setupTestRCPath(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "home with ' quote")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
 	t.Setenv("SHELL", "/bin/zsh")
 	return filepath.Join(dir, ".zshrc")
+}
+
+func setupHookSource(t *testing.T) string {
+	t.Helper()
+	path := strings.ReplaceAll(setupHookPath(t), "'", "'\\''")
+	return fmt.Sprintf("\n# pre security proxy\nsource '%s'\n# end pre security proxy\n", path)
+}
+
+func setupHookPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, "pre", "shell-hook.sh")
+}
+
+func assertSetupHookFile(t *testing.T, version string) {
+	t.Helper()
+	path := setupHookPath(t)
+	content, err := os.ReadFile(path)
+	unexpected := err != nil || string(content) != ShellHook(version)
+	if unexpected {
+		t.Fatalf("unexpected generated hook: %v\n%s", err, content)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("expected hook file mode 0600, got %o", info.Mode().Perm())
+	}
 }
 
 func writeUnreadableRC(t *testing.T, rcPath string, original []byte) {
