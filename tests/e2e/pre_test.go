@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -162,6 +164,23 @@ func TestShellHookLifecycle(t *testing.T) {
 	}
 }
 
+func TestShellHookTerminalIsolation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := shellHookTTYArgs(binary)
+	cmd := exec.CommandContext(ctx, "script", args...)
+	output, err := cmd.CombinedOutput()
+	passed := strings.Contains(string(output), "--- PASS: TestShellHookLifecycle")
+	failed := err != nil || !passed
+	if failed {
+		t.Fatalf("shell-hook test with parent terminal: %v\n%s", err, output)
+	}
+}
+
 func checkShellHookLifecycle(t *testing.T, shell, command string) {
 	t.Helper()
 	session := newShellHookSession(t, shell)
@@ -297,6 +316,7 @@ func runShellHookSession(t *testing.T, session shellHookSession, script string) 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, session.shell, "-i")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Env = session.env
 	cmd.Dir = session.home
 	cmd.Stdin = strings.NewReader(script)
@@ -461,4 +481,14 @@ source = "registry+https://index.crates.io/"
 	if !strings.Contains(stdout, "fake cargo fetch --locked") {
 		t.Errorf("expected Cargo execution after scan, got: %s", stdout)
 	}
+}
+
+func shellHookTTYArgs(binary string) []string {
+	selector := "-test.run=^TestShellHookLifecycle$/^zsh$/^setup$"
+	if runtime.GOOS == "darwin" {
+		return []string{"-q", "/dev/null", binary, selector, "-test.v"}
+	}
+	quotedBinary := strings.ReplaceAll(binary, "'", "'\\''")
+	command := fmt.Sprintf("'%s' '%s' -test.v", quotedBinary, selector)
+	return []string{"-q", "-e", "-c", command, "/dev/null"}
 }
