@@ -76,7 +76,7 @@ func (run proxyRun) interceptPackages(packageArgs, packages []string, fromProjec
 	if !run.allowPackageCount(len(packages)) {
 		return
 	}
-	checked, unchecked := splitProjectScanTargets(run.mgr, packages, fromProject)
+	checked, unchecked := splitProjectScanTargets(packages, fromProject)
 	results := run.scanPackages(checked, fromProject)
 	approvalRequired := needsApproval(results)
 	printScanResults(run.mgr.Ecosystem, results, approvalRequired)
@@ -88,14 +88,13 @@ func (run proxyRun) interceptPackages(packageArgs, packages []string, fromProjec
 	ExecFn(run.mgr.Name, args)
 }
 
-func splitProjectScanTargets(mgr *manager.Manager, packages []string, fromProject bool) ([]string, []string) {
+func splitProjectScanTargets(packages []string, fromProject bool) ([]string, []string) {
 	if !fromProject {
 		return packages, nil
 	}
 	var unchecked []string
 	checked := slices.DeleteFunc(slices.Clone(packages), func(spec string) bool {
-		_, version := manager.ParseSpec(mgr.Ecosystem, spec)
-		local := isLocalProjectVersion(version)
+		local := isLocalProjectSpec(spec)
 		if local {
 			unchecked = append(unchecked, spec)
 		}
@@ -104,11 +103,11 @@ func splitProjectScanTargets(mgr *manager.Manager, packages []string, fromProjec
 	return checked, unchecked
 }
 
-func isLocalProjectVersion(version string) bool {
-	if version == "root:" {
+func isLocalProjectSpec(spec string) bool {
+	if strings.HasSuffix(spec, "@root:") {
 		return true
 	}
-	path, workspace := strings.CutPrefix(version, "workspace:")
+	_, path, workspace := strings.Cut(spec, "@workspace:")
 	localWorkspace := workspace && filepath.IsLocal(path) && !strings.ContainsAny(path, ":\\")
 	return localWorkspace
 }

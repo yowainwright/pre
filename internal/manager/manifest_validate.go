@@ -53,7 +53,7 @@ func validateNPMProjectFiles(name, dir string) error {
 	case "npm":
 		err = validatePackageLock(filepath.Join(dir, npmPackageLockFilename))
 	case "bun":
-		err = validateBunLock(filepath.Join(dir, "bun.lock"))
+		return validateBunProject(dir)
 	case "pnpm":
 		err = validateTextFiles(dir, "pnpm-lock.yaml")
 	default:
@@ -62,7 +62,7 @@ func validateNPMProjectFiles(name, dir string) error {
 	if err != nil {
 		return err
 	}
-	return validatePackageJSON(filepath.Join(dir, "package.json"))
+	return validatePackageJSON(filepath.Join(dir, "package.json"), nil)
 }
 
 func validateNPMLockConsistency(dir string, args []string) error {
@@ -285,7 +285,7 @@ func validateAllNPMLocks(dir string) error {
 	if err := validatePackageLock(filepath.Join(dir, npmPackageLockFilename)); err != nil {
 		return err
 	}
-	if err := validateBunLock(filepath.Join(dir, "bun.lock")); err != nil {
+	if _, err := validateBunLock(filepath.Join(dir, "bun.lock")); err != nil {
 		return err
 	}
 	return validateTextFiles(dir, "pnpm-lock.yaml")
@@ -474,23 +474,92 @@ func validateJSONFile(path string) error {
 	return nil
 }
 
-func validateBunLock(path string) error {
+type bunLockValidation struct {
+	Workspaces map[string]*bunLockWorkspace `json:"workspaces"`
+	Packages   map[string]json.RawMessage   `json:"packages"`
+}
+
+type bunLockWorkspace struct {
+	npmPackageManifest
+	Name string `json:"name"`
+}
+
+func validateBunProject(dir string) error {
+	lockfile, err := validateBunLock(filepath.Join(dir, "bun.lock"))
+	if err != nil {
+		return err
+	}
+	allowed := bunWorkspaceDependencies(lockfile)
+	return validatePackageJSON(filepath.Join(dir, "package.json"), allowed)
+}
+
+func bunWorkspaceDependencies(lockfile *bunLockValidation) map[string]string {
+	if lockfile == nil {
+		return nil
+	}
+	root := lockfile.Workspaces[""]
+	if root == nil {
+		return nil
+	}
+	allowed := make(map[string]string)
+	maps.Copy(allowed, root.Dependencies)
+	maps.Copy(allowed, root.DevDependencies)
+	maps.Copy(allowed, root.OptionalDependencies)
+	maps.DeleteFunc(allowed, func(name, spec string) bool {
+		resolution := bunRawPackageSpec(lockfile.Packages[name])
+		local := strings.Contains(resolution, "@workspace:") || strings.HasSuffix(resolution, "@root:")
+		eligible := strings.HasPrefix(spec, "workspace:") && local
+		return !eligible
+	})
+	return allowed
+}
+
+func validateBunLock(path string) (*bunLockValidation, error) {
 	data, exists, err := readOptionalProjectFile(path)
 	fileUnavailable := err != nil || !exists
 	if fileUnavailable {
-		return err
+		return nil, err
 	}
-	var object map[string]json.RawMessage
-	if err := unmarshalBunLock(data, &object); err != nil {
-		return fmt.Errorf("parse %s: %w", path, err)
+	var lockfile *bunLockValidation
+	if err := unmarshalBunLock(data, &lockfile); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if object == nil {
-		return fmt.Errorf("parse %s: expected JSON object", path)
+	if lockfile == nil {
+		return nil, fmt.Errorf("parse %s: expected JSON object", path)
+	}
+	err = validateBunWorkspaces(lockfile, path)
+	return lockfile, err
+}
+
+func validateBunWorkspaces(lockfile *bunLockValidation, path string) error {
+	for _, raw := range lockfile.Packages {
+		spec := bunRawPackageSpec(raw)
+		if err := validateBunWorkspace(spec, lockfile.Workspaces); err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
 	}
 	return nil
 }
 
-func validatePackageJSON(path string) error {
+func validateBunWorkspace(spec string, workspaces map[string]*bunLockWorkspace) error {
+	name, root := strings.CutSuffix(spec, "@root:")
+	if root {
+		declaration := workspaces[""]
+		validRoot := declaration != nil && declaration.Name == name
+		if !validRoot {
+			return fmt.Errorf("root workspace name does not match %q", spec)
+		}
+		return nil
+	}
+	_, workspacePath, workspace := strings.Cut(spec, "@workspace:")
+	undeclaredWorkspace := workspace && workspaces[workspacePath] == nil
+	if undeclaredWorkspace {
+		return fmt.Errorf("undeclared workspace for %q", spec)
+	}
+	return nil
+}
+
+func validatePackageJSON(path string, allowed map[string]string) error {
 	data, exists, err := readOptionalProjectFile(path)
 	fileUnavailable := err != nil || !exists
 	if fileUnavailable {
@@ -503,17 +572,17 @@ func validatePackageJSON(path string) error {
 	if manifest == nil {
 		return fmt.Errorf("parse %s: expected JSON object", path)
 	}
-	return validateNPMDependencySources(*manifest, path)
+	return validateNPMDependencySources(*manifest, path, allowed)
 }
 
-func validateNPMDependencySources(manifest npmPackageManifest, path string) error {
+func validateNPMDependencySources(manifest npmPackageManifest, path string, allowed map[string]string) error {
 	groups := []map[string]string{
 		manifest.Dependencies,
 		manifest.DevDependencies,
 		manifest.OptionalDependencies,
 	}
 	for _, dependencies := range groups {
-		if err := validateNPMDependencyGroup(dependencies, path); err != nil {
+		if err := validateNPMDependencyGroup(dependencies, path, allowed); err != nil {
 			return err
 		}
 	}
@@ -569,8 +638,13 @@ func readOptionalProjectFile(path string) ([]byte, bool, error) {
 	return data, true, nil
 }
 
-func validateNPMDependencyGroup(dependencies map[string]string, path string) error {
+func validateNPMDependencyGroup(dependencies map[string]string, path string, allowed map[string]string) error {
 	for name, spec := range dependencies {
+		localSpec, exists := allowed[name]
+		validatedLocal := exists && strings.TrimSpace(spec) == localSpec
+		if validatedLocal {
+			continue
+		}
 		if !IsSupportedNPMRegistrySpec(strings.TrimSpace(spec)) {
 			return fmt.Errorf("unsupported npm dependency source for %q in %s", name, path)
 		}

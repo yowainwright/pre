@@ -460,6 +460,56 @@ func TestValidateManifestAllowsBunJSONC(t *testing.T) {
 	}
 }
 
+func TestValidateBunProjectWorkspaceSources(t *testing.T) {
+	for _, group := range []string{"dependencies", "devDependencies", "optionalDependencies"} {
+		t.Run(group, func(t *testing.T) { checkBunWorkspaceSources(t, group) })
+	}
+}
+
+func checkBunWorkspaceSources(t *testing.T, group string) {
+	t.Helper()
+	for _, spec := range []string{"workspace:*", "workspace:missing", "file:../site", "https://example.com/site.tgz"} {
+		t.Run(spec, func(t *testing.T) {
+			dir := t.TempDir()
+			lock := fmt.Sprintf(`{"workspaces":{"":{"name":"demo",%q:{"site":"workspace:*"}},"site":{"name":"site"}},"packages":{"site":["site@workspace:site"]}}`, group)
+			manifest := fmt.Sprintf(`{%q:{"site":%q}}`, group, spec)
+			writeBunWorkspaceProject(t, dir, lock, manifest)
+			err := ValidateManifest(&Manager{Name: "bun", Ecosystem: "npm"}, dir)
+			wantError := spec != "workspace:*"
+			if (err != nil) != wantError {
+				t.Fatalf("ValidateManifest with %s = %v, wantError %t", spec, err, wantError)
+			}
+		})
+	}
+}
+
+func writeBunWorkspaceProject(t *testing.T, dir, lock, manifest string) {
+	t.Helper()
+	for name, content := range map[string]string{"bun.lock": lock, "package.json": manifest} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestValidateBunProjectRejectsUnvalidatedWorkspace(t *testing.T) {
+	locks := map[string]string{
+		"no workspace metadata": `{}`,
+		"no local resolution":   `{"workspaces":{"":{"dependencies":{"site":"workspace:*"}},"site":{"name":"site"}},"packages":{"site":["site@1.0.0"]}}`,
+		"undeclared workspace":  `{"workspaces":{"":{"dependencies":{"site":"workspace:*"}}},"packages":{"site":["site@workspace:missing"]}}`,
+	}
+	for name, lock := range locks {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeBunWorkspaceProject(t, dir, lock, `{"dependencies":{"site":"workspace:*"}}`)
+			err := ValidateManifest(&Manager{Name: "bun", Ecosystem: "npm"}, dir)
+			if err == nil {
+				t.Fatal("expected an unvalidated workspace dependency to block installation")
+			}
+		})
+	}
+}
+
 func TestValidateManifestRejectsUnsupportedNPMDependencySource(t *testing.T) {
 	specs := []string{
 		"git+https://example.com/private.git",

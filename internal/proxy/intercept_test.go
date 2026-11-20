@@ -28,12 +28,12 @@ const brewUpgradeCandidatesJSON = `{
 const bunWorkspaceScanLock = `{
   "lockfileVersion": 1,
   "workspaces": {
-    "": {"name": "demo"},
-    "site": {"name": "site", "dependencies": {"react": "18.2.0"}}
+    "": {"name": "demo", "dependencies": {"site": "workspace:*"}},
+    "packages/@team/site": {"name": "site", "dependencies": {"react": "18.2.0"}}
   },
   "packages": {
     "demo": ["demo@root:", {}],
-    "site": ["site@workspace:site"],
+    "site": ["site@workspace:packages/@team/site"],
     "react": ["react@18.2.0", "", {}, "sha512-fixture"]
   }
 }`
@@ -618,8 +618,29 @@ func TestInterceptManifestCommandUsesSelectedProject(t *testing.T) {
 	}
 }
 
+func TestInterceptRejectsUndeclaredBunWorkspace(t *testing.T) {
+	lock := strings.Replace(bunWorkspaceScanLock, "site@workspace:packages/@team/site", "site@workspace:missing", 1)
+	defer withNPMProject(t, map[string]string{"bun.lock": lock})()
+	defer withLoadCache(emptyCache)()
+	defer withExecFn(noopExec)()
+	defer withStdinInput("n\n")()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) { return nil, nil })()
+
+	output := captureStdout(t, func() {
+		expectProcessExit(t, 1, func() { Intercept(bunMgr(), []string{"i"}) })
+	})
+	invalidWorkspace := strings.Contains(output, "bun.lock") && strings.Contains(output, "workspace")
+	if !invalidWorkspace {
+		t.Fatalf("expected lockfile validation to reject the workspace, got:\n%s", output)
+	}
+}
+
 func TestInterceptBunWorkspaceShowsUnknownBeforeApproval(t *testing.T) {
-	defer withNPMProject(t, map[string]string{"bun.lock": bunWorkspaceScanLock})()
+	files := map[string]string{
+		"bun.lock":     bunWorkspaceScanLock,
+		"package.json": `{"name":"demo","workspaces":["packages/@team/*"],"dependencies":{"site":"workspace:*"}}`,
+	}
+	defer withNPMProject(t, files)()
 	defer withLoadCache(emptyCache)()
 	defer withExecFn(noopExec)()
 	defer withStdinInput("n\n")()
@@ -648,7 +669,7 @@ func assertBunWorkspaceApproval(t *testing.T, output string) {
 	if !hasUnknown {
 		t.Fatalf("expected Unknown box before approval, got:\n%s", output)
 	}
-	for _, entry := range []string{"demo@root:", "site@workspace:site"} {
+	for _, entry := range []string{"demo@root:", "site@workspace:packages/@team/site"} {
 		if !strings.Contains(unknown, entry) {
 			t.Errorf("expected %q in Unknown box, got:\n%s", entry, unknown)
 		}
