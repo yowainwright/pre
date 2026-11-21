@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -75,12 +76,40 @@ func (run proxyRun) interceptPackages(packageArgs, packages []string, fromProjec
 	if !run.allowPackageCount(len(packages)) {
 		return
 	}
-	results := run.scanPackages(packages, fromProject)
-	if !run.approveResults(results) {
+	checked, unchecked := splitProjectScanTargets(packages, fromProject)
+	results := run.scanPackages(checked, fromProject)
+	approvalRequired := needsApproval(results)
+	printScanResults(run.mgr.Ecosystem, results, approvalRequired)
+	printUncheckedPackages(unchecked)
+	if !run.approveResults(results, approvalRequired) {
 		return
 	}
-	args := run.resolvedInstallArgs(packageArgs, packages, results)
+	args := run.resolvedInstallArgs(packageArgs, checked, results)
 	ExecFn(run.mgr.Name, args)
+}
+
+func splitProjectScanTargets(packages []string, fromProject bool) ([]string, []string) {
+	if !fromProject {
+		return packages, nil
+	}
+	var unchecked []string
+	checked := slices.DeleteFunc(slices.Clone(packages), func(spec string) bool {
+		local := isLocalProjectSpec(spec)
+		if local {
+			unchecked = append(unchecked, spec)
+		}
+		return local
+	})
+	return checked, unchecked
+}
+
+func isLocalProjectSpec(spec string) bool {
+	if strings.HasSuffix(spec, "@root:") {
+		return true
+	}
+	_, path, workspace := strings.Cut(spec, "@workspace:")
+	localWorkspace := workspace && filepath.IsLocal(path) && !strings.ContainsAny(path, ":\\")
+	return localWorkspace
 }
 
 func (run proxyRun) resolvedInstallArgs(packageArgs, packages []string, results []scanResult) []string {
@@ -219,9 +248,7 @@ func (run proxyRun) scanPackageTargets(packages []string, c cache.Cache, fromPro
 	return scanBatchWithPolicy(run.mgr, packages, c, !fromProject)
 }
 
-func (run proxyRun) approveResults(results []scanResult) bool {
-	approvalRequired := needsApproval(results)
-	printScanResults(run.mgr.Ecosystem, results, approvalRequired)
+func (run proxyRun) approveResults(results []scanResult, approvalRequired bool) bool {
 	counts := countScanResults(results)
 	if counts.errors > 0 {
 		run.recordDecision("pre.scan.blocked", "blocked", "scan_error", map[string]any{"error_count": counts.errors})
@@ -232,8 +259,25 @@ func (run proxyRun) approveResults(results []scanResult) bool {
 	if approvalRequired {
 		return run.requestScanApproval(results)
 	}
-	run.recordDecision("pre.scan.approved", "approved", "cache_hit", nil)
+	reason := "cache_hit"
+	if len(results) == 0 {
+		reason = "no_scannable_packages"
+	}
+	run.recordDecision("pre.scan.approved", "approved", reason, nil)
 	return true
+}
+
+func printUncheckedPackages(unchecked []string) {
+	if len(unchecked) == 0 {
+		return
+	}
+	lines := make([]string, len(unchecked))
+	for index, spec := range unchecked {
+		lines[index] = terminalText(spec) + "  local project entry"
+	}
+	slices.Sort(lines)
+	header := fmt.Sprintf("Unknown (%d unchecked)", len(lines))
+	fmt.Println(display.Box(header, lines))
 }
 
 func printScanResults(ecosystem string, results []scanResult, approvalRequired bool) {

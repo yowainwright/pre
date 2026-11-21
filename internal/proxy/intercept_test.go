@@ -25,6 +25,19 @@ const brewUpgradeCandidatesJSON = `{
   "casks": [{"name":"firefox","current_version":"143.0","pinned":false}]
 }`
 
+const bunWorkspaceScanLock = `{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {"name": "demo", "dependencies": {"site": "workspace:*"}},
+    "packages/@team/site": {"name": "site", "dependencies": {"react": "18.2.0"}}
+  },
+  "packages": {
+    "demo": ["demo@root:", {}],
+    "site": ["site@workspace:packages/@team/site"],
+    "react": ["react@18.2.0", "", {}, "sha512-fixture"]
+  }
+}`
+
 func noopExec(name string, args []string) {}
 
 func npmMgr() *manager.Manager {
@@ -602,6 +615,68 @@ func TestInterceptManifestCommandUsesSelectedProject(t *testing.T) {
 				t.Fatalf("expected %s package to be scanned", test.packageName)
 			}
 		})
+	}
+}
+
+func TestInterceptRejectsUndeclaredBunWorkspace(t *testing.T) {
+	lock := strings.Replace(bunWorkspaceScanLock, "site@workspace:packages/@team/site", "site@workspace:missing", 1)
+	defer withNPMProject(t, map[string]string{"bun.lock": lock})()
+	defer withLoadCache(emptyCache)()
+	defer withExecFn(noopExec)()
+	defer withStdinInput("n\n")()
+	defer withSecurityCheck(func(string, string, string) ([]security.Vulnerability, error) { return nil, nil })()
+
+	output := captureStdout(t, func() {
+		expectProcessExit(t, 1, func() { Intercept(bunMgr(), []string{"i"}) })
+	})
+	invalidWorkspace := strings.Contains(output, "bun.lock") && strings.Contains(output, "workspace")
+	if !invalidWorkspace {
+		t.Fatalf("expected lockfile validation to reject the workspace, got:\n%s", output)
+	}
+}
+
+func TestInterceptBunWorkspaceShowsUnknownBeforeApproval(t *testing.T) {
+	files := map[string]string{
+		"bun.lock":     bunWorkspaceScanLock,
+		"package.json": `{"name":"demo","workspaces":["packages/@team/*"],"dependencies":{"site":"workspace:*"}}`,
+	}
+	defer withNPMProject(t, files)()
+	defer withLoadCache(emptyCache)()
+	defer withExecFn(noopExec)()
+	defer withStdinInput("n\n")()
+	defer withResolveVersion(func(*manager.Manager, string) (string, error) { return "", nil })()
+	defer withSecurityCheck(func(_, name, version string) ([]security.Vulnerability, error) {
+		unexpectedTarget := name != "react" || version != "18.2.0"
+		if unexpectedTarget {
+			t.Fatalf("unexpected scan target %s@%s", name, version)
+		}
+		return []security.Vulnerability{{ID: "CVE-2026-0001", Severity: security.SeverityCritical}}, nil
+	})()
+
+	output := captureStdout(t, func() {
+		expectProcessExit(t, 1, func() { Intercept(bunMgr(), []string{"i"}) })
+	})
+	assertBunWorkspaceApproval(t, output)
+}
+
+func assertBunWorkspaceApproval(t *testing.T, output string) {
+	t.Helper()
+	beforePrompt, _, hasPrompt := strings.Cut(output, "Approve install?")
+	if !hasPrompt {
+		t.Fatalf("expected approval after scanning workspace dependencies, got:\n%s", output)
+	}
+	_, unknown, hasUnknown := strings.Cut(beforePrompt, "Unknown")
+	if !hasUnknown {
+		t.Fatalf("expected Unknown box before approval, got:\n%s", output)
+	}
+	for _, entry := range []string{"demo@root:", "site@workspace:packages/@team/site"} {
+		if !strings.Contains(unknown, entry) {
+			t.Errorf("expected %q in Unknown box, got:\n%s", entry, unknown)
+		}
+	}
+	missingCriticalAdvisory := !strings.Contains(beforePrompt, "CVE-2026-0001") || !strings.Contains(beforePrompt, "Critical")
+	if missingCriticalAdvisory {
+		t.Errorf("expected critical advisory before approval, got:\n%s", output)
 	}
 }
 
